@@ -12,6 +12,52 @@ const stages = [
   { id: '7', name: 'Use', window: false },
 ]
 
+const heroStages = stages.filter((stage) => Number(stage.id) <= 6)
+
+/** Stylised Great Britain and a small Northern Ireland cluster. Not a boundary map. */
+const britainRows: [number, number, number][] = [
+  [8, 46, 52],
+  [14, 42, 54],
+  [20, 40, 56],
+  [26, 38, 54],
+  [32, 40, 58],
+  [38, 36, 52],
+  [44, 34, 50],
+  [50, 32, 54],
+  [56, 28, 56],
+  [62, 24, 58],
+  [68, 22, 60],
+  [74, 26, 64],
+  [80, 30, 66],
+  [86, 28, 62],
+  [92, 26, 56],
+  [98, 22, 48],
+  [104, 18, 40],
+  [110, 16, 32],
+  [116, 22, 28],
+]
+
+const authorityDots = (() => {
+  const dots: { x: number; y: number; live: boolean; delay: string }[] = []
+  let live = 0
+  const place = (x: number, y: number) => {
+    const pulse = dots.length % 7 === 2
+    dots.push({ x, y, live: pulse, delay: `${(live % 8) * 0.65}s` })
+    if (pulse) live += 1
+  }
+  for (const [y, start, end] of britainRows) {
+    for (let x = start; x <= end; x += 4) place(x, y)
+  }
+  for (const [x, y] of [[8, 70], [12, 66], [12, 74], [16, 70]] as const) place(x, y)
+  return dots
+})()
+
+const sampleRows = [
+  ['Heading and proposal', 'The statutory description, unchanged'],
+  ['Architect or agent', 'Name, phone and email when the portal published them'],
+  ['Monday 08:00', '44 columns, same order every week'],
+]
+
 const columns = [
   ['Heading and proposal', 'The statutory description, not a rewritten sales summary.'],
   ['£m value from / to', 'A published bracket when the portal states one, kept in the export.'],
@@ -55,31 +101,80 @@ export function Landing() {
             <a href="#register" className="hidden hover:text-[#172554] lg:inline">Monday register</a>
             <a href="#packages" className="hidden hover:text-[#172554] md:inline">Packages</a>
             <a href="/app" className="whitespace-nowrap rounded-lg px-2 py-2 hover:text-[#172554] sm:px-0">Sign in</a>
-            <a href="#demo" className="rounded-lg bg-[#172554] px-3 py-2.5 text-white hover:bg-[#1E3A8A] sm:px-4">Book a demo</a>
+            <a href="#demo" className="land-cta rounded-lg bg-[#172554] px-3 py-2.5 text-white hover:bg-[#1E3A8A] sm:px-4">Book a demo</a>
           </nav>
         </div>
       </header>
 
       <main id="sheet">
-        <section className="mx-auto max-w-[1180px] px-5 py-16 lg:py-24">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">For UK trade contractors and subcontractors</p>
-          <h1 className="mt-4 max-w-3xl font-display text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-[#172033] sm:text-[56px]">Meet the architect while the scheme is still in planning.</h1>
-          <p className="mt-6 max-w-2xl text-[15px] leading-7 text-[#52627A]">By RIBA Stage 4 the tender list is usually closed and the specification is already written. PlanningPal reads local planning registers and puts the architect, the developer and the scheme on your desk at Stages 0 to 2, when early contractor involvement is still possible.</p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a href="#demo" className="rounded-lg bg-[#172554] px-5 py-3 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">Book a demo</a>
-            <a href="/app" className="rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Sign in</a>
+        <section className="mx-auto grid max-w-[1180px] items-center gap-10 px-5 py-14 lg:grid-cols-[1.05fr_0.95fr] lg:py-20">
+          <div>
+            <p className="land-enter text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">For UK trade contractors and subcontractors</p>
+            <h1 className="land-enter land-d1 mt-4 max-w-3xl font-display text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-[#172033] sm:text-[56px]">Meet the architect while the scheme is still in planning.</h1>
+            <p className="land-enter land-d2 mt-6 max-w-2xl text-[15px] leading-7 text-[#52627A]">By RIBA Stage 4 the tender list is usually closed and the specification is already written. PlanningPal reads local planning registers and puts the architect, the developer and the scheme on your desk at Stages 0 to 2, when early contractor involvement is still possible.</p>
+            <div className="land-enter land-d3 mt-8 flex flex-wrap gap-3">
+              <a href="#demo" className="land-cta rounded-lg bg-[#172554] px-5 py-3 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">Book a demo</a>
+              <a href="/app" className="land-cta rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Sign in</a>
+            </div>
+            <dl className="land-enter land-d4 mt-12 grid max-w-xl grid-cols-3 gap-4 border-t border-[#DCE4F0] pt-6">
+              {[['376', 'Local planning authorities'], ['44', 'Columns in the Monday file'], ['08:00', 'Monday delivery']].map(([value, label]) => (
+                <div key={label}>
+                  <dt className="font-display text-[22px] font-semibold text-[#172554]">{value}</dt>
+                  <dd className="mt-1 text-[10px] leading-4 text-[#64748B]">{label}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
-          <dl className="mt-12 grid max-w-xl grid-cols-3 gap-4 border-t border-[#DCE4F0] pt-6">
-            {[['376', 'Local planning authorities'], ['44', 'Columns in the Monday file'], ['08:00', 'Monday delivery']].map(([value, label]) => (
-              <div key={label}>
-                <dt className="font-display text-[22px] font-semibold text-[#172554]">{value}</dt>
-                <dd className="mt-1 text-[10px] leading-4 text-[#64748B]">{label}</dd>
+          <aside className="land-enter land-d2 overflow-hidden rounded-2xl border border-[#DCE4F0] bg-white shadow-[0_16px_40px_rgba(23,37,84,0.06)]" aria-label="Illustration of how a planning application reaches the contact window">
+            <div className="flex items-center justify-between border-b border-[#EEF2F7] px-5 py-3">
+              <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#2563EB]">The path of a scheme</div>
+              <div className="text-[10px] text-[#94A3B8]">Illustration</div>
+            </div>
+            <div className="grid gap-5 p-5 sm:grid-cols-[148px_1fr] sm:items-center">
+              <div>
+                <svg viewBox="0 0 78 128" className="mx-auto h-44 w-full max-w-[110px]" aria-hidden="true">
+                  {authorityDots.map((dot, index) => (
+                    <circle
+                      key={index}
+                      cx={dot.x}
+                      cy={dot.y}
+                      r={dot.live ? 2.1 : 1.25}
+                      fill={dot.live ? '#38BDF8' : '#93C5FD'}
+                      className={dot.live ? 'lpa-live' : undefined}
+                      style={dot.live ? { animationDelay: dot.delay } : undefined}
+                    />
+                  ))}
+                </svg>
+                <p className="text-center text-[10px] leading-4 text-[#64748B]">376 authorities. A dot brightens as a stand-in for an application arriving.</p>
               </div>
-            ))}
-          </dl>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">RIBA contact window</div>
+                <div className="relative mt-3">
+                  <div className="land-window absolute inset-y-0 left-0 w-[calc(3/7*100%)] rounded-lg bg-[#DBEAFE]" aria-hidden="true" />
+                  <ol className="relative grid grid-cols-7 gap-1">
+                    {heroStages.map((stage) => (
+                      <li key={stage.id} className="px-0.5 py-2 text-center">
+                        <div className={`font-display text-[13px] font-semibold ${stage.window ? 'text-[#172554]' : 'text-[#94A3B8]'}`}>{stage.id}</div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+                <p className="mt-2 text-[11px] leading-5 text-[#52627A]">Stages 0–2 stay highlighted. That is the window before the specification is written. Stages 3–6 are usually late.</p>
+                <ul className="mt-4 space-y-2">
+                  {sampleRows.map(([title, detail], index) => (
+                    <li key={title} className={`land-enter rounded-lg border border-[#E2E8F0] bg-[#F8FAFD] px-3 py-2 ${index === 0 ? 'land-d5' : index === 1 ? 'land-d6' : 'land-d7'}`}>
+                      <div className="text-[11px] font-semibold text-[#172554]">{title}</div>
+                      <div className="text-[10px] leading-4 text-[#64748B]">{detail}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <p className="border-t border-[#EEF2F7] px-5 py-3 text-[10px] leading-4 text-[#94A3B8]">Sample of the Monday 08:00 file shape. These rows are not this week’s schemes, and the map is not a live count.</p>
+          </aside>
         </section>
 
-        <section className="mx-auto max-w-[1180px] px-5 pb-16" aria-labelledby="command-centre-heading">
+        <section className="land-reveal mx-auto max-w-[1180px] px-5 pb-16" aria-labelledby="command-centre-heading">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">The working surface</p>
@@ -88,19 +183,19 @@ export function Landing() {
             <a href="/app" className="text-[11px] font-semibold text-[#2563EB]">Sign in to use it</a>
           </div>
           <figure className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white shadow-[0_1px_2px_rgba(30,58,138,0.04)]">
-            <img src="/marketing/command-centre-overview.png" alt="PlanningPal command centre showing 550 approved schemes, agent contact coverage, and the priority planning leads list." className="w-full" width="1440" height="900" />
+            <img src="/marketing/command-centre-overview.png" alt="PlanningPal command centre showing 550 approved schemes, agent contact coverage, and the priority planning leads list." className="w-full" width="1440" height="900" loading="lazy" decoding="async" />
             <figcaption className="border-t border-[#EEF2F7] px-4 py-3 text-[10px] text-[#64748B]">Overview of the live workspace. Figures on this screen come from the seeded residential export and the workspace record, not from a marketing mock.</figcaption>
           </figure>
         </section>
 
-        <section id="riba" className="border-y border-[#DCE4F0] bg-white">
+        <section id="riba" className="land-reveal border-y border-[#DCE4F0] bg-white">
           <div className="mx-auto max-w-[1180px] px-5 py-16">
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">The timing</p>
             <h2 className="mt-3 max-w-2xl font-display text-[32px] font-semibold tracking-[-0.03em]">RIBA Stages 0–2 are the commercial window.</h2>
             <p className="mt-4 max-w-2xl text-[13px] leading-6 text-[#52627A]">Public tender notices usually appear at Stages 4 to 6, after the architect has already chosen who is allowed to price the work. PlanningPal is built for the earlier conversation: the planning application itself.</p>
             <ol className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {stages.map((stage) => (
-                <li key={stage.id} className={`rounded-xl border p-4 ${stage.window ? 'border-[#93C5FD] bg-[#EFF6FF]' : 'border-[#E2E8F0] bg-[#F8FAFD]'}`}>
+                <li key={stage.id} className={`land-card rounded-xl border p-4 ${stage.window ? 'border-[#93C5FD] bg-[#EFF6FF]' : 'border-[#E2E8F0] bg-[#F8FAFD]'}`}>
                   <div className="flex items-center justify-between">
                     <span className="font-display text-[20px] font-semibold text-[#172554]">Stage {stage.id}</span>
                     <span className={`rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-wider ${stage.window ? 'bg-[#172554] text-white' : 'bg-[#E2E8F0] text-[#64748B]'}`}>{stage.window ? 'In window' : 'Usually late'}</span>
@@ -112,7 +207,7 @@ export function Landing() {
           </div>
         </section>
 
-        <section id="register" className="mx-auto max-w-[1180px] px-5 py-16">
+        <section id="register" className="land-reveal mx-auto max-w-[1180px] px-5 py-16">
           <div className="grid gap-10 lg:grid-cols-[.8fr_1.2fr]">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">The Monday register</p>
@@ -121,7 +216,7 @@ export function Landing() {
             </div>
             <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
               {columns.map(([title, detail]) => (
-                <div key={title} className="grid gap-2 border-b border-[#EEF2F7] px-5 py-4 last:border-0 sm:grid-cols-[200px_1fr]">
+                  <div key={title} className="land-card grid gap-2 border-b border-[#EEF2F7] px-5 py-4 last:border-0 sm:grid-cols-[200px_1fr]">
                   <div className="text-[12px] font-semibold text-[#172554]">{title}</div>
                   <div className="text-[12px] leading-5 text-[#52627A]">{detail}</div>
                 </div>
@@ -130,7 +225,7 @@ export function Landing() {
           </div>
         </section>
 
-        <section className="bg-[#172554] text-white">
+        <section className="land-reveal bg-[#172554] text-white">
           <div className="mx-auto grid max-w-[1180px] gap-10 px-5 py-16 lg:grid-cols-[1fr_.8fr] lg:items-center">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#38BDF8]">Where the schemes come from</p>
@@ -159,23 +254,23 @@ export function Landing() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-[1180px] space-y-14 px-5 py-16">
+        <section className="land-reveal mx-auto max-w-[1180px] space-y-14 px-5 py-16">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">After the drop</p>
             <h2 className="mt-3 max-w-2xl font-display text-[32px] font-semibold tracking-[-0.03em]">Search the register, then move the person through intent.</h2>
             <p className="mt-4 max-w-2xl text-[13px] leading-6 text-[#52627A]">Decision-maker enrichment fills the architect and applicant fields the council published, then checks the practice. The intent board has five stages. Three opens, or a click on the capability deck, promotes a card to high intent and queues a same-day call. Outreach copy stays inside RIBA and RICS language, and only claims certifications the contractor actually holds.</p>
           </div>
           <figure>
-            <img src="/marketing/command-centre-search.png" alt="Planning search table of approved applications with value, council, contact coverage and fit score." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" />
+            <img src="/marketing/command-centre-search.png" alt="Planning search table of approved applications with value, council, contact coverage and fit score." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" loading="lazy" decoding="async" />
             <figcaption className="mt-3 text-[11px] text-[#64748B]">Planning search. Filter by county, value, authority and whether a direct phone and email were published.</figcaption>
           </figure>
           <figure>
-            <img src="/marketing/command-centre-crm.png" alt="Five-stage intent pipeline with cards for new leads, active outreach, high intent, warm engagement and tender opportunity." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" />
+            <img src="/marketing/command-centre-crm.png" alt="Five-stage intent pipeline with cards for new leads, active outreach, high intent, warm engagement and tender opportunity." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" loading="lazy" decoding="async" />
             <figcaption className="mt-3 text-[11px] text-[#64748B]">Intent CRM. New lead queue, active outreach, high intent, warm engagement, tender opportunity.</figcaption>
           </figure>
         </section>
 
-        <section id="packages" className="border-t border-[#DCE4F0] bg-white">
+        <section id="packages" className="land-reveal border-t border-[#DCE4F0] bg-white">
           <div className="mx-auto max-w-[1180px] px-5 py-16">
             <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">Commercial packages</p>
             <h2 className="mt-3 font-display text-[32px] font-semibold tracking-[-0.03em]">Three ways to buy the same register.</h2>
@@ -185,7 +280,7 @@ export function Landing() {
                 ['Category 2', 'Leads + Cold Outreach Engine', '£950–£2,750', 'a month', 'The feed, plus 6 to 12 sending inboxes on secondary domains, and 600 to 4,000 decision-makers contacted in a month, with intent signals when a message is opened or a deck is clicked.'],
                 ['Category 3', 'Full Business Development Partner', '£2,450–£3,950', 'a month, plus a success fee', 'Data, inboxes, and a person who follows up by phone. The contracted range is 6 to 18 booked meetings a month.'],
               ].map(([tier, name, price, cadence, copy]) => (
-                <article key={tier} className="flex flex-col rounded-xl border border-[#DCE4F0] p-6">
+                <article key={tier} className="land-card flex flex-col rounded-xl border border-[#DCE4F0] p-6">
                   <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#2563EB]">{tier}</div>
                   <h3 className="mt-2 font-display text-[20px] font-semibold">{name}</h3>
                   <div className="mt-5 font-display text-[28px] font-semibold text-[#172554]">{price}</div>
@@ -197,7 +292,7 @@ export function Landing() {
           </div>
         </section>
 
-        <section id="demo" className="mx-auto max-w-[1180px] px-5 py-16">
+        <section id="demo" className="land-reveal mx-auto max-w-[1180px] px-5 py-16">
           <div className="grid gap-8 rounded-xl bg-[#172554] p-6 text-white sm:p-10 lg:grid-cols-[.9fr_1.1fr]">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#38BDF8]">A conversation, not a trial login</p>
@@ -214,7 +309,7 @@ export function Landing() {
                 <label className="text-[9px] font-bold uppercase tracking-wider text-white/50">Trade<input name="trade" placeholder="Groundworks, RC frame…" className="mt-2 w-full rounded-lg border border-white/10 bg-white px-3 py-3 text-[12px] font-normal normal-case tracking-normal text-[#172033] outline-none" /></label>
                 <label className="text-[9px] font-bold uppercase tracking-wider text-white/50 sm:col-span-2">Counties and anything else<textarea name="note" rows={4} className="mt-2 w-full rounded-lg border border-white/10 bg-white px-3 py-3 text-[12px] font-normal normal-case tracking-normal text-[#172033] outline-none" /></label>
                 {error && <p className="text-[11px] text-[#FCA5A5] sm:col-span-2">{error}</p>}
-                <button disabled={pending} className="rounded-lg bg-[#38BDF8] px-4 py-3 text-[12px] font-semibold text-[#172554] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Book a demo'}</button>
+                <button disabled={pending} className="land-cta rounded-lg bg-[#38BDF8] px-4 py-3 text-[12px] font-semibold text-[#172554] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Book a demo'}</button>
               </form>
             )}
           </div>
