@@ -55,6 +55,20 @@ pnpm db:seed
 
 The mark is the geometric P in `apps/web/public/brand/mark.svg` (`#0B0B24`). The horizontal lockup is that mark plus the word PlanningPal in Manrope SemiBold, outlined so the file does not depend on a font. White variants are the same paths for the navy sidebar.
 
+## Ingestion
+
+PlanIt is the only source implemented. Council portal adapters can implement the same `PlanningSource` interface later.
+
+```bash
+pnpm ingest -- --from 2026-10-29 --to 2026-10-30
+pnpm ingest -- --authority Camden --recent 7
+pnpm ingest -- --recent 3 --max-pages 4
+```
+
+The API process also runs the pipeline at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. On Railway or Fly, run `pnpm ingest` from a cron service instead of keeping a second scheduler. Each run stores the raw JSON under `apps/api/data/raw`, writes a 44-column CSV under `apps/api/data/ingest`, and upserts schemes so they show in Planning search. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run.
+
+PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
+
 ## What is stubbed
 
 No scraping fleet, no enrichment providers, no real email. Inbox replies and queued CRM emails are stored and marked `stubbed`. Auth is one seeded user, behind a hook that can later require a bearer token (`AUTH_MODE=strict`).

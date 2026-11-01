@@ -15,6 +15,7 @@ const nav = [
   { label: 'CRM & intent', icon: 'signal' as const },
   { label: 'Reports & delivery', icon: 'chart' as const },
   { label: 'Workspace setup', icon: 'settings' as const },
+  { label: 'Ingestion', icon: 'download' as const },
 ]
 
 const activity = [

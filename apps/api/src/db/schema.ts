@@ -136,7 +136,7 @@ export const planningApplications = pgTable(
     updatedAt: timestamps.updatedAt,
   },
   (table) => [
-    uniqueIndex('planning_applications_ref_idx').on(table.applicationRef),
+    uniqueIndex('planning_applications_authority_ref_idx').on(table.localAuthority, table.applicationRef),
     uniqueIndex('planning_applications_hash_idx').on(table.compositeHash),
     index('planning_applications_outcode_idx').on(table.outcode),
     index('planning_applications_region_idx').on(table.region),
@@ -331,6 +331,39 @@ export const demoRequests = pgTable('demo_requests', {
   trade: text('trade').notNull().default(''),
   note: text('note').notNull().default(''),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const pipelineRuns = pgTable('pipeline_runs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  source: text('source').notNull(),
+  status: text('status').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+  fetched: integer('fetched').notNull().default(0),
+  filteredOut: integer('filtered_out').notNull().default(0),
+  inserted: integer('inserted').notNull().default(0),
+  updated: integer('updated').notNull().default(0),
+  errors: integer('errors').notNull().default(0),
+  csvPath: text('csv_path').notNull().default(''),
+  cursorBefore: text('cursor_before').notNull().default(''),
+  cursorAfter: text('cursor_after').notNull().default(''),
+  message: text('message').notNull().default(''),
+  options: jsonb('options').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+})
+
+export const rawPayloads = pgTable('raw_payloads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: uuid('run_id').references(() => pipelineRuns.id, { onDelete: 'cascade' }),
+  source: text('source').notNull(),
+  requestUrl: text('request_url').notNull().default(''),
+  body: jsonb('body').$type<unknown>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const ingestCursors = pgTable('ingest_cursors', {
+  source: text('source').primaryKey(),
+  lastDifferent: text('last_different').notNull().default(''),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const telemetryEvents = pgTable('telemetry_events', {

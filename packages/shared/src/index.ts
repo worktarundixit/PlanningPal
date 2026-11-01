@@ -171,8 +171,11 @@ export function toCsv(records: SourceRecord[]): string {
 }
 
 export function mapRecord(record: SourceRecord, index: number): Scheme {
-  const valueFrom = Number(record['£m Value From'] || record['£m Est Prop Val From'] || 0)
-  const valueTo = Number(record['£m Value To'] || record['£m Est Prop Val To'] || valueFrom)
+  const rawFrom = record['£m Value From'] || record['£m Est Prop Val From'] || ''
+  const rawTo = record['£m Value To'] || record['£m Est Prop Val To'] || ''
+  const valueFrom = Number(rawFrom || 0)
+  const valueTo = Number(rawTo || rawFrom || 0)
+  const valueLabel = !rawFrom && !rawTo ? '—' : `£${valueFrom.toFixed(2)}m–£${valueTo.toFixed(2)}m`
   const agent = record['Architect Agent Contact'] || record['Mail Architect Agent Contact'] || 'Contact not published'
   const practice = record['Architect Agent'] || record['Mail Architect Agent Name'] || 'Agent not published'
   const heading = record.Heading || record['Prop Type'] || 'Planning application'
@@ -190,7 +193,7 @@ export function mapRecord(record: SourceRecord, index: number): Scheme {
     location: record['Site Address'] || record['Site Raw Address'] || '',
     type: `${record['Prop Type'] || 'Scheme'} · ${projectCategory}`,
     stage: record['Project Stage']?.includes('APPROVED') ? 'Approved' : record['Project Stage'] || 'Planning',
-    value: `£${valueFrom.toFixed(2)}m–£${valueTo.toFixed(2)}m`,
+    value: valueLabel,
     valueNum: valueTo,
     valueFrom,
     distance: record['Site Address Postcode Area'] || record.County || '',

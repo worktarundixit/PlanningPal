@@ -29,6 +29,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@planningpal/ingest':
+        specifier: workspace:*
+        version: link:../../packages/ingest
       '@planningpal/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -91,6 +94,25 @@ importers:
       vite:
         specifier: ^8.0.5
         version: 8.3.5(@types/node@22.20.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)
+
+  packages/ingest:
+    dependencies:
+      '@planningpal/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.30
+        version: 22.20.5
+      tsx:
+        specifier: ^4.20.3
+        version: 4.23.15
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15)
 
   packages/shared: {}
 
