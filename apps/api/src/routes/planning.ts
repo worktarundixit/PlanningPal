@@ -201,7 +201,7 @@ export async function planningRoutes(app: FastifyInstance) {
     const stamp = new Date().toISOString().slice(0, 10)
     return reply
       .header('Content-Type', 'text/csv; charset=utf-8')
-      .header('Content-Disposition', `attachment; filename="aec-pipeline-schemes-${stamp}.csv"`)
+      .header('Content-Disposition', `attachment; filename="planningpal-schemes-${stamp}.csv"`)
       .header('X-AEC-Export-Format', body.format === 'xlsx' ? 'csv-stub-for-xlsx' : 'csv')
       .send(csv)
   })

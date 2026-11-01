@@ -74,7 +74,7 @@ export const api = {
     })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    link.download = `aec-pipeline-schemes-${new Date().toISOString().slice(0, 10)}.csv`
+    link.download = `planningpal-schemes-${new Date().toISOString().slice(0, 10)}.csv`
     link.click()
     URL.revokeObjectURL(link.href)
   },

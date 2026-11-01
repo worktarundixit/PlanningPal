@@ -101,6 +101,17 @@ export type Scheme = {
   raw: SourceRecord
 }
 
+/**
+ * Public contact details.
+ * TODO: confirm the real PlanningPal inbox. hello@planningpal.co.uk is a placeholder.
+ */
+export const PUBLIC_EMAIL = 'hello@planningpal.co.uk'
+
+/** Shown as printed until a replacement number is confirmed. */
+export const PUBLIC_PHONE_DISPLAY = '+44 07774 720591'
+
+export const PUBLIC_PHONE_TEL = '+4407774720591'
+
 export type UserProfile = {
   name: string
   role: string
@@ -145,11 +156,18 @@ export function parseCsv(text: string): SourceRecord[] {
     .map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])))
 }
 
+/** Stop spreadsheet apps from treating a cell as a formula. */
+export function csvCell(value: unknown) {
+  const text = String(value ?? '')
+  const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+  return `"${guarded.replaceAll('"', '""')}"`
+}
+
 export function toCsv(records: SourceRecord[]): string {
   const fields = MASTER_COLUMNS.filter((column) => records.some((record) => column in record))
   const header = fields.length ? fields : [...MASTER_COLUMNS]
   const rows = [header, ...records.map((record) => header.map((field) => record[field] ?? ''))]
-  return rows.map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
+  return rows.map((line) => line.map((value) => csvCell(value)).join(',')).join('\n')
 }
 
 export function mapRecord(record: SourceRecord, index: number): Scheme {

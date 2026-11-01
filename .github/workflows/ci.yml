@@ -43,4 +43,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm audit --audit-level=high
       - run: pnpm test
+      - name: Fail if secrets or forbidden names are in the web bundle
+        run: |
+          pnpm --filter @planningpal/web build
+          pnpm --filter @planningpal/web check:bundle

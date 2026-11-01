@@ -16,6 +16,7 @@ export default defineConfig({
       '/api': process.env.VITE_API_PROXY || 'http://127.0.0.1:3001',
     },
   },
+  build: { sourcemap: false },
   preview: {
     host: '0.0.0.0',
     port: Number(process.env.WEB_PORT || 5173),
