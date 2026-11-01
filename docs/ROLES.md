@@ -10,7 +10,7 @@ Every id is a UUID.
 | Admin | Settings, campaigns, and members. An Admin cannot create, promote, or remove an Owner. |
 | Member | Leads, saved schemes, CRM, inbox, and campaigns. Tasks and private notes belong to the member who wrote them unless they are shared. |
 | Viewer | Read-only. Writes are rejected. |
-| Super Admin | Hitcaliber staff. Cross-workspace access is a separate path: send `x-workspace-id` with the workspace UUID. Every such request is written to `audit_log`. A missing workspace is 404. Staff do not silently land in the first workspace. |
+| Super Admin | Hitcaliber staff. Cross-workspace access is a separate path: send `x-workspace-id` with the workspace UUID. Every such request is written to `audit_log`. A missing workspace is 404. Staff do not silently land in the first workspace. `GET /api/v1/onboarding/clients` lists each workspace's setup step and is audited. |
 
 ## Rules that cannot be bypassed
 

@@ -4,10 +4,11 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusScreen } from './components/StatusScreen'
 import { AcceptInvitePage, ForgotPasswordPage, ResetPasswordPage, SignInPage, SignUpPage } from './pages/AuthScreens'
 import { CommandCentre } from './pages/CommandCentre'
+import { OnboardingPage } from './pages/Onboarding'
 import { Landing } from './pages/Landing'
 import './index.css'
 
-const known = new Set(['/', '/sign-in', '/sign-up', '/forgot-password', '/reset-password', '/accept-invite', '/app'])
+const known = new Set(['/', '/sign-in', '/sign-up', '/forgot-password', '/reset-password', '/accept-invite', '/onboarding', '/app'])
 
 function screenFor(path: string) {
   if (!known.has(path)) return <StatusScreen kind="missing" />
@@ -17,6 +18,7 @@ function screenFor(path: string) {
   if (path === '/forgot-password') return <ForgotPasswordPage />
   if (path === '/reset-password') return <ResetPasswordPage />
   if (path === '/accept-invite') return <AcceptInvitePage />
+  if (path === '/onboarding') return <OnboardingPage />
   return <CommandCentre />
 }
 

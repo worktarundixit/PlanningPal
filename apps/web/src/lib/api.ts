@@ -161,6 +161,9 @@ export const api = {
   ingestRuns: () => request<{ data: IngestRun[] }>('/api/v1/ingest/runs'),
   startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number }) =>
     request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),
+  onboarding: () => request<OnboardingState>('/api/v1/onboarding'),
+  saveOnboarding: (body: Record<string, unknown>) => request<OnboardingState>('/api/v1/onboarding', { method: 'PUT', body: JSON.stringify(body) }),
+  onboardingClients: () => request<{ data: ClientOnboarding[] }>('/api/v1/onboarding/clients'),
   downloadRunCsv: async (id: string) => {
     const csv = await request<string>(`/api/v1/ingest/runs/${id}/csv`)
     const link = document.createElement('a')
@@ -169,6 +172,37 @@ export const api = {
     link.click()
     URL.revokeObjectURL(link.href)
   },
+}
+
+export type OnboardingState = {
+  step: 'workspace' | 'profile' | 'icp' | 'team' | 'alerts' | 'done'
+  invited: boolean
+  steps: { id: string; label: string; optional: boolean; state: 'complete' | 'current' | 'upcoming' | 'skipped' }[]
+  draft: {
+    companyName: string
+    logoUrl: string
+    name: string
+    jobTitle: string
+    coverage: string
+    regions: string[]
+    councils: string[]
+    projectTypes: string[]
+    valueRanges: string[]
+    ribaStages: string[]
+    alertsEnabled: boolean
+    frequency: string
+  }
+  checklistDismissed: boolean
+  checklist: { id: string; label: string; done: boolean; skipped: boolean }[]
+}
+
+export type ClientOnboarding = {
+  id: string
+  name: string
+  coverage: string
+  planName: string
+  step: string
+  finished: boolean
 }
 
 export type ProviderWorkspace = { id: string; name: string; status: string }

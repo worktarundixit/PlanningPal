@@ -115,18 +115,22 @@ export function SignUpPage() {
     if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: safeRedirect('/app') },
+      options: { data: { name }, emailRedirectTo: safeRedirect('/onboarding') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)
-    setNotice('Check your email to confirm the address. Supabase sends that message.')
+    if (data.session) {
+      window.location.assign('/onboarding')
+      return
+    }
+    setNotice('Check your email to confirm the address. Supabase sends that message. You will then name your workspace.')
   }
 
   return (
-    <Shell title="Create an account" lede="A new organisation is created with you as the owner.">
+    <Shell title="Create an account" lede="After you confirm your email, you'll name your workspace and choose the leads you want.">
       <form onSubmit={submit}>
         <label className={label}>Name<input required value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
         <label className={label}>Work email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
@@ -229,13 +233,17 @@ export function AcceptInvitePage() {
     if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: safeRedirect('/app') },
+      options: { data: { name }, emailRedirectTo: safeRedirect('/onboarding') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)
+    if (data.session) {
+      window.location.assign('/onboarding')
+      return
+    }
     window.location.assign('/sign-in')
   }
 

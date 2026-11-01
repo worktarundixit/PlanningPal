@@ -4,7 +4,8 @@ import { Icon } from '../components/Icon'
 import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
 import { supabase } from '../lib/auth-client'
-import { api, type Overview } from '../lib/api'
+import { ClientOnboardingList, GettingStarted } from '../components/GettingStarted'
+import { api, type ClientOnboarding, type OnboardingState, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { StatusScreen } from '../components/StatusScreen'
 import { WorkspaceView } from './WorkspaceView'
@@ -50,6 +51,8 @@ export function CommandCentre() {
   const [profile, setProfile] = useState<UserProfile>({ name: '', role: '', company: '', email: '' })
   const [permissions, setPermissions] = useState<string[]>([])
   const [orgRole, setOrgRole] = useState<string | null>(null)
+  const [checklist, setChecklist] = useState<OnboardingState['checklist'] | null>(null)
+  const [clients, setClients] = useState<ClientOnboarding[] | null>(null)
   const [sessionReady, setSessionReady] = useState(false)
   const can = (permission: string) => permissions.includes(permission)
 
@@ -77,6 +80,16 @@ export function CommandCentre() {
         setProfile(me)
         setPermissions(me.permissions)
         setOrgRole(me.orgRole)
+        const flow = await api.onboarding()
+        if (flow.step !== 'done') {
+          window.location.assign('/onboarding')
+          return
+        }
+        if (!flow.checklistDismissed) setChecklist(flow.checklist)
+        if (me.platformRole === 'super_admin') {
+          const listed = await api.onboardingClients().catch(() => ({ data: [] as ClientOnboarding[] }))
+          if (!cancelled) setClients(listed.data)
+        }
         const [leads, savedIds, overview] = await Promise.all([api.leads(), api.saved(), api.overview()])
         if (cancelled) return
         setData(leads.data)
@@ -273,6 +286,8 @@ export function CommandCentre() {
         {loadError && <div className="mx-auto max-w-[1600px] px-4 pt-4 text-[11px] font-semibold text-[#B91C1C] sm:px-7 lg:px-9">{loadError}</div>}
         {loading && <div className="mx-auto max-w-[1600px] px-4 py-16 text-[12px] text-[#64748B] sm:px-7 lg:px-9">Loading schemes from the planning register…</div>}
         {loading ? null : active === 'Overview' ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
+          {clients && <ClientOnboardingList clients={clients} />}
+          {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {[
               { label: 'Approved schemes', value: filteredData.length.toLocaleString(), meta: region === 'All regions' ? 'All regions' : region, note: 'active region', icon: 'building' as const },
