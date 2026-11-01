@@ -117,4 +117,30 @@ export const api = {
   savePersona: (body: { stakeholder: string; angle: string; proofPoints?: string[] }) => request('/api/v1/persona', { method: 'PUT', body: JSON.stringify(body) }),
   bookDemo: (body: { name: string; email: string; company: string; trade: string; note: string }) =>
     request('/api/v1/demo-requests', { method: 'POST', body: JSON.stringify(body) }),
+  ingestRuns: () => request<{ data: IngestRun[] }>('/api/v1/ingest/runs'),
+  startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number }) =>
+    request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),
+  downloadRunCsv: async (id: string) => {
+    const csv = await request<string>(`/api/v1/ingest/runs/${id}/csv`)
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    link.download = `planit-${id}.csv`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  },
+}
+
+export type IngestRun = {
+  id: string
+  source: string
+  status: string
+  startedAt: string
+  finishedAt: string | null
+  fetched: number
+  filteredOut: number
+  inserted: number
+  updated: number
+  errors: number
+  message: string
+  csvPath: string
 }

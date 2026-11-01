@@ -8,5 +8,7 @@ coverage
 .DS_Store
 apps/web/dist
 apps/api/dist
+apps/api/data/raw
+apps/api/data/ingest
 .vite
 *.tsbuildinfo

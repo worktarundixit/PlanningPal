@@ -8,6 +8,7 @@ import { crmRoutes } from './routes/crm.ts'
 import { inboxRoutes } from './routes/inbox.ts'
 import { planningRoutes } from './routes/planning.ts'
 import { telemetryRoutes } from './routes/telemetry.ts'
+import { ingestRoutes } from './routes/ingest.ts'
 import { workspaceRoutes } from './routes/workspace.ts'
 import './types.ts'
 import type { AuthUser } from './types.ts'
@@ -97,6 +98,7 @@ export function buildApp(): FastifyInstance {
   app.register(inboxRoutes)
   app.register(campaignRoutes)
   app.register(workspaceRoutes)
+  app.register(ingestRoutes)
   app.register(telemetryRoutes)
 
   return app

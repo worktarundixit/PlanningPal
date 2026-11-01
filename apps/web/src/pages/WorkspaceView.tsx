@@ -3,6 +3,7 @@ import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { Billing } from './Billing'
 import { Campaigns } from './Campaigns'
 import { DeliveryHub } from './DeliveryHub'
+import { Ingestion } from './Ingestion'
 import { IntentBoard } from './IntentBoard'
 import { PersonaStudio } from './PersonaStudio'
 import { PlanningExplorer } from './PlanningExplorer'
@@ -37,6 +38,7 @@ export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread,
       {active === 'CRM & intent' && <IntentBoard data={data} onOpen={onOpen} crmTab={crmTab} setCrmTab={setCrmTab} setInboxUnread={setInboxUnread} />}
       {active === 'Reports & delivery' && (reportsTab === 'reports' ? <Reports /> : <DeliveryHub />)}
       {active === 'Workspace setup' && (setupTab === 'persona' ? <PersonaStudio /> : setupTab === 'settings' ? <Settings /> : <TeamManagement />)}
+      {active === 'Ingestion' && <Ingestion />}
       {active === 'Billing' && <Billing />}
       {active === 'My profile' && <ProfilePage profile={profile} onSave={setProfile} />}
     </div>

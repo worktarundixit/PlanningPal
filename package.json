@@ -11,7 +11,8 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
-    "test": "pnpm --filter @planningpal/api test",
+    "test": "pnpm --filter @planningpal/ingest test && pnpm --filter @planningpal/api test",
+    "ingest": "pnpm --filter @planningpal/api ingest",
     "db:migrate": "pnpm --filter @planningpal/api db:migrate",
     "db:seed": "pnpm --filter @planningpal/api db:seed",
     "setup": "pnpm install && pnpm db:migrate && pnpm db:seed"
