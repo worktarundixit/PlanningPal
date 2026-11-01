@@ -10,8 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@planningpal/api": "workspace:^",
     "@planningpal/shared": "workspace:*",
-    "better-auth": "^1.7.15",
+    "@supabase/supabase-js": "^2.118.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

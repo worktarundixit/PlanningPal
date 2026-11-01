@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm'
 import { randomBytes } from 'node:crypto'
 import { db } from '../db/client.ts'
-import { authUser, invitations, organisations, teamMembers, users } from '../db/schema.ts'
+import { invitations, organisations, teamMembers, users } from '../db/schema.ts'
 import type { OrgRole } from './permissions.ts'
 
 type CreatedAuthUser = {
@@ -10,7 +10,7 @@ type CreatedAuthUser = {
   name: string
 }
 
-/** Attach a Better Auth identity to an organisation membership. */
+/** Attach a Supabase Auth user to an organisation membership. */
 export async function provisionDomainUser(created: CreatedAuthUser) {
   const email = created.email.toLowerCase()
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.authUserId, created.id)).limit(1)
@@ -36,7 +36,6 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
       })
       .returning()
     await db.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invite.id))
-    await db.update(authUser).set({ emailVerified: true, updatedAt: new Date() }).where(eq(authUser.id, created.id))
     await db
       .update(teamMembers)
       .set({ userId: member?.id, status: 'Active', name: created.name || email, role: invite.role })

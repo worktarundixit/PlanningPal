@@ -155,7 +155,6 @@ const ROUTE_RULES: RouteRule[] = [
 
 export function permissionFor(method: string, url: string): Permission | 'public' | 'deny' {
   const path = url.split('?')[0] || url
-  if (path.startsWith('/api/auth')) return 'public'
   const rule = ROUTE_RULES.find((entry) => entry.method === method && entry.pattern.test(path))
   return rule?.permission ?? 'deny'
 }

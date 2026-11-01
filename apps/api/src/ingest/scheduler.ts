@@ -17,6 +17,11 @@ function londonNow(date = new Date()) {
   return { key: `${get('year')}-${get('month')}-${get('day')}`, hour: Number(get('hour')), minute: Number(get('minute')) }
 }
 
+export function isIngestSlot(date = new Date()) {
+  const now = londonNow(date)
+  return SLOTS.includes(now.hour) && now.minute <= 10
+}
+
 /** Fires at 06:00, 13:00 and 20:00 Europe/London while the API process is up. */
 export function startIngestScheduler() {
   const tick = () => {

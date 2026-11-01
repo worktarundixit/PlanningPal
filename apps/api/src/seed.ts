@@ -1,5 +1,4 @@
-import { councilCode, mapRecord, parseCsv } from '@planningpal/shared'
-import { hashPassword } from 'better-auth/crypto'
+import { councilCode, mapRecord, parseCsv, PUBLIC_EMAIL } from '@planningpal/shared'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -7,8 +6,6 @@ import { fileURLToPath } from 'node:url'
 import { db, sqlClient } from './db/client.ts'
 import {
   activities,
-  authAccount,
-  authUser,
   campaigns,
   councils,
   crmLeads,
@@ -39,25 +36,7 @@ async function createLogin(input: {
   platformRole?: 'super_admin' | null
   emailPreferences?: Record<string, boolean>
 }) {
-  const now = new Date()
-  const authId = randomUUID()
-  await db.insert(authUser).values({
-    id: authId,
-    name: input.name,
-    email: input.email.toLowerCase(),
-    emailVerified: true,
-    createdAt: now,
-    updatedAt: now,
-  })
-  await db.insert(authAccount).values({
-    id: randomUUID(),
-    accountId: authId,
-    providerId: 'credential',
-    userId: authId,
-    password: await hashPassword(LOCAL_DEMO_PASSWORD),
-    createdAt: now,
-    updatedAt: now,
-  })
+  const authId = await supabaseUserId(input.email.toLowerCase(), input.name)
   const [user] = await db
     .insert(users)
     .values({
@@ -85,6 +64,23 @@ async function createLogin(input: {
     })
   }
   return user
+}
+
+async function supabaseUserId(email: string, name: string) {
+  const url = process.env.SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) return randomUUID()
+  const headers = { Authorization: `Bearer ${key}`, apikey: key, 'Content-Type': 'application/json' }
+  const created = await fetch(`${url.replace(/\/$/, '')}/auth/v1/admin/users`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ email, password: LOCAL_DEMO_PASSWORD, email_confirm: true, user_metadata: { name } }),
+  })
+  const body = (await created.json()) as { id?: string; users?: { id: string; email?: string }[] }
+  if (body.id) return body.id
+  const listed = await fetch(`${url.replace(/\/$/, '')}/auth/v1/admin/users?page=1&per_page=200`, { headers })
+  const page = (await listed.json()) as { users?: { id: string; email?: string }[] }
+  return page.users?.find((user) => user.email?.toLowerCase() === email)?.id ?? randomUUID()
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -135,7 +131,7 @@ const portalSnapshot = {
     manager: {
       name: 'Emily Rhodes',
       role: 'Senior AEC Campaign Lead',
-      email: 'account@aecpipeline.co.uk',
+      email: PUBLIC_EMAIL,
       nextReview: '03 July 2025 · 11:00 AM',
     },
   },
@@ -216,10 +212,6 @@ async function main() {
       custom_roles,
       team_members,
       users,
-      auth_session,
-      auth_account,
-      auth_verification,
-      auth_user,
       organisations
     RESTART IDENTITY CASCADE
   `)

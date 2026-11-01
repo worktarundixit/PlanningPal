@@ -1,11 +1,14 @@
 import type { Scheme, UserProfile } from '@planningpal/shared'
 import type { Activity, BoardCard, Conversation } from '../types'
+import { accessToken } from './auth-client'
 
 const base = import.meta.env.VITE_API_URL ?? ''
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  const token = await accessToken()
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string }

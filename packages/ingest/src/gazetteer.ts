@@ -152,6 +152,10 @@ export const AUTHORITIES: Record<string, AuthorityInfo> = {
   "york": { name: "York", county: "North Yorkshire", region: "Yorkshire and the Humber" },
 }
 
+export function planItAuthorityKeys() {
+  return Object.keys(AUTHORITIES)
+}
+
 export function lookupAuthority(areaName: string): AuthorityInfo {
   const key = areaName.trim().toLowerCase().replace(/\s+/g, ' ')
   return AUTHORITIES[key] ?? { name: areaName.trim(), county: '', region: '' }

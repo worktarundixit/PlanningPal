@@ -39,6 +39,7 @@ export const organisations = pgTable('organisations', {
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   organisationId: uuid('organisation_id').references(() => organisations.id, { onDelete: 'cascade' }),
+  /** Supabase Auth user id (`auth.users.id`). No local credential table. */
   authUserId: text('auth_user_id').unique(),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
@@ -377,77 +378,6 @@ export const telemetryEvents = pgTable('telemetry_events', {
   payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
   createdAt: timestamps.createdAt,
 })
-
-const authTimestamps = {
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}
-
-/** Better Auth identity. Domain profiles live in `users` and point here via auth_user_id. */
-export const authUser = pgTable('auth_user', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  emailVerified: boolean('email_verified').notNull().default(false),
-  image: text('image'),
-  createdAt: authTimestamps.createdAt,
-  updatedAt: authTimestamps.updatedAt,
-})
-
-export const authSession = pgTable(
-  'auth_session',
-  {
-    id: text('id').primaryKey(),
-    userId: text('user_id')
-      .notNull()
-      .references(() => authUser.id, { onDelete: 'cascade' }),
-    token: text('token').notNull().unique(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    ipAddress: text('ip_address'),
-    userAgent: text('user_agent'),
-    createdAt: authTimestamps.createdAt,
-    updatedAt: authTimestamps.updatedAt,
-  },
-  (table) => [index('auth_session_user_idx').on(table.userId)],
-)
-
-export const authAccount = pgTable(
-  'auth_account',
-  {
-    id: text('id').primaryKey(),
-    accountId: text('account_id').notNull(),
-    providerId: text('provider_id').notNull(),
-    userId: text('user_id')
-      .notNull()
-      .references(() => authUser.id, { onDelete: 'cascade' }),
-    accessToken: text('access_token'),
-    refreshToken: text('refresh_token'),
-    idToken: text('id_token'),
-    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
-    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
-    scope: text('scope'),
-    password: text('password'),
-    createdAt: authTimestamps.createdAt,
-    updatedAt: authTimestamps.updatedAt,
-  },
-  (table) => [
-    uniqueIndex('auth_account_provider_idx').on(table.providerId, table.accountId),
-    index('auth_account_user_idx').on(table.userId),
-  ],
-)
-
-export const authVerification = pgTable(
-  'auth_verification',
-  {
-    id: text('id').primaryKey(),
-    identifier: text('identifier').notNull(),
-    value: text('value').notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    createdAt: authTimestamps.createdAt,
-    updatedAt: authTimestamps.updatedAt,
-  },
-  (table) => [index('auth_verification_identifier_idx').on(table.identifier)],
-)
 
 export const invitations = pgTable('invitations', {
   id: uuid('id').primaryKey().defaultRandom(),
