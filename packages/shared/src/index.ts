@@ -156,11 +156,18 @@ export function parseCsv(text: string): SourceRecord[] {
     .map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])))
 }
 
+/** Stop spreadsheet apps from treating a cell as a formula. */
+export function csvCell(value: unknown) {
+  const text = String(value ?? '')
+  const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text
+  return `"${guarded.replaceAll('"', '""')}"`
+}
+
 export function toCsv(records: SourceRecord[]): string {
   const fields = MASTER_COLUMNS.filter((column) => records.some((record) => column in record))
   const header = fields.length ? fields : [...MASTER_COLUMNS]
   const rows = [header, ...records.map((record) => header.map((field) => record[field] ?? ''))]
-  return rows.map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n')
+  return rows.map((line) => line.map((value) => csvCell(value)).join(',')).join('\n')
 }
 
 export function mapRecord(record: SourceRecord, index: number): Scheme {
