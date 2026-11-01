@@ -2,7 +2,7 @@ import { asc, eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
-import { campaigns, clients, sendingDomains } from '../db/schema.ts'
+import { campaigns, organisations, sendingDomains } from '../db/schema.ts'
 import { parseBody, requireUser } from '../lib/http.ts'
 
 const campaignBody = z.object({
@@ -28,7 +28,7 @@ function presentCampaign(row: typeof campaigns.$inferSelect) {
 export async function campaignRoutes(app: FastifyInstance) {
   app.get('/api/v1/campaigns', async (request) => {
     const user = requireUser(request)
-    const rows = await db.select().from(campaigns).where(eq(campaigns.clientId, user.clientId)).orderBy(asc(campaigns.createdAt))
+    const rows = await db.select().from(campaigns).where(eq(campaigns.organisationId, user.organisationId)).orderBy(asc(campaigns.createdAt))
     return { data: rows.map(presentCampaign) }
   })
 
@@ -39,7 +39,7 @@ export async function campaignRoutes(app: FastifyInstance) {
     const [created] = await db
       .insert(campaigns)
       .values({
-        clientId: user.clientId,
+        organisationId: user.organisationId,
         name: body.name,
         region: body.region,
         status: body.status ?? 'draft',
@@ -63,7 +63,7 @@ export async function campaignRoutes(app: FastifyInstance) {
       .set({ ...body, updatedAt: new Date() })
       .where(eq(campaigns.id, id))
       .returning()
-    if (!updated || updated.clientId !== user.clientId) return reply.code(404).send({ error: 'Campaign not found' })
+    if (!updated || updated.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Campaign not found' })
     return presentCampaign(updated)
   })
 
@@ -72,7 +72,7 @@ export async function campaignRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/campaign-settings', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     return {
       dailyLimit: client?.dailySendLimit ?? 30,
       warmup: client?.warmupEnabled ?? true,
@@ -93,13 +93,13 @@ export async function campaignRoutes(app: FastifyInstance) {
     )
     if (!body) return
     const [updated] = await db
-      .update(clients)
+      .update(organisations)
       .set({
         ...(body.dailyLimit !== undefined ? { dailySendLimit: body.dailyLimit } : {}),
         ...(body.warmup !== undefined ? { warmupEnabled: body.warmup } : {}),
         ...(body.trackingDomain !== undefined ? { trackingDomain: body.trackingDomain } : {}),
       })
-      .where(eq(clients.id, user.clientId))
+      .where(eq(organisations.id, user.organisationId))
       .returning()
     return {
       dailyLimit: updated?.dailySendLimit,
@@ -110,7 +110,7 @@ export async function campaignRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/sending-domains', async (request) => {
     const user = requireUser(request)
-    const rows = await db.select().from(sendingDomains).where(eq(sendingDomains.clientId, user.clientId)).orderBy(asc(sendingDomains.createdAt))
+    const rows = await db.select().from(sendingDomains).where(eq(sendingDomains.organisationId, user.organisationId)).orderBy(asc(sendingDomains.createdAt))
     return { data: rows.map(presentDomain) }
   })
 
@@ -130,7 +130,7 @@ export async function campaignRoutes(app: FastifyInstance) {
     const name = body.name.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
     const [created] = await db
       .insert(sendingDomains)
-      .values({ clientId: user.clientId, name, inboxes: body.inboxes, health: body.health, status: body.status })
+      .values({ organisationId: user.organisationId, name, inboxes: body.inboxes, health: body.health, status: body.status })
       .returning()
     return reply.code(201).send(created ? presentDomain(created) : { error: 'Could not add domain' })
   })
@@ -142,7 +142,7 @@ export async function campaignRoutes(app: FastifyInstance) {
       .delete(sendingDomains)
       .where(eq(sendingDomains.id, id))
       .returning()
-    if (!removed || removed.clientId !== user.clientId) return reply.code(404).send({ error: 'Domain not found' })
+    if (!removed || removed.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Domain not found' })
     return { id: removed.id, name: removed.name }
   })
 }
@@ -155,7 +155,7 @@ async function setStatus(request: import('fastify').FastifyRequest, reply: impor
   const user = requireUser(request)
   const { id } = request.params as { id: string }
   const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1)
-  if (!existing || existing.clientId !== user.clientId) return reply.code(404).send({ error: 'Campaign not found' })
+  if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Campaign not found' })
   if (existing.status === 'draft' && status === 'paused') return reply.code(400).send({ error: 'Draft campaigns cannot be paused' })
   const next = status === 'live' && existing.status === 'draft' ? 'draft' : status
   const [updated] = await db.update(campaigns).set({ status: next, updatedAt: new Date() }).where(eq(campaigns.id, id)).returning()

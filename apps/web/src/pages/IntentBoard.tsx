@@ -6,7 +6,7 @@ import { notify } from '../lib/notify'
 import { Contacts } from './Contacts'
 import type { BoardCard, Conversation, CrmTab } from '../types'
 
-export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; crmTab: CrmTab; setCrmTab: (tab: CrmTab) => void; setInboxUnread: (count: number) => void }) {
+export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, canWrite = true }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; crmTab: CrmTab; setCrmTab: (tab: CrmTab) => void; setInboxUnread: (count: number) => void; canWrite?: boolean }) {
   const [assignee, setAssignee] = useState('All assignees')
   const [pipelineView, setPipelineView] = useState<'active' | 'archived'>('active')
   const [lastAction, setLastAction] = useState('')
@@ -39,6 +39,7 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread }:
     if (scheme) onOpen(scheme)
   }
   const move = (id: string, direction: number) => {
+    if (!canWrite) return
     const card = cards.find((item) => item.id === id)
     if (!card) return
     const stage = Math.max(0, Math.min(4, card.stage + direction))
@@ -46,12 +47,14 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread }:
     void api.moveStage(id, stage).catch(() => notify('Could not move that opportunity'))
   }
   const archive = (card: BoardCard) => {
+    if (!canWrite) return
     const archived = !card.archived
     setCards((items) => items.map((item) => item.id === card.id ? { ...item, archived } : item))
     setLastAction(`${card.person} ${card.archived ? 'restored to the active pipeline' : 'archived'}`)
     void api.archiveLead(card.id, archived).catch(() => notify('Could not update the archive'))
   }
   const openAction = (type: 'email' | 'call' | 'task' | 'note', card: BoardCard) => {
+    if (!canWrite) return
     setCrmAction({ type, card })
     setActionText(type === 'email' ? `ECI introduction regarding ${card.scheme}` : '')
   }
@@ -77,6 +80,7 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread }:
     void api.markRead(id).catch(() => notify('Could not mark that thread read'))
   }
   const sendReply = () => {
+    if (!canWrite) return
     if (!replyText.trim() || !selectedMessage) return
     const body = replyText
     void api.reply(selectedMessage.id, body).then((message) => {
@@ -140,13 +144,13 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread }:
                 <span>Assigned to <b className="font-semibold text-[#334155]">{card.assignee}</b></span>
               </div>
               <div className="mt-3 grid grid-cols-5 gap-1.5 border-t border-[#EEF2F7] pt-3">
-                <button onClick={() => openAction('email', card)} title="Send email" aria-label={`Send email to ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB]"><Icon name="mail" size={12} /></button>
-                <button onClick={() => openAction('call', card)} title="Log call" aria-label={`Log call with ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB]"><Icon name="phone" size={12} /></button>
-                <button onClick={() => openAction('task', card)} title="Add follow-up task" aria-label={`Add follow-up task for ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB]"><Icon name="calendar" size={12} /></button>
-                <button onClick={() => openAction('note', card)} title="Add note" aria-label={`Add note for ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB]"><Icon name="note" size={12} /></button>
-                <button onClick={() => archive(card)} title={card.archived ? 'Restore opportunity' : 'Archive stalled opportunity'} aria-label={`${card.archived ? 'Restore' : 'Archive'} ${card.person}`} className={`grid h-7 place-items-center rounded-md ${card.archived ? 'bg-[#ECFDF5] text-[#15803D]' : 'bg-[#F8FAFD] text-[#94A3B8] hover:bg-[#FEF2F2] hover:text-[#B91C1C]'}`}><Icon name="archive" size={12} /></button>
+                <button disabled={!canWrite} onClick={() => openAction('email', card)} title="Send email" aria-label={`Send email to ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"><Icon name="mail" size={12} /></button>
+                <button disabled={!canWrite} onClick={() => openAction('call', card)} title="Log call" aria-label={`Log call with ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"><Icon name="phone" size={12} /></button>
+                <button disabled={!canWrite} onClick={() => openAction('task', card)} title="Add follow-up task" aria-label={`Add follow-up task for ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"><Icon name="calendar" size={12} /></button>
+                <button disabled={!canWrite} onClick={() => openAction('note', card)} title="Add note" aria-label={`Add note for ${card.person}`} className="grid h-7 place-items-center rounded-md bg-[#F8FAFD] text-[#64748B] hover:bg-[#EFF6FF] hover:text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"><Icon name="note" size={12} /></button>
+                <button disabled={!canWrite} onClick={() => archive(card)} title={card.archived ? 'Restore opportunity' : 'Archive stalled opportunity'} aria-label={`${card.archived ? 'Restore' : 'Archive'} ${card.person}`} className={`grid h-7 place-items-center rounded-md disabled:cursor-not-allowed disabled:opacity-40 ${card.archived ? 'bg-[#ECFDF5] text-[#15803D]' : 'bg-[#F8FAFD] text-[#94A3B8] hover:bg-[#FEF2F2] hover:text-[#B91C1C]'}`}><Icon name="archive" size={12} /></button>
               </div>
-              {!card.archived && <div className="mt-2 flex justify-between"><button disabled={stage === 0} onClick={() => move(card.id, -1)} className="text-[8px] font-semibold text-[#94A3B8] disabled:opacity-20">← Back</button><button disabled={stage === 4} onClick={() => move(card.id, 1)} className="text-[8px] font-semibold text-[#2563EB] disabled:opacity-20">Advance →</button></div>}
+              {!card.archived && <div className="mt-2 flex justify-between"><button disabled={!canWrite || stage === 0} onClick={() => move(card.id, -1)} className="text-[8px] font-semibold text-[#94A3B8] disabled:cursor-not-allowed disabled:opacity-20">← Back</button><button disabled={!canWrite || stage === 4} onClick={() => move(card.id, 1)} className="text-[8px] font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-20">Advance →</button></div>}
             </article>)}
           </div>
         </div>)}

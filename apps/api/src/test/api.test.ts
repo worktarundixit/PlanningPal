@@ -8,18 +8,18 @@ import { sqlClient, db } from '../db/client.ts'
 import { runMigrations } from '../db/migrate.ts'
 import {
   campaigns,
-  clients,
   councils,
   crmLeads,
   decisionMakers,
   inboxConversations,
   inboxMessages,
+  organisations,
   planningApplications,
-  users,
 } from '../db/schema.ts'
+import { createActor } from './actors.ts'
 
 let app: FastifyInstance
-const token = 'dev-token'
+let cookie = ''
 let applicationRef = ''
 let leadId = ''
 let campaignId = ''
@@ -29,27 +29,28 @@ beforeAll(async () => {
   await runMigrations()
   await sqlClient.unsafe(`
     TRUNCATE TABLE
+      mail_log, invitations,
       telemetry_events, invoices, meetings, persona_templates, intent_events,
       inbox_messages, inbox_conversations, sending_domains, campaigns, activities,
       crm_leads, saved_schemes, decision_makers, planning_applications, councils,
-      custom_roles, team_members, users, clients
+      custom_roles, team_members, users,
+      auth_session, auth_account, auth_verification, auth_user,
+      organisations
     RESTART IDENTITY CASCADE
   `)
 
   const [client] = await db
-    .insert(clients)
+    .insert(organisations)
     .values({ companyName: 'Micraft Design Ltd', tier: 'CATEGORY_2' })
     .returning()
-  const [user] = await db
-    .insert(users)
-    .values({
-      clientId: client!.id,
-      email: 'james@micraftdesign.co.uk',
-      name: 'James Wilkins',
-      jobTitle: 'Account owner',
-      apiToken: token,
-    })
-    .returning()
+  const actor = await createActor({
+    email: 'james@micraftdesign.co.uk',
+    name: 'James Wilkins',
+    organisationId: client!.id,
+    orgRole: 'owner',
+    jobTitle: 'Account owner',
+  })
+  cookie = actor.cookie
   const [council] = await db
     .insert(councils)
     .values({ code: 'CROYDON', name: 'Croydon Council', portalType: 'IDOX', baseUrl: 'https://example.test', county: 'London', region: 'London' })
@@ -181,17 +182,17 @@ beforeAll(async () => {
   })
   const [lead] = await db
     .insert(crmLeads)
-    .values({ clientId: client!.id, applicationId: rows[0]!.id, stage: 'STAGE_1_COLD', openCount: 1, assigneeName: 'Emily Rhodes' })
+    .values({ organisationId: client!.id, applicationId: rows[0]!.id, stage: 'STAGE_1_COLD', openCount: 1, assigneeName: 'Emily Rhodes' })
     .returning()
   leadId = lead!.id
   const [campaign] = await db
     .insert(campaigns)
-    .values({ clientId: client!.id, name: 'Micraft Design · RIBA 1–2', status: 'live', region: 'London', contacts: 10, sent: 4, openRate: '50%', replyRate: '10%', meetings: 1 })
+    .values({ organisationId: client!.id, name: 'Micraft Design · RIBA 1–2', status: 'live', region: 'London', contacts: 10, sent: 4, openRate: '50%', replyRate: '10%', meetings: 1 })
     .returning()
   campaignId = campaign!.id
   const [conversation] = await db
     .insert(inboxConversations)
-    .values({ clientId: client!.id, crmLeadId: lead!.id, subject: 'Re: Dwelling', preview: 'Hello', unread: true, timeLabel: '12m' })
+    .values({ organisationId: client!.id, crmLeadId: lead!.id, subject: 'Re: Dwelling', preview: 'Hello', unread: true, timeLabel: '12m' })
     .returning()
   conversationId = conversation!.id
   await db.insert(inboxMessages).values({
@@ -205,12 +206,10 @@ beforeAll(async () => {
 
   app = buildApp()
   await app.ready()
-  void user
 })
 
 afterAll(async () => {
   await app.close()
-  await sqlClient.end()
 })
 
 describe('planningpal api', () => {
@@ -233,7 +232,7 @@ describe('planningpal api', () => {
     const response = await app.inject({
       method: 'GET',
       url: '/api/v1/planning/leads?min_val=1&county=Surrey',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie },
     })
     expect(response.statusCode).toBe(200)
     const body = response.json()
@@ -246,7 +245,7 @@ describe('planningpal api', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/api/v1/planning/leads/${encodeURIComponent(applicationRef)}`,
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie },
     })
     expect(response.statusCode).toBe(200)
     const body = response.json()
@@ -257,7 +256,7 @@ describe('planningpal api', () => {
   })
 
   it('saves and unsaves a scheme', async () => {
-    const headers = { authorization: `Bearer ${token}` }
+    const headers = { cookie }
     const save = await app.inject({ method: 'POST', url: '/api/v1/saved-schemes', headers, payload: { applicationRef } })
     expect(save.statusCode).toBe(200)
     const listed = await app.inject({ method: 'GET', url: '/api/v1/saved-schemes', headers })
@@ -272,7 +271,7 @@ describe('planningpal api', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/planning/leads/export',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie },
       payload: { format: 'csv', filter_params: { ids: [applicationRef] } },
     })
     expect(response.statusCode).toBe(200)
@@ -281,7 +280,7 @@ describe('planningpal api', () => {
   })
 
   it('moves a CRM card and stores a note', async () => {
-    const headers = { authorization: `Bearer ${token}` }
+    const headers = { cookie }
     const moved = await app.inject({
       method: 'PATCH',
       url: `/api/v1/crm/leads/${leadId}/stage`,
@@ -311,7 +310,7 @@ describe('planningpal api', () => {
   })
 
   it('creates and pauses a campaign', async () => {
-    const headers = { authorization: `Bearer ${token}` }
+    const headers = { cookie }
     const created = await app.inject({
       method: 'POST',
       url: '/api/v1/campaigns',
@@ -331,7 +330,7 @@ describe('planningpal api', () => {
     const response = await app.inject({
       method: 'PATCH',
       url: '/api/v1/me',
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie },
       payload: { name: 'James Wilkins', role: 'Commercial director', company: 'Micraft Design Ltd', email: 'james@micraftdesign.co.uk' },
     })
     expect(response.statusCode).toBe(200)
@@ -339,7 +338,7 @@ describe('planningpal api', () => {
   })
 
   it('marks inbox threads read and stores a stubbed reply', async () => {
-    const headers = { authorization: `Bearer ${token}` }
+    const headers = { cookie }
     const read = await app.inject({ method: 'POST', url: `/api/v1/inbox/conversations/${conversationId}/read`, headers })
     expect(read.json().unread).toBe(false)
     const reply = await app.inject({

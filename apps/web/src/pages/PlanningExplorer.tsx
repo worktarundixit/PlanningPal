@@ -4,7 +4,7 @@ import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { exportSchemes, notify } from '../lib/notify'
 
-export function PlanningExplorer({ data, onOpen, onSave, saved }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[] }) {
+export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, canExport = true, canCampaign = true }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; canExport?: boolean; canCampaign?: boolean }) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('All categories')
   const [county, setCounty] = useState('All counties')
@@ -132,9 +132,9 @@ export function PlanningExplorer({ data, onOpen, onSave, saved }: { data: Scheme
       <div className="mt-5 overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
         {selectedIds.length > 0 && <div className="flex flex-wrap items-center gap-2 border-b border-[#BFDBFE] bg-[#EFF6FF] px-5 py-3">
           <div className="mr-auto flex items-center gap-2 text-[10px] font-semibold text-[#1D4ED8]"><span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#2563EB] px-1 text-[8px] text-white">{selectedIds.length}</span> selected</div>
-          <button onClick={bulkSave} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm"><Icon name="building" size={11} /> Save</button>
-          <button onClick={() => { notify(`${selectedIds.length} schemes added to a campaign draft`); setSelectedIds([]) }} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm"><Icon name="send" size={11} /> Add to campaign</button>
-          <button onClick={() => exportSchemes(selectedSchemes)} className="flex items-center gap-1.5 rounded-md bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white"><Icon name="download" size={11} /> Export</button>
+          <button disabled={!canSave} onClick={bulkSave} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm disabled:cursor-not-allowed disabled:opacity-40"><Icon name="building" size={11} /> Save</button>
+          <button disabled={!canCampaign} onClick={() => { notify(`${selectedIds.length} schemes added to a campaign draft`); setSelectedIds([]) }} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm disabled:cursor-not-allowed disabled:opacity-40"><Icon name="send" size={11} /> Add to campaign</button>
+          <button disabled={!canExport} onClick={() => exportSchemes(selectedSchemes)} className="flex items-center gap-1.5 rounded-md bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Icon name="download" size={11} /> Export</button>
           <button onClick={() => setSelectedIds([])} className="grid h-7 w-7 place-items-center rounded-md text-[#64748B] hover:bg-white" aria-label="Clear selection"><Icon name="close" size={12} /></button>
         </div>}
         <div className="flex items-center justify-between border-b border-[#E8EDF5] px-5 py-4">
@@ -157,7 +157,7 @@ export function PlanningExplorer({ data, onOpen, onSave, saved }: { data: Scheme
                   <td className="px-4 py-4"><span className="font-semibold text-[#2563EB]">{scheme.stage}</span></td>
                   <td className="px-4 py-4"><span className={`inline-flex items-center gap-1.5 text-[9px] font-semibold ${scheme.email && scheme.phone ? 'text-[#36805A]' : 'text-[#A16207]'}`}><i className={`h-1.5 w-1.5 rounded-full ${scheme.email && scheme.phone ? 'bg-[#4ADE80]' : 'bg-[#FACC15]'}`} /> {scheme.email && scheme.phone ? 'Direct' : scheme.email || scheme.phone ? 'Partial' : 'Missing'}</span></td>
                   <td className="px-4 py-4"><span className="font-display text-[12px] font-semibold">{scheme.score}</span><span className="text-[#94A3B8]">/100</span></td>
-                  <td className="px-4 py-4"><button onClick={(e) => { e.stopPropagation(); onSave(scheme.id) }} className={`rounded-md px-2.5 py-1.5 text-[9px] font-semibold ${saved.includes(scheme.id) ? 'bg-[#172554] text-white' : 'border border-[#DCE4F0] text-[#64748B]'}`}>{saved.includes(scheme.id) ? 'Saved' : 'Save'}</button></td>
+                  <td className="px-4 py-4"><button disabled={!canSave} onClick={(e) => { e.stopPropagation(); onSave(scheme.id) }} className={`rounded-md px-2.5 py-1.5 text-[9px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${saved.includes(scheme.id) ? 'bg-[#172554] text-white' : 'border border-[#DCE4F0] text-[#64748B]'}`}>{saved.includes(scheme.id) ? 'Saved' : 'Save'}</button></td>
                 </tr>
               ))}
             </tbody>

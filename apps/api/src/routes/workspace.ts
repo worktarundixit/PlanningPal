@@ -1,21 +1,24 @@
-import { asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
+import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
+import { appOrigin, mailer } from '../auth/mailer.ts'
+import { parseOrgRole, roleLabel } from '../auth/permissions.ts'
 import { db } from '../db/client.ts'
 import {
-  clients,
-  customRoles,
   demoRequests,
   intentEvents,
+  invitations,
   invoices,
   meetings,
+  organisations,
   personaTemplates,
   planningApplications,
   savedSchemes,
   teamMembers,
   users,
 } from '../db/schema.ts'
-import { parseBody, requireUser } from '../lib/http.ts'
+import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 
 const profileBody = z.object({
   name: z.string().min(1),
@@ -50,7 +53,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/me', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     return {
       id: user.id,
       name: user.name,
@@ -60,6 +63,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
       twoFactorEnabled: user.twoFactorEnabled,
       plan: client?.planName ?? 'Team Plan',
       tier: client?.tier ?? 'CATEGORY_3',
+      organisationId: user.organisationId || null,
+      orgRole: user.orgRole,
+      orgRoleLabel: user.platformRole === 'super_admin' ? 'Super Admin' : user.orgRole ? roleLabel(user.orgRole) : '',
+      platformRole: user.platformRole,
+      permissions: user.permissions,
     }
   })
 
@@ -78,7 +86,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
       })
       .where(eq(users.id, user.id))
       .returning()
-    await db.update(clients).set({ companyName: body.company }).where(eq(clients.id, user.clientId))
+    if (user.organisationId && user.permissions.includes('settings.write')) {
+      await db.update(organisations).set({ companyName: body.company }).where(eq(organisations.id, user.organisationId))
+    }
     await db.update(teamMembers).set({ name: body.name, email: body.email }).where(eq(teamMembers.userId, user.id))
     return {
       name: updated?.name,
@@ -91,7 +101,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/overview', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     const [counts] = await db
       .select({
         schemes: sql<number>`count(*)::int`,
@@ -102,7 +112,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
       .select({ total: sql<number>`count(*)::int` })
       .from(savedSchemes)
       .where(eq(savedSchemes.userId, user.id))
-    const events = await db.select().from(intentEvents).where(eq(intentEvents.clientId, user.clientId)).orderBy(asc(intentEvents.createdAt))
+    const events = await db.select().from(intentEvents).where(eq(intentEvents.organisationId, user.organisationId)).orderBy(asc(intentEvents.createdAt))
     const snapshot = (client?.portalSnapshot ?? {}) as Record<string, unknown>
     return {
       schemes: counts?.schemes ?? 0,
@@ -123,16 +133,16 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/reports', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     const snapshot = (client?.portalSnapshot ?? {}) as { reports?: unknown }
     return snapshot.reports ?? {}
   })
 
   app.get('/api/v1/delivery', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     const snapshot = (client?.portalSnapshot ?? {}) as { delivery?: unknown }
-    const rows = await db.select().from(meetings).where(eq(meetings.clientId, user.clientId)).orderBy(asc(meetings.createdAt))
+    const rows = await db.select().from(meetings).where(eq(meetings.organisationId, user.organisationId)).orderBy(asc(meetings.createdAt))
     return {
       ...(snapshot.delivery as object),
       meetings: rows.map((meeting) => ({
@@ -146,8 +156,8 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/billing', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
-    const rows = await db.select().from(invoices).where(eq(invoices.clientId, user.clientId)).orderBy(asc(invoices.issuedOn))
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
+    const rows = await db.select().from(invoices).where(eq(invoices.organisationId, user.organisationId)).orderBy(asc(invoices.issuedOn))
     const snapshot = (client?.portalSnapshot ?? {}) as { billing?: unknown }
     return {
       plan: client?.planName,
@@ -165,7 +175,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/workspace', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(clients).where(eq(clients.id, user.clientId)).limit(1)
+    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
     return {
       territories: client?.targetTerritories ?? [],
       trades: client?.tradeSpecialisms ?? [],
@@ -180,14 +190,14 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const body = parseBody(workspaceBody, request.body, reply)
     if (!body) return
     const [updated] = await db
-      .update(clients)
+      .update(organisations)
       .set({
         ...(body.territories ? { targetTerritories: body.territories } : {}),
         ...(body.trades ? { tradeSpecialisms: body.trades } : {}),
         ...(body.radius !== undefined ? { operatingRadiusMiles: body.radius } : {}),
         ...(body.signalAlerts !== undefined ? { signalAlerts: body.signalAlerts } : {}),
       })
-      .where(eq(clients.id, user.clientId))
+      .where(eq(organisations.id, user.organisationId))
       .returning()
     return {
       territories: updated?.targetTerritories ?? [],
@@ -197,41 +207,91 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
   })
 
+  app.get('/api/v1/team/invites/:token', { config: { public: true } }, async (request, reply) => {
+    const { token } = request.params as { token: string }
+    const [invite] = await db
+      .select({
+        email: invitations.email,
+        role: invitations.role,
+        expiresAt: invitations.expiresAt,
+        acceptedAt: invitations.acceptedAt,
+        companyName: organisations.companyName,
+      })
+      .from(invitations)
+      .innerJoin(organisations, eq(invitations.organisationId, organisations.id))
+      .where(eq(invitations.token, token))
+      .limit(1)
+    if (!invite || invite.acceptedAt) return reply.code(404).send({ error: 'Invitation not found' })
+    return {
+      email: invite.email,
+      role: roleLabel(invite.role),
+      organisation: invite.companyName,
+      expired: invite.expiresAt.getTime() < Date.now(),
+    }
+  })
+
   app.get('/api/v1/team', async (request) => {
     const user = requireUser(request)
-    const members = await db.select().from(teamMembers).where(eq(teamMembers.clientId, user.clientId)).orderBy(asc(teamMembers.createdAt))
-    const roles = await db.select().from(customRoles).where(eq(customRoles.clientId, user.clientId)).orderBy(asc(customRoles.createdAt))
+    const members = await db.select().from(teamMembers).where(eq(teamMembers.organisationId, user.organisationId)).orderBy(asc(teamMembers.createdAt))
     return {
       members: members.map((member) => ({
         id: member.id,
         name: member.name,
         email: member.email,
-        role: member.role,
-        status: member.status,
+        role: roleLabel(member.role),
+        status: member.status === 'Active' ? 'Active' : 'Pending',
       })),
-      customRoles: roles.map((role) => ({ id: role.id, name: role.name, permissions: role.permissions })),
+      customRoles: [] as { id: string; name: string; permissions: string[] }[],
     }
   })
 
   app.post('/api/v1/team/invites', async (request, reply) => {
     const user = requireUser(request)
+    if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
     const body = parseBody(z.object({ email: z.string().email(), role: z.string().min(1) }), request.body, reply)
     if (!body) return
-    const name = body.email
+    const role = parseOrgRole(body.role)
+    if (!role || role === 'owner') return reply.code(400).send({ error: 'Choose Admin, Member, or Viewer' })
+    const email = body.email.toLowerCase()
+    const [already] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.email, email)))
+      .limit(1)
+    if (already) return reply.code(409).send({ error: 'That email is already on the team' })
+    const token = randomBytes(24).toString('hex')
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    const name = email
       .split('@')[0]
       ?.split(/[._-]/)
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(' ')
+    const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`
     const [created] = await db
       .insert(teamMembers)
-      .values({ clientId: user.clientId, name: name || 'Invited member', email: body.email, role: body.role, status: 'Pending' })
+      .values({ organisationId: user.organisationId, name: name || 'Invited member', email, role, status: 'Pending' })
       .returning()
+    await db.insert(invitations).values({
+      organisationId: user.organisationId,
+      email,
+      role,
+      token,
+      expiresAt,
+      invitedBy: user.id,
+    })
+    await mailer.send({
+      kind: 'invite',
+      to: email,
+      subject: `Join ${user.companyName} on PlanningPal`,
+      text: `${user.name} invited you to ${user.companyName} as ${roleLabel(role)}.\nOpen this link to create your account:\n${inviteUrl}`,
+    })
     return reply.code(201).send({
       id: created?.id,
       name: created?.name,
       email: created?.email,
-      role: created?.role,
-      status: created?.status,
+      role: roleLabel(role),
+      status: 'Pending',
+      inviteUrl,
     })
   })
 
@@ -240,37 +300,47 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const body = parseBody(z.object({ role: z.string().min(1) }), request.body, reply)
     if (!body) return
+    const role = parseOrgRole(body.role)
+    if (!role) return reply.code(400).send({ error: 'Unknown role' })
     const [existing] = await db.select().from(teamMembers).where(eq(teamMembers.id, id)).limit(1)
-    if (!existing || existing.clientId !== user.clientId) return reply.code(404).send({ error: 'Team member not found' })
-    if (existing.role === 'Owner') return reply.code(400).send({ error: 'The owner role cannot be changed' })
-    const [updated] = await db.update(teamMembers).set({ role: body.role }).where(eq(teamMembers.id, id)).returning()
-    return { id: updated?.id, role: updated?.role }
+    if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Team member not found' })
+    if (parseOrgRole(existing.role) === 'owner') return reply.code(403).send({ error: 'The owner role cannot be changed' })
+    if (role === 'owner' && user.platformRole !== 'super_admin' && user.orgRole !== 'owner') {
+      return reply.code(403).send({ error: 'Only an owner can assign the owner role' })
+    }
+    if (user.orgRole === 'admin' && role === 'owner') return reply.code(403).send({ error: 'Admins cannot assign the owner role' })
+    const [updated] = await db.update(teamMembers).set({ role }).where(eq(teamMembers.id, id)).returning()
+    if (existing.userId) await db.update(users).set({ orgRole: role, updatedAt: new Date() }).where(eq(users.id, existing.userId))
+    return { id: updated?.id, role: updated ? roleLabel(updated.role) : roleLabel(role) }
   })
 
   app.delete('/api/v1/team/:id', async (request, reply) => {
     const user = requireUser(request)
     const { id } = request.params as { id: string }
     const [existing] = await db.select().from(teamMembers).where(eq(teamMembers.id, id)).limit(1)
-    if (!existing || existing.clientId !== user.clientId) return reply.code(404).send({ error: 'Team member not found' })
-    if (existing.role === 'Owner') return reply.code(400).send({ error: 'The owner cannot be removed' })
+    if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Team member not found' })
+    if (parseOrgRole(existing.role) === 'owner') return reply.code(403).send({ error: 'The owner cannot be removed' })
+    if (user.orgRole === 'admin' && parseOrgRole(existing.role) === 'admin' && existing.userId === user.id) {
+      return reply.code(403).send({ error: 'Ask an owner to remove your admin seat' })
+    }
+    if (existing.userId) {
+      await db.update(users).set({ organisationId: null, updatedAt: new Date() }).where(eq(users.id, existing.userId))
+    }
+    await db
+      .update(invitations)
+      .set({ acceptedAt: new Date() })
+      .where(and(eq(invitations.organisationId, existing.organisationId), eq(invitations.email, existing.email), isNull(invitations.acceptedAt)))
     await db.delete(teamMembers).where(eq(teamMembers.id, id))
     return { id, removed: true }
   })
 
-  app.post('/api/v1/roles', async (request, reply) => {
-    const user = requireUser(request)
-    const body = parseBody(z.object({ name: z.string().min(1), permissions: z.array(z.string()).min(1) }), request.body, reply)
-    if (!body) return
-    const [created] = await db
-      .insert(customRoles)
-      .values({ clientId: user.clientId, name: body.name.trim(), permissions: body.permissions })
-      .returning()
-    return reply.code(201).send({ id: created?.id, name: created?.name, permissions: created?.permissions })
+  app.post('/api/v1/roles', async (_request, reply) => {
+    return reply.code(403).send({ error: 'Roles are Owner, Admin, Member, and Viewer' })
   })
 
   app.get('/api/v1/persona', async (request) => {
     const user = requireUser(request)
-    const [persona] = await db.select().from(personaTemplates).where(eq(personaTemplates.clientId, user.clientId)).limit(1)
+    const [persona] = await db.select().from(personaTemplates).where(eq(personaTemplates.organisationId, user.organisationId)).limit(1)
     return {
       stakeholder: persona?.stakeholder ?? 'Lead architect',
       angle: persona?.angle ?? '',
@@ -290,11 +360,11 @@ export async function workspaceRoutes(app: FastifyInstance) {
       reply,
     )
     if (!body) return
-    const [existing] = await db.select().from(personaTemplates).where(eq(personaTemplates.clientId, user.clientId)).limit(1)
+    const [existing] = await db.select().from(personaTemplates).where(eq(personaTemplates.organisationId, user.organisationId)).limit(1)
     if (!existing) {
       const [created] = await db
         .insert(personaTemplates)
-        .values({ clientId: user.clientId, stakeholder: body.stakeholder, angle: body.angle, proofPoints: body.proofPoints ?? [] })
+        .values({ organisationId: user.organisationId, stakeholder: body.stakeholder, angle: body.angle, proofPoints: body.proofPoints ?? [] })
         .returning()
       return { stakeholder: created?.stakeholder, angle: created?.angle, proofPoints: created?.proofPoints }
     }
