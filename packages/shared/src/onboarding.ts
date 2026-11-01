@@ -62,6 +62,22 @@ export const RIBA_STAGES = [
   { id: '2', label: 'Stage 2', detail: 'Concept design' },
 ] as const
 
+/** Recent-application windows. Add 14 or 30 here when the product needs them. */
+export const LEAD_WINDOWS = [
+  { days: 3, label: 'Last 3 days' },
+  { days: 7, label: 'Last 7 days' },
+] as const
+
+export type LeadWindowDays = (typeof LEAD_WINDOWS)[number]['days']
+
+export function icpCouncils(input: { coverage: string; regions: string[]; councils: string[] }) {
+  const tier = coverageChoice(input.coverage)
+  const cap = tier?.maxCouncils ?? COVERAGE_TIERS[0].maxCouncils
+  const regions = input.coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : input.regions
+  const pool = input.councils.length ? input.councils : councilsFor(regions)
+  return [...new Set(pool)].slice(0, cap)
+}
+
 export const ALERT_FREQUENCIES = [
   { id: 'immediate', label: 'As leads arrive' },
   { id: 'daily', label: 'Daily digest' },

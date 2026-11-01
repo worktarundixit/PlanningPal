@@ -14,12 +14,14 @@ export function EmptyState({
   icon = 'spark',
   title,
   action,
+  secondary,
   sample,
 }: {
   kind?: Kind
   icon?: IconName
   title: string
   action?: { label: string; onClick: () => void }
+  secondary?: { label: string; onClick: () => void }
   sample?: ReactNode
 }) {
   const error = kind === 'error'
@@ -30,10 +32,11 @@ export function EmptyState({
       </div>
       <div className="mt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#64748B]">{kindLabel[kind]}</div>
       <p className="mx-auto mt-2 max-w-md text-[13px] font-medium leading-relaxed text-[#172033]">{title}</p>
-      {action && (
-        <button type="button" onClick={action.onClick} className="mt-5 inline-flex items-center justify-center rounded-lg bg-[#172554] px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">
-          {action.label}
-        </button>
+      {(action || secondary) && (
+        <div className="mt-5 flex flex-col items-center justify-center gap-2 sm:flex-row">
+          {action && <button type="button" onClick={action.onClick} className="inline-flex items-center justify-center rounded-lg bg-[#172554] px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">{action.label}</button>}
+          {secondary && <button type="button" onClick={secondary.onClick} className="inline-flex items-center justify-center rounded-lg border border-[#DCE4F0] px-4 py-2.5 text-[12px] font-semibold text-[#172554]">{secondary.label}</button>}
+        </div>
       )}
       {sample && (
         <div className="mx-auto mt-6 max-w-lg rounded-xl border border-[#E2E8F0] bg-[#F8FAFD] p-4 text-left">

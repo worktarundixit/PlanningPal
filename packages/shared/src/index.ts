@@ -4,14 +4,16 @@ export {
   ONBOARDING_STEPS,
   PROJECT_TYPES,
   RIBA_STAGES,
+  LEAD_WINDOWS,
   UK_AREAS,
   VALUE_RANGES,
   alertDue,
   councilsFor,
   coverageChoice,
+  icpCouncils,
   validateIcp,
 } from './onboarding'
-export type { AlertFrequency, CoverageId, OnboardingStep } from './onboarding'
+export type { AlertFrequency, CoverageId, LeadWindowDays, OnboardingStep } from './onboarding'
 
 export const MASTER_COLUMNS = [
   'Heading',

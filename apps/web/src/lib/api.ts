@@ -90,6 +90,11 @@ export type SessionProfile = UserProfile & {
 
 export const api = {
   leads: () => request<{ data: Scheme[]; total: number }>('/api/v1/planning/leads?limit=1000'),
+  workspaceLeads: () => request<{ data: Scheme[] }>('/api/v1/workspace-leads'),
+  currentLeadFetch: () => request<{ job: LeadFetch | null }>('/api/v1/lead-fetches/current'),
+  startLeadFetch: (days: number) => request<{ job: LeadFetch }>('/api/v1/lead-fetches', { method: 'POST', body: JSON.stringify({ days }) }),
+  advanceLeadFetch: (id: string) => request<{ job: LeadFetch }>(`/api/v1/lead-fetches/${id}/advance`, { method: 'POST' }),
+  retryLeadFetch: (id: string) => request<{ job: LeadFetch }>(`/api/v1/lead-fetches/${id}/retry`, { method: 'POST' }),
   saved: () => request<{ ids: string[] }>('/api/v1/saved-schemes'),
   save: (applicationRef: string) => request('/api/v1/saved-schemes', { method: 'POST', body: JSON.stringify({ applicationRef }) }),
   unsave: (applicationRef: string) => request(`/api/v1/saved-schemes/${encodeURIComponent(applicationRef)}`, { method: 'DELETE' }),
@@ -172,6 +177,18 @@ export const api = {
     link.click()
     URL.revokeObjectURL(link.href)
   },
+}
+
+export type LeadFetch = {
+  id: string
+  days: number
+  status: 'running' | 'succeeded' | 'empty' | 'partial'
+  scanned: number
+  total: number
+  found: number
+  failed: number
+  message: string
+  suggest: 'widen' | 'icp' | 'retry' | null
 }
 
 export type OnboardingState = {

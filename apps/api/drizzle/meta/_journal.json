@@ -64,6 +64,13 @@
       "when": 1762800000000,
       "tag": "0008_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1762900000000,
+      "tag": "0009_lead_fetches",
+      "breakpoints": true
     }
   ]
 }

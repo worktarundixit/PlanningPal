@@ -180,6 +180,34 @@ export const planningApplications = pgTable(
   ],
 )
 
+export const workspaceLeads = pgTable('workspace_leads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  applicationId: uuid('application_id')
+    .notNull()
+    .references(() => planningApplications.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const leadFetches = pgTable('lead_fetches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  days: integer('days').notNull(),
+  status: text('status').notNull(),
+  councils: text('councils').array().notNull().default(sql`ARRAY[]::text[]`),
+  cursor: integer('cursor').notNull().default(0),
+  found: integer('found').notNull().default(0),
+  failedCouncils: text('failed_councils').array().notNull().default(sql`ARRAY[]::text[]`),
+  message: text('message').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+})
+
 export const decisionMakers = pgTable('decision_makers', {
   id: uuid('id').primaryKey().defaultRandom(),
   applicationId: uuid('application_id')
