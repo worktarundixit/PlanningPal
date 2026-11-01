@@ -1,4 +1,5 @@
 import type { ClientOnboarding } from '../lib/api'
+import { EmptyState } from './EmptyState'
 import { Icon } from './Icon'
 
 export function GettingStarted({
@@ -53,7 +54,7 @@ export function ClientOnboardingList({ clients }: { clients: ClientOnboarding[] 
             </span>
           </li>
         ))}
-        {!clients.length && <li className="py-3 text-[12px] text-[#64748B]">No client workspaces yet.</li>}
+        {!clients.length && <li className="py-3"><EmptyState icon="building" title="No client workspaces yet." /></li>}
       </ul>
     </section>
   )

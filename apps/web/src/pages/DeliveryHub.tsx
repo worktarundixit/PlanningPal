@@ -1,18 +1,57 @@
+import { useEffect, useState } from 'react'
 import { PUBLIC_EMAIL } from '@planningpal/shared'
+import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
+import { api } from '../lib/api'
 import { notify } from '../lib/notify'
 
-export function DeliveryHub() {
+type Meeting = { when: string; firm: string; scheme: string; kind: string }
+type Delivery = { meetings?: Meeting[]; leads?: string; contacted?: string; booked?: string }
+
+export function DeliveryHub({ onNavigate }: { onNavigate?: (screen: string) => void }) {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [delivery, setDelivery] = useState<Delivery>({})
+  useEffect(() => {
+    void api.delivery().then((payload) => {
+      setDelivery(payload as Delivery)
+      setStatus('ready')
+    }).catch(() => setStatus('error'))
+  }, [])
+  const meetings = delivery.meetings ?? []
+  const hasLive = meetings.length > 0 || Boolean(delivery.leads || delivery.contacted || delivery.booked)
   return (
     <>
-      <PageIntro eyebrow="Team Plan" title="Service delivery hub" description="Track contractual delivery, booked meeting targets and your dedicated AEC business-development team." />
-      <div className="rounded-xl bg-[#172554] p-6 text-white sm:p-8"><div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between"><div><div className="text-[9px] font-bold uppercase tracking-[0.15em] text-[#38BDF8]">June 2025 delivery period</div><div className="mt-3 font-display text-[25px] font-semibold">Your service is on track</div><p className="mt-2 max-w-xl text-[10px] leading-relaxed text-white/55">All lead, outreach and meeting SLAs are currently meeting or exceeding your Team Plan.</p></div><div className="grid h-24 w-24 shrink-0 place-items-center rounded-full border-[6px] border-[#38BDF8]"><div className="text-center"><div className="font-display text-xl font-semibold">92%</div><div className="text-[7px] uppercase tracking-wider text-white/45">complete</div></div></div></div></div>
-      <div className="mt-5 grid gap-4 md:grid-cols-3">{[['46 / 50', 'Qualified leads delivered', 'Weekly target'], ['2,814 / 4,000', 'Decision-makers contacted', 'Monthly allowance'], ['12 / 16', 'Meetings booked', 'Monthly target']].map(([v, l, n], i) => <div key={l} className="rounded-xl border border-[#DCE4F0] bg-white p-5"><div className="flex justify-between"><div className="font-display text-[22px] font-semibold">{v}</div><span className="text-[8px] font-bold text-[#15803D]">{[92, 70, 75][i]}%</span></div><div className="mt-3 text-[10px] font-semibold text-[#52627A]">{l}</div><div className="mt-1 text-[8px] text-[#94A3B8]">{n}</div><div className="mt-4 h-1.5 rounded-full bg-[#EEF2F7]"><div className="h-full rounded-full bg-[#2563EB]" style={{ width: `${[92, 70, 75][i]}%` }} /></div></div>)}</div>
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
-        <div className="rounded-xl border border-[#DCE4F0] bg-white p-5"><h3 className="font-display text-[14px] font-semibold">Upcoming meetings</h3><div className="mt-4">{[['20 Jun · 10:30', 'Northbank Studio', 'Guildford Innovation District', 'Discovery call'], ['24 Jun · 14:00', 'Fieldwork Architects', 'Harrowgate Living Quarter', 'Technical review'], ['27 Jun · 09:30', 'Element Architects', 'Staines Campus', 'Tender qualification']].map((meeting) => <div key={meeting[0]} className="grid gap-3 border-t border-[#EEF2F7] py-4 first:border-0 sm:grid-cols-[110px_1fr_auto]"><div className="text-[9px] font-semibold text-[#2563EB]">{meeting[0]}</div><div><div className="text-[10px] font-semibold">{meeting[1]}</div><div className="mt-1 text-[8px] text-[#94A3B8]">{meeting[2]}</div></div><span className="w-fit rounded-full bg-[#F1F5F9] px-2 py-1 text-[8px] text-[#64748B]">{meeting[3]}</span></div>)}</div></div>
-        <div className="rounded-xl border border-[#DCE4F0] bg-white p-5"><div className="text-[9px] font-bold uppercase tracking-wider text-[#94A3B8]">Dedicated account team</div><div className="mt-5 flex items-center gap-4"><div className="grid h-12 w-12 place-items-center rounded-full bg-[#DBEAFE] text-[11px] font-bold text-[#1D4ED8]">ER</div><div><div className="font-display text-[13px] font-semibold">Emily Rhodes</div><div className="mt-1 text-[9px] text-[#94A3B8]">Senior AEC Campaign Lead</div></div></div><div className="mt-5 space-y-2"><button onClick={() => notify('Account review request sent to Emily')} className="flex w-full items-center gap-2 rounded-lg bg-[#EFF6FF] p-3 text-[9px] font-semibold text-[#1D4ED8]"><Icon name="calendar" size={13} /> Book account review</button><a href={`mailto:${PUBLIC_EMAIL}`} className="flex w-full items-center gap-2 rounded-lg bg-[#F8FAFD] p-3 text-[9px] font-semibold text-[#52627A]"><Icon name="mail" size={13} /> Message Emily</a></div><div className="mt-5 border-t border-[#EEF2F7] pt-4 text-[8px] leading-relaxed text-[#94A3B8]">Next monthly review<br /><b className="text-[#52627A]">03 July 2025 · 11:00 AM</b></div></div>
-      </div>
+      <PageIntro eyebrow="Team Plan" title="Service delivery hub" description="Track contractual delivery, booked meetings and the work still to do this period." />
+      {status === 'loading' && <LoadingBlock label="Loading delivery" />}
+      {status === 'error' && <EmptyState kind="error" title="Delivery figures could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} />}
+      {status === 'ready' && !hasLive && (
+        <EmptyState
+          icon="calendar"
+          title="Delivery tracking starts after the first leads land."
+          action={{ label: 'Set up your ICP', onClick: () => onNavigate?.('Workspace setup') }}
+          sample={<div className="text-[12px] text-[#334155]"><b>20 Jun · 10:30</b> Discovery call · Northbank Studio</div>}
+        />
+      )}
+      {status === 'ready' && hasLive && (
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
+          <div className="rounded-xl border border-[#DCE4F0] bg-white p-5">
+            <h3 className="font-display text-[14px] font-semibold">Upcoming meetings</h3>
+            {meetings.length === 0 && <div className="mt-4"><EmptyState icon="calendar" title="No meetings are booked yet." action={{ label: 'Open the pipeline', onClick: () => onNavigate?.('CRM & intent') }} /></div>}
+            <div className="mt-4">{meetings.map((meeting) => <div key={`${meeting.when}-${meeting.firm}`} className="grid gap-3 border-t border-[#EEF2F7] py-4 first:border-0 sm:grid-cols-[110px_1fr_auto]"><div className="text-[9px] font-semibold text-[#2563EB]">{meeting.when}</div><div><div className="text-[10px] font-semibold">{meeting.firm}</div><div className="mt-1 text-[8px] text-[#94A3B8]">{meeting.scheme}</div></div><span className="w-fit rounded-full bg-[#F1F5F9] px-2 py-1 text-[8px] text-[#64748B]">{meeting.kind}</span></div>)}</div>
+          </div>
+          <div className="rounded-xl border border-[#DCE4F0] bg-white p-5">
+            <div className="text-[9px] font-bold uppercase tracking-wider text-[#94A3B8]">This period</div>
+            <div className="mt-4 space-y-3 text-[12px] text-[#334155]">
+              <div>Leads <b>{delivery.leads ?? '—'}</b></div>
+              <div>Contacted <b>{delivery.contacted ?? '—'}</b></div>
+              <div>Meetings <b>{delivery.booked ?? '—'}</b></div>
+            </div>
+            <a href={`mailto:${PUBLIC_EMAIL}`} className="mt-5 flex items-center gap-2 rounded-lg bg-[#F8FAFD] p-3 text-[9px] font-semibold text-[#52627A]"><Icon name="mail" size={13} /> Message the account team</a>
+            <button type="button" onClick={() => notify('Account review request sent')} className="mt-2 flex w-full items-center gap-2 rounded-lg bg-[#EFF6FF] p-3 text-[9px] font-semibold text-[#1D4ED8]"><Icon name="calendar" size={13} /> Book account review</button>
+          </div>
+        </div>
+      )}
     </>
   )
 }

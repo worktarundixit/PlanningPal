@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Scheme } from '@planningpal/shared'
+import { EmptyState } from '../components/EmptyState'
 import { Icon, type IconName } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { notify } from '../lib/notify'
@@ -34,6 +35,8 @@ export function Contacts({ data, embedded = false, crmCards = [], onCrmAction }:
     <>
       {!embedded && <PageIntro eyebrow="Enriched decision-makers" title="Contacts" description="Corporate B2B contacts resolved through Companies House, domain matching, MX checks and SMTP verification." />}
       <div className="mb-4 flex flex-wrap gap-2">{['All', 'Direct', 'Studio match', 'High intent'].map((item) => <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-3 py-2 text-[9px] font-semibold ${filter === item ? 'bg-[#172554] text-white' : 'border border-[#DCE4F0] bg-white text-[#64748B]'}`}>{item}</button>)}</div>
+      {contacts.length === 0 && <EmptyState icon="users" title="No decision-maker contacts yet." />}
+      {contacts.length > 0 && contacts.filter(matchesFilter).length === 0 && <EmptyState kind="filtered" icon="filter" title="No contacts match this filter." action={{ label: 'Clear filter', onClick: () => setFilter('All') }} />}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {contacts.filter(matchesFilter).map((contact) => {
           const card = crmFor(contact)

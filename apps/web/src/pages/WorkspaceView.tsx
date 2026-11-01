@@ -14,7 +14,7 @@ import { SavedSchemes } from './SavedSchemes'
 import { Settings } from './SettingsPage'
 import { TeamManagement } from './TeamManagement'
 
-export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread, reportsTab, setupTab, campaignSettingsOpen, setCampaignSettingsOpen, campaignCreateSignal, profile, setProfile, saved, onOpen, onSave, canSave = true, canExport = true, canCampaign = true, canCrm = true, canSettings = true, canTeam = true, actorRole = null }: {
+export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread, reportsTab, setupTab, campaignSettingsOpen, setCampaignSettingsOpen, campaignCreateSignal, profile, setProfile, saved, onOpen, onSave, canSave = true, canExport = true, canCampaign = true, canCrm = true, canSettings = true, canTeam = true, actorRole = null, onNavigate }: {
   active: string
   data: Scheme[]
   crmTab: CrmTab
@@ -37,14 +37,15 @@ export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread,
   canSettings?: boolean
   canTeam?: boolean
   actorRole?: string | null
+  onNavigate?: (screen: string) => void
 }) {
   return (
     <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
-      {active === 'Planning search' && <PlanningExplorer data={data} onOpen={onOpen} onSave={onSave} saved={saved} canSave={canSave} canExport={canExport} canCampaign={canCampaign} />}
-      {active === 'Saved schemes' && <SavedSchemes data={data} onOpen={onOpen} onSave={onSave} saved={saved} canSave={canSave} />}
+      {active === 'Planning search' && <PlanningExplorer data={data} onOpen={onOpen} onSave={onSave} saved={saved} canSave={canSave} canExport={canExport} canCampaign={canCampaign} onNavigate={onNavigate} />}
+      {active === 'Saved schemes' && <SavedSchemes data={data} onOpen={onOpen} onSave={onSave} saved={saved} canSave={canSave} onNavigate={onNavigate} />}
       {active === 'Campaigns' && <Campaigns settingsOpen={campaignSettingsOpen} setSettingsOpen={setCampaignSettingsOpen} createSignal={campaignCreateSignal} canWrite={canCampaign} />}
-      {active === 'CRM & intent' && <IntentBoard data={data} onOpen={onOpen} crmTab={crmTab} setCrmTab={setCrmTab} setInboxUnread={setInboxUnread} canWrite={canCrm} />}
-      {active === 'Reports & delivery' && (reportsTab === 'reports' ? <Reports /> : <DeliveryHub />)}
+      {active === 'CRM & intent' && <IntentBoard data={data} onOpen={onOpen} crmTab={crmTab} setCrmTab={setCrmTab} setInboxUnread={setInboxUnread} canWrite={canCrm} onNavigate={onNavigate} />}
+      {active === 'Reports & delivery' && (reportsTab === 'reports' ? <Reports onNavigate={onNavigate} /> : <DeliveryHub onNavigate={onNavigate} />)}
       {active === 'Workspace setup' && (setupTab === 'persona' ? <PersonaStudio canWrite={canSettings} /> : setupTab === 'settings' ? <Settings canWrite={canSettings} /> : <TeamManagement canManage={canTeam} actorRole={actorRole} />)}
       {active === 'Ingestion' && <Ingestion />}
       {active === 'Campaign provider' && <CampaignProviderPage />}

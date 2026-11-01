@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
+import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { PageIntro } from '../components/PageIntro'
 import { api, type IngestRun } from '../lib/api'
 import { notify } from '../lib/notify'
 
 export function Ingestion() {
   const [runs, setRuns] = useState<IngestRun[]>([])
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [busy, setBusy] = useState(false)
   const [authority, setAuthority] = useState('')
 
-  const load = () => api.ingestRuns().then((result) => setRuns(result.data)).catch(() => notify('Could not load pipeline runs'))
+  const load = () => api.ingestRuns().then((result) => { setRuns(result.data); setStatus('ready') }).catch(() => setStatus('error'))
 
   useEffect(() => {
     void load()
@@ -41,7 +43,9 @@ export function Ingestion() {
         <div className="grid grid-cols-[140px_90px_repeat(5,minmax(70px,.6fr))_120px] bg-[#F8FAFD] px-4 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]">
           <span>Started</span><span>Status</span><span>Fetched</span><span>Filtered</span><span>New</span><span>Updated</span><span>Errors</span><span></span>
         </div>
-        {runs.length === 0 && <div className="px-4 py-8 text-[11px] text-[#94A3B8]">No runs yet.</div>}
+        {status === 'loading' && <div className="p-4"><LoadingBlock label="Loading ingestion runs" /></div>}
+        {status === 'error' && <div className="p-4"><EmptyState kind="error" title="Ingestion runs could not be loaded." action={{ label: 'Try again', onClick: () => void load() }} /></div>}
+        {status === 'ready' && runs.length === 0 && <div className="p-4"><EmptyState icon="download" title="No ingestion runs yet." action={{ label: 'Run PlanIt now', onClick: run }} /></div>}
         {runs.map((run) => (
           <div key={run.id} className="grid grid-cols-[140px_90px_repeat(5,minmax(70px,.6fr))_120px] items-center border-t border-[#EEF2F7] px-4 py-4 text-[10px]">
             <span className="text-[#64748B]">{new Date(run.startedAt).toLocaleString('en-GB', { hour12: false })}</span>

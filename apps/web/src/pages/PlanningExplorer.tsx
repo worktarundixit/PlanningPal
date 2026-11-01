@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import type { Scheme } from '@planningpal/shared'
+import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { exportSchemes, notify } from '../lib/notify'
 
-export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, canExport = true, canCampaign = true }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; canExport?: boolean; canCampaign?: boolean }) {
+export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, canExport = true, canCampaign = true, onNavigate }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; canExport?: boolean; canCampaign?: boolean; onNavigate?: (screen: string) => void }) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('All categories')
   const [county, setCounty] = useState('All counties')
@@ -147,6 +148,8 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
               <tr><th className="w-10 px-4 py-3"><input type="checkbox" checked={allCurrentSelected} onChange={toggleCurrentPage} aria-label="Select all schemes on this page" className="h-3.5 w-3.5 accent-[#2563EB]" /></th><th className="px-2 py-3">{sortableHeader('Scheme / Application', 'title')}</th><th className="px-4 py-3">{sortableHeader('Category', 'category')}</th><th className="px-4 py-3">{sortableHeader('Council', 'council')}</th><th className="px-4 py-3">{sortableHeader('Value range', 'value')}</th><th className="px-4 py-3">{sortableHeader('Stage', 'stage')}</th><th className="px-4 py-3">{sortableHeader('Contact', 'contact')}</th><th className="px-4 py-3">{sortableHeader('Fit', 'score')}</th><th className="px-4 py-3" /></tr>
             </thead>
             <tbody>
+              {data.length === 0 && <tr><td colSpan={9} className="p-5"><EmptyState icon="search" title="No planning leads have arrived for this workspace yet." action={{ label: 'Set up your ICP', onClick: () => onNavigate?.('Workspace setup') }} /></td></tr>}
+              {data.length > 0 && filteredResults.length === 0 && <tr><td colSpan={9} className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match these filters." action={{ label: 'Clear filters', onClick: () => { setQuery(''); setCategory('All categories'); setCounty('All counties'); setStageFilter('All stages'); setContactFilter('All contacts'); setAuthorityFilter('All authorities'); setMinValue(''); setMaxValue(''); setQuickFilter(''); setPage(1) } }} /></td></tr>}
               {results.map((scheme) => (
                 <tr key={scheme.id} onClick={() => onOpen(scheme)} className="cursor-pointer border-t border-[#EEF2F7] text-[10px] transition hover:bg-[#F8FAFD]">
                   <td className="px-4 py-4"><input type="checkbox" checked={selectedIds.includes(scheme.id)} onChange={() => toggleSelected(scheme.id)} onClick={(event) => event.stopPropagation()} aria-label={`Select ${scheme.title}`} className="h-3.5 w-3.5 accent-[#2563EB]" /></td>

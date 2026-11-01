@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { notify } from '../lib/notify'
@@ -15,6 +16,7 @@ export function ProfilePage({ profile, onSave }: { profile: UserProfile; onSave:
   return (
     <>
       <PageIntro eyebrow="PlanningPal account" title="My profile" description="Manage your personal details, workspace identity and account security." />
+      {!profile.name && <div className="mb-5"><EmptyState icon="users" title="Add your name and job role to finish your profile." /></div>}
       <form onSubmit={save} className="grid gap-5 xl:grid-cols-[1fr_360px]">
         <div className="space-y-5">
           <section className="rounded-xl border border-[#DCE4F0] bg-white p-6">

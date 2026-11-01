@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { Scheme } from '@planningpal/shared'
+import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { Icon, type IconName } from '../components/Icon'
 import { api } from '../lib/api'
 import { notify } from '../lib/notify'
 import { Contacts } from './Contacts'
 import type { BoardCard, Conversation, CrmTab } from '../types'
 
-export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, canWrite = true }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; crmTab: CrmTab; setCrmTab: (tab: CrmTab) => void; setInboxUnread: (count: number) => void; canWrite?: boolean }) {
+export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, canWrite = true, onNavigate }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; crmTab: CrmTab; setCrmTab: (tab: CrmTab) => void; setInboxUnread: (count: number) => void; canWrite?: boolean; onNavigate?: (screen: string) => void }) {
   const [assignee, setAssignee] = useState('All assignees')
   const [pipelineView, setPipelineView] = useState<'active' | 'archived'>('active')
   const [lastAction, setLastAction] = useState('')
@@ -17,6 +18,7 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
   const [replyText, setReplyText] = useState('')
   const [cards, setCards] = useState<BoardCard[]>([])
   const [doneTasks, setDoneTasks] = useState<string[]>([])
+  const [crmStatus, setCrmStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   useEffect(() => {
     void Promise.all([api.kanban(), api.inbox(), api.activities('task')]).then(([board, inbox, tasks]) => {
       setCards(board.cards.map((card) => {
@@ -27,7 +29,8 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
       setSelectedConversation((current) => current || inbox.data[0]?.id || '')
       setDoneTasks(tasks.data.filter((task) => task.completedAt && task.crmLeadId).map((task) => task.crmLeadId as string))
       setInboxUnread(inbox.unreadCount)
-    }).catch(() => notify('Could not load the CRM'))
+      setCrmStatus('ready')
+    }).catch(() => setCrmStatus('error'))
   }, [setInboxUnread])
   const columns = ['New lead queue', 'Active outreach', 'High intent', 'Warm engagement', 'Tender opportunity']
   const selectedMessage = conversations.find((item) => item.id === selectedConversation) ?? conversations[0]
@@ -98,14 +101,14 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
             <h2 className="mt-2 font-display text-[22px] font-semibold tracking-[-0.03em] text-[#172033]">{crmTab === 'pipeline' ? 'Opportunity pipeline' : crmTab === 'intent' ? 'Intent feed' : crmTab === 'inbox' ? 'Shared inbox' : crmTab === 'tasks' ? 'Tasks & follow-ups' : crmTab === 'contacts' ? 'Decision-maker contacts' : 'Qualified opportunities'}</h2>
             <p className="mt-1 max-w-2xl text-[10px] leading-relaxed text-[#718096]">{crmTab === 'pipeline' ? 'Qualify engagement, assign ownership and progress opportunities into live tenders.' : crmTab === 'intent' ? 'Review opens, clicks and replies as they happen across active campaigns.' : crmTab === 'inbox' ? 'Read and respond to campaign replies from every connected sending inbox.' : crmTab === 'tasks' ? 'Prioritise calls, follow-ups and meetings assigned to your team.' : crmTab === 'contacts' ? 'Access the architects and planning agents connected to your approved schemes.' : 'Review high-value schemes that have progressed beyond initial outreach.'}</p>
           </div>
-          <button onClick={() => { setCrmTab('tasks'); setAssignee('All assignees'); notify('Priority call queue opened') }} className="flex shrink-0 items-center gap-2 self-start rounded-lg bg-[#FFF7ED] px-3 py-2.5 text-[9px] font-semibold text-[#C2410C] sm:self-auto">
-            <span className="grid h-5 w-5 place-items-center rounded-full bg-[#FED7AA] text-[8px] font-bold">8</span>
+          {cards.filter((card) => card.opens >= 3).length > 0 && <button onClick={() => { setCrmTab('tasks'); setAssignee('All assignees'); notify('Priority call queue opened') }} className="flex shrink-0 items-center gap-2 self-start rounded-lg bg-[#FFF7ED] px-3 py-2.5 text-[9px] font-semibold text-[#C2410C] sm:self-auto">
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-[#FED7AA] text-[8px] font-bold">{cards.filter((card) => card.opens >= 3).length}</span>
             Priority calls due
             <Icon name="arrow" size={12} />
-          </button>
+          </button>}
         </div>
         <div className="grid grid-cols-2 border-t border-[#EEF2F7] lg:grid-cols-4">
-          {[['38', 'High-intent leads', 'signal', 'intent'], ['12', 'Positive replies', 'mail', 'intent'], ['6', 'Meetings booked', 'calendar', 'tasks'], ['£39.2m', 'Attributed pipeline', 'chart', 'opportunities']].map(([value, label, icon, target], index) => (
+          {[[String(cards.filter((card) => card.opens >= 3).length), 'High-intent leads', 'signal', 'intent'], [String(conversations.length), 'Inbox threads', 'mail', 'inbox'], [String(cards.filter((card) => card.opens >= 3 && !doneTasks.includes(card.id)).length), 'Open tasks', 'calendar', 'tasks'], [String(cards.filter((card) => card.stage >= 2 && !card.archived).length), 'Qualified opportunities', 'chart', 'opportunities']].map(([value, label, icon, target], index) => (
             <button onClick={() => { setCrmTab(target as CrmTab); notify(`Showing ${label.toLowerCase()}`) }} key={label} className={`group flex items-center gap-3 border-[#EEF2F7] px-4 py-3.5 text-left transition hover:bg-[#F8FAFD] ${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b lg:border-b-0' : ''} lg:border-r lg:last:border-r-0`}>
               <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#F1F5F9] text-[#64748B]"><Icon name={icon as IconName} size={14} /></span>
               <div className="flex-1"><div className="font-display text-[15px] font-semibold text-[#1E293B]">{value}</div><div className="mt-0.5 text-[8px] text-[#94A3B8]">{label}</div></div>
@@ -131,7 +134,11 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
         </div>
       </section>
       {lastAction && <div className="mb-4 flex items-center justify-between rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-4 py-2.5 text-[9px] font-medium text-[#1D4ED8]"><span>{lastAction}</span><button onClick={() => setLastAction('')} aria-label="Dismiss notification"><Icon name="close" size={12} /></button></div>}
-      {crmTab === 'pipeline' && <div className="grid min-w-[1180px] grid-cols-5 gap-3 overflow-x-auto pb-4">
+      {crmStatus === 'loading' && <LoadingBlock label="Loading the CRM" />}
+      {crmStatus === 'error' && <EmptyState kind="error" title="The pipeline could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} />}
+      {crmTab === 'pipeline' && crmStatus === 'ready' && cards.length === 0 && <EmptyState icon="briefcase" title="The pipeline is empty." action={{ label: 'Run your first planning search', onClick: () => onNavigate?.('Planning search') }} />}
+      {crmTab === 'pipeline' && crmStatus === 'ready' && cards.length > 0 && visibleCards.length === 0 && <EmptyState kind="filtered" icon="filter" title="No opportunities match this filter." action={{ label: 'Clear filter', onClick: () => { setAssignee('All assignees'); setPipelineView('active') } }} />}
+      {crmTab === 'pipeline' && crmStatus === 'ready' && visibleCards.length > 0 && <div className="grid min-w-[1180px] grid-cols-5 gap-3 overflow-x-auto pb-4">
         {columns.map((column, stage) => <div key={column} className="rounded-xl bg-[#EAEFF7] p-2.5">
           <div className="flex items-center justify-between px-1 py-2"><span className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#52627A]">{column}</span><span className="grid h-5 min-w-5 place-items-center rounded-full bg-white px-1 text-[8px] font-bold text-[#64748B]">{visibleCards.filter((card) => card.stage === stage).length}</span></div>
           <div className="mt-1 space-y-2.5">
@@ -155,7 +162,8 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
           </div>
         </div>)}
       </div>}
-      {crmTab === 'intent' && <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
+      {crmTab === 'intent' && crmStatus === 'ready' && cards.filter((card) => assignee === 'All assignees' || card.assignee === assignee).length === 0 && <EmptyState kind={assignee === 'All assignees' ? 'empty' : 'filtered'} icon="signal" title={assignee === 'All assignees' ? 'No intent signals yet.' : 'No intent for this assignee.'} action={assignee === 'All assignees' ? { label: 'Create a campaign', onClick: () => onNavigate?.('Campaigns') } : { label: 'Clear filter', onClick: () => setAssignee('All assignees') }} />}
+      {crmTab === 'intent' && crmStatus === 'ready' && cards.filter((card) => assignee === 'All assignees' || card.assignee === assignee).length > 0 && <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
         {cards.filter((card) => assignee === 'All assignees' || card.assignee === assignee).map((card, index) => (
           <div key={card.id} className="flex items-start gap-4 border-t border-[#EEF2F7] p-4 first:border-0">
             <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${card.opens >= 3 ? 'bg-[#FFF7ED] text-[#C2410C]' : 'bg-[#EFF6FF] text-[#2563EB]'}`}><Icon name={card.opens >= 5 ? 'external' : 'mail'} size={14} /></div>
@@ -168,6 +176,7 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
           </div>
         ))}
       </div>}
+      {crmTab === 'inbox' && crmStatus === 'ready' && conversations.length === 0 && <EmptyState icon="mail" title="The inbox is empty." action={{ label: 'Create a campaign', onClick: () => onNavigate?.('Campaigns') }} />}
       {crmTab === 'inbox' && selectedMessage && <div className="grid min-h-[560px] overflow-hidden rounded-xl border border-[#DCE4F0] bg-white lg:grid-cols-[310px_1fr]">
         <aside className="border-b border-[#E2E8F0] lg:border-b-0 lg:border-r">
           <div className="flex items-center justify-between border-b border-[#EEF2F7] p-4"><div><div className="text-[10px] font-semibold text-[#334155]">All conversations</div><div className="mt-1 text-[8px] text-[#94A3B8]">{unreadCount} unread across 12 inboxes</div></div><button onClick={() => { setConversations((items) => items.map((item) => ({ ...item, unread: false }))); setInboxUnread(0); void api.markAllRead() }} className="text-[8px] font-semibold text-[#2563EB]">Mark all read</button></div>
@@ -191,7 +200,8 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
           <div className="border-t border-[#E2E8F0] bg-white p-4"><textarea value={replyText} onChange={(event) => setReplyText(event.target.value)} rows={3} className="w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[9px] leading-relaxed text-[#52627A] outline-none focus:border-[#2563EB]" placeholder={`Reply to ${selectedMessage.person}…`} /><div className="mt-2 flex items-center justify-between"><div className="flex gap-1"><button onClick={() => notify('Attachment picker opened')} className="grid h-8 w-8 place-items-center rounded-md bg-[#F1F5F9] text-[#64748B]" title="Attach file"><Icon name="briefcase" size={12} /></button><button onClick={() => { const lead = cards.find((card) => card.id === selectedMessage.crmLeadId); if (lead) openAction('task', lead) }} className="grid h-8 w-8 place-items-center rounded-md bg-[#F1F5F9] text-[#64748B]" title="Create follow-up"><Icon name="calendar" size={12} /></button></div><button disabled={!replyText.trim()} onClick={sendReply} className="flex items-center gap-2 rounded-lg bg-[#172554] px-4 py-2.5 text-[9px] font-semibold text-white disabled:bg-[#CBD5E1]"><Icon name="send" size={12} /> Send reply</button></div></div>
         </section>
       </div>}
-      {crmTab === 'tasks' && <div className="grid gap-3 lg:grid-cols-2">
+      {crmTab === 'tasks' && crmStatus === 'ready' && cards.filter((card) => card.opens >= 3 && !doneTasks.includes(card.id) && (assignee === 'All assignees' || card.assignee === assignee)).length === 0 && <EmptyState kind={assignee === 'All assignees' ? 'empty' : 'filtered'} icon="calendar" title={assignee === 'All assignees' ? 'No tasks are waiting.' : 'No tasks for this assignee.'} action={assignee === 'All assignees' ? { label: 'Open the pipeline', onClick: () => setCrmTab('pipeline') } : { label: 'Clear filter', onClick: () => setAssignee('All assignees') }} />}
+      {crmTab === 'tasks' && crmStatus === 'ready' && cards.filter((card) => card.opens >= 3 && !doneTasks.includes(card.id) && (assignee === 'All assignees' || card.assignee === assignee)).length > 0 && <div className="grid gap-3 lg:grid-cols-2">
         {cards.filter((card) => card.opens >= 3 && !doneTasks.includes(card.id) && (assignee === 'All assignees' || card.assignee === assignee)).map((card, index) => (
           <article key={card.id} className="rounded-xl border border-[#DCE4F0] bg-white p-4">
             <div className="flex items-start justify-between gap-3"><div className="flex gap-3"><span className={`grid h-9 w-9 place-items-center rounded-lg ${index < 2 ? 'bg-[#FEF2F2] text-[#B91C1C]' : 'bg-[#EFF6FF] text-[#2563EB]'}`}><Icon name={index % 2 ? 'phone' : 'calendar'} size={14} /></span><div><div className="text-[10px] font-semibold text-[#1E293B]">{index % 2 ? 'Priority follow-up call' : 'Review engagement and respond'}</div><div className="mt-1 text-[8px] text-[#94A3B8]">{card.person} · {card.firm}</div></div></div><span className={`rounded-full px-2 py-1 text-[7px] font-bold ${index < 2 ? 'bg-[#FEF2F2] text-[#B91C1C]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>{index < 2 ? 'DUE TODAY' : 'UPCOMING'}</span></div>
@@ -199,7 +209,8 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
           </article>
         ))}
       </div>}
-      {crmTab === 'opportunities' && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {crmTab === 'opportunities' && crmStatus === 'ready' && cards.filter((card) => card.stage >= 2 && !card.archived && (assignee === 'All assignees' || card.assignee === assignee)).length === 0 && <EmptyState kind={assignee === 'All assignees' ? 'empty' : 'filtered'} icon="spark" title={assignee === 'All assignees' ? 'No qualified opportunities yet.' : 'No opportunities for this assignee.'} action={assignee === 'All assignees' ? { label: 'Run your first planning search', onClick: () => onNavigate?.('Planning search') } : { label: 'Clear filter', onClick: () => setAssignee('All assignees') }} />}
+      {crmTab === 'opportunities' && crmStatus === 'ready' && cards.filter((card) => card.stage >= 2 && !card.archived && (assignee === 'All assignees' || card.assignee === assignee)).length > 0 && <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.filter((card) => card.stage >= 2 && !card.archived && (assignee === 'All assignees' || card.assignee === assignee)).map((card) => (
           <article key={card.id} className="rounded-xl border border-[#DCE4F0] bg-white p-5">
             <div className="flex items-center justify-between"><span className="rounded-full bg-[#ECFDF5] px-2.5 py-1 text-[7px] font-bold text-[#15803D]">{columns[card.stage]}</span><b className="font-display text-[14px]">{card.value}</b></div>
