@@ -367,7 +367,7 @@ export function CommandCentre() {
                 </div>
                 <div className="mt-4 space-y-1">
                   {(overview?.intent.length ? overview.intent : activity).map((item) => (
-                    <button key={item.name + item.detail} className="flex w-full items-start gap-3 rounded-lg p-2 text-left transition hover:bg-[#F5F7F2]">
+                    <button key={item.name + item.detail} onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="flex w-full items-start gap-3 rounded-lg p-2 text-left transition hover:bg-[#F5F7F2]">
                       <div className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#EDF0EA] text-[9px] font-bold text-[#53605E]">
                         {item.initials}{item.hot && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#E96345]" />}
                       </div>
@@ -379,7 +379,7 @@ export function CommandCentre() {
                     </button>
                   ))}
                 </div>
-                <button className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>
+                <button onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>
               </div>
             </div>
           </section>

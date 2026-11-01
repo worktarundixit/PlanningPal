@@ -6,6 +6,7 @@ import { appOrigin, mailer } from '../auth/mailer.ts'
 import { parseOrgRole, roleLabel } from '../auth/permissions.ts'
 import { db } from '../db/client.ts'
 import {
+  customRoles,
   demoRequests,
   intentEvents,
   invitations,
@@ -233,6 +234,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
   app.get('/api/v1/team', async (request) => {
     const user = requireUser(request)
     const members = await db.select().from(teamMembers).where(eq(teamMembers.organisationId, user.organisationId)).orderBy(asc(teamMembers.createdAt))
+    const roles = user.organisationId
+      ? await db.select().from(customRoles).where(eq(customRoles.organisationId, user.organisationId)).orderBy(asc(customRoles.createdAt))
+      : []
     return {
       members: members.map((member) => ({
         id: member.id,
@@ -241,7 +245,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
         role: roleLabel(member.role),
         status: member.status === 'Active' ? 'Active' : 'Pending',
       })),
-      customRoles: [] as { id: string; name: string; permissions: string[] }[],
+      customRoles: roles.map((role) => ({ id: role.id, name: role.name, permissions: role.permissions })),
     }
   })
 
@@ -250,8 +254,12 @@ export async function workspaceRoutes(app: FastifyInstance) {
     if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
     const body = parseBody(z.object({ email: z.string().email(), role: z.string().min(1) }), request.body, reply)
     if (!body) return
-    const role = parseOrgRole(body.role)
-    if (!role || role === 'owner') return reply.code(400).send({ error: 'Choose Admin, Member, or Viewer' })
+    const parsed = parseOrgRole(body.role)
+    const custom = !parsed && user.organisationId
+      ? (await db.select().from(customRoles).where(and(eq(customRoles.organisationId, user.organisationId), eq(customRoles.name, body.role.trim()))).limit(1))[0]
+      : undefined
+    if (parsed === 'owner' || (!parsed && !custom)) return reply.code(400).send({ error: 'Choose Admin, Member, or Viewer' })
+    const role = parsed ?? custom!.name
     const email = body.email.toLowerCase()
     const [already] = await db
       .select({ id: teamMembers.id })
@@ -300,8 +308,12 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const body = parseBody(z.object({ role: z.string().min(1) }), request.body, reply)
     if (!body) return
-    const role = parseOrgRole(body.role)
-    if (!role) return reply.code(400).send({ error: 'Unknown role' })
+    const parsed = parseOrgRole(body.role)
+    const custom = !parsed
+      ? (await db.select().from(customRoles).where(and(eq(customRoles.organisationId, user.organisationId), eq(customRoles.name, body.role.trim()))).limit(1))[0]
+      : undefined
+    if (!parsed && !custom) return reply.code(400).send({ error: 'Unknown role' })
+    const role = parsed ?? custom!.name
     const [existing] = await db.select().from(teamMembers).where(eq(teamMembers.id, id)).limit(1)
     if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Team member not found' })
     if (parseOrgRole(existing.role) === 'owner') return reply.code(403).send({ error: 'The owner role cannot be changed' })
@@ -310,7 +322,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
     if (user.orgRole === 'admin' && role === 'owner') return reply.code(403).send({ error: 'Admins cannot assign the owner role' })
     const [updated] = await db.update(teamMembers).set({ role }).where(eq(teamMembers.id, id)).returning()
-    if (existing.userId) await db.update(users).set({ orgRole: role, updatedAt: new Date() }).where(eq(users.id, existing.userId))
+    if (existing.userId && parsed) await db.update(users).set({ orgRole: parsed, updatedAt: new Date() }).where(eq(users.id, existing.userId))
     return { id: updated?.id, role: updated ? roleLabel(updated.role) : roleLabel(role) }
   })
 
@@ -334,8 +346,24 @@ export async function workspaceRoutes(app: FastifyInstance) {
     return { id, removed: true }
   })
 
-  app.post('/api/v1/roles', async (_request, reply) => {
-    return reply.code(403).send({ error: 'Roles are Owner, Admin, Member, and Viewer' })
+  app.post('/api/v1/roles', async (request, reply) => {
+    const user = requireUser(request)
+    if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
+    const body = parseBody(z.object({ name: z.string().min(1), permissions: z.array(z.string()).min(1) }), request.body, reply)
+    if (!body) return
+    const name = body.name.trim()
+    if (parseOrgRole(name)) return reply.code(409).send({ error: 'That name is already a workspace role' })
+    const [existing] = await db
+      .select({ id: customRoles.id })
+      .from(customRoles)
+      .where(and(eq(customRoles.organisationId, user.organisationId), eq(customRoles.name, name)))
+      .limit(1)
+    if (existing) return reply.code(409).send({ error: 'That role already exists' })
+    const [created] = await db
+      .insert(customRoles)
+      .values({ organisationId: user.organisationId, name, permissions: body.permissions })
+      .returning()
+    return reply.code(201).send({ id: created?.id, name: created?.name, permissions: created?.permissions ?? [] })
   })
 
   app.get('/api/v1/persona', async (request) => {

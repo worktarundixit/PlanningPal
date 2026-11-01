@@ -2,7 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { randomBytes } from 'node:crypto'
 import { db } from '../db/client.ts'
 import { invitations, organisations, teamMembers, users } from '../db/schema.ts'
-import type { OrgRole } from './permissions.ts'
+import { parseOrgRole, type OrgRole } from './permissions.ts'
 
 type CreatedAuthUser = {
   id: string
@@ -31,7 +31,7 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
         email,
         name: created.name || email,
         jobTitle: invite.role,
-        orgRole: invite.role,
+        orgRole: parseOrgRole(invite.role) ?? 'member',
         apiToken: randomBytes(24).toString('hex'),
       })
       .returning()
