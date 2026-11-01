@@ -43,6 +43,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+      - run: pnpm audit --audit-level=high
       - run: pnpm test
       - name: Fail if the campaign provider name is in the web bundle
         run: |

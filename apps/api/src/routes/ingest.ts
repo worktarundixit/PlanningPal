@@ -23,7 +23,9 @@ export async function ingestRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/ingest/runs/:id/csv', async (request, reply) => {
     requireUser(request)
-    const { id } = request.params as { id: string }
+    const parsed = z.string().uuid().safeParse((request.params as { id?: string }).id)
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid request' })
+    const id = parsed.data
     const found = await readRunCsv(id)
     if (!found) return reply.code(404).send({ error: 'Run CSV not found' })
     return reply

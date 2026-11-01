@@ -4,15 +4,31 @@ import { accessToken } from './auth-client'
 
 const base = import.meta.env.VITE_API_URL ?? ''
 
+function safeError(status: number, payload: { error?: string }) {
+  if (status === 401) return 'Your session has expired. Sign in again.'
+  if (status === 403) return 'You do not have access to this.'
+  if (status >= 500) return 'Something went wrong. Please try again.'
+  const message = payload.error?.trim() || ''
+  if (!message || message.length > 180 || /stack|\\n\s+at\s/i.test(message)) return 'That request could not be completed.'
+  return message
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const token = await accessToken()
   if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
-  const response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
+  let response: Response
+  try {
+    response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
+  } catch {
+    window.dispatchEvent(new Event('planningpal-offline'))
+    throw new Error('You appear to be offline. Check your connection and try again.')
+  }
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string }
-    throw new Error(payload.error || `Request failed (${response.status})`)
+    if (response.status === 401 && !path.includes('/team/invites/')) window.location.assign('/sign-in?expired=1')
+    throw new Error(safeError(response.status, payload))
   }
   if (response.status === 204) return undefined as T
   const type = response.headers.get('content-type') || ''

@@ -92,6 +92,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       <div className="grid gap-3 sm:grid-cols-3">
         {[[String(activeInboxes), 'Active inboxes', `${domains.length} sending domains`], ['98.4%', 'Inbox placement', '+0.6% this week'], [`${dailyLimit}/day`, 'Sending limit', 'Per inbox']].map(([value, label, note]) => <div key={label} className="rounded-xl border border-[#DCE4F0] bg-white p-5"><div className="font-display text-2xl font-semibold">{value}</div><div className="mt-2 text-[10px] font-semibold text-[#52627A]">{label}</div><div className="mt-1 text-[9px] text-[#94A3B8]">{note}</div></div>)}
       </div>
+      {campaigns.length === 0 && <div className="mt-5 rounded-xl border border-dashed border-[#DCE4F0] bg-white px-5 py-10 text-center text-[12px] text-[#64748B]">No campaigns yet. Create one when you are ready to send.</div>}
       <div className="mt-5 overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
         <div className="grid grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(80px,.5fr))_140px] bg-[#F8FAFD] px-5 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]"><span>Campaign</span><span>Contacts</span><span>Sent</span><span>Open rate</span><span>Reply rate</span><span>Meetings</span><span>Actions</span></div>
         {campaigns.map((campaign, campaignIndex) => {
