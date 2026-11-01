@@ -101,6 +101,17 @@ export type Scheme = {
   raw: SourceRecord
 }
 
+/**
+ * Public contact details.
+ * TODO: confirm the real PlanningPal inbox. hello@planningpal.co.uk is a placeholder.
+ */
+export const PUBLIC_EMAIL = 'hello@planningpal.co.uk'
+
+/** Shown as printed until a replacement number is confirmed. */
+export const PUBLIC_PHONE_DISPLAY = '+44 07774 720591'
+
+export const PUBLIC_PHONE_TEL = '+4407774720591'
+
 export type UserProfile = {
   name: string
   role: string

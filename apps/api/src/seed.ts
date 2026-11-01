@@ -1,4 +1,4 @@
-import { councilCode, mapRecord, parseCsv } from '@planningpal/shared'
+import { councilCode, mapRecord, parseCsv, PUBLIC_EMAIL } from '@planningpal/shared'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -72,7 +72,7 @@ const portalSnapshot = {
     manager: {
       name: 'Emily Rhodes',
       role: 'Senior AEC Campaign Lead',
-      email: 'account@aecpipeline.co.uk',
+      email: PUBLIC_EMAIL,
       nextReview: '03 July 2025 · 11:00 AM',
     },
   },
