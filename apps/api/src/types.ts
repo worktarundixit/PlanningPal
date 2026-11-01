@@ -22,5 +22,6 @@ declare module 'fastify' {
   interface FastifyRequest {
     user: AuthUser | null
     rawBody?: string
+    missingWorkspace?: boolean
   }
 }

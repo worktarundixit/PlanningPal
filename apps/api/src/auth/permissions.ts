@@ -42,7 +42,7 @@ const readAccess: Permission[] = [
 
 export const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
   viewer: readAccess,
-  member: [...readAccess, 'leads.export', 'saved.write', 'crm.write', 'inbox.write'],
+  member: [...readAccess, 'leads.export', 'saved.write', 'crm.write', 'inbox.write', 'campaigns.write'],
   admin: [
     ...readAccess,
     'leads.export',
@@ -145,6 +145,8 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/reports$/, permission: 'reports.read' },
   { method: 'GET', pattern: /^\/api\/v1\/delivery$/, permission: 'reports.read' },
   { method: 'GET', pattern: /^\/api\/v1\/billing$/, permission: 'billing.manage' },
+  { method: 'GET', pattern: /^\/api\/v1\/workspaces\/[^/]+$/, permission: 'settings.read' },
+  { method: 'DELETE', pattern: /^\/api\/v1\/workspaces\/[^/]+$/, permission: 'billing.manage' },
   { method: 'GET', pattern: /^\/api\/v1\/workspace$/, permission: 'settings.read' },
   { method: 'PATCH', pattern: /^\/api\/v1\/workspace$/, permission: 'settings.write' },
   { method: 'GET', pattern: /^\/api\/v1\/team$/, permission: 'team.read' },

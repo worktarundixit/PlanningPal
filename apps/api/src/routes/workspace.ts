@@ -174,6 +174,22 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
   })
 
+  app.get('/api/v1/workspaces/:id', async (request, reply) => {
+    const user = requireUser(request)
+    const { id } = request.params as { id: string }
+    if (id !== user.organisationId) return reply.code(404).send({ error: 'Not found' })
+    return { id: user.organisationId, name: user.companyName, role: user.orgRole }
+  })
+
+  app.delete('/api/v1/workspaces/:id', async (request, reply) => {
+    const user = requireUser(request)
+    const { id } = request.params as { id: string }
+    if (id !== user.organisationId) return reply.code(404).send({ error: 'Not found' })
+    if (user.platformRole !== 'super_admin' && user.orgRole !== 'owner') return reply.code(403).send({ error: 'Forbidden' })
+    await db.delete(organisations).where(eq(organisations.id, id))
+    return { deleted: true }
+  })
+
   app.get('/api/v1/workspace', async (request) => {
     const user = requireUser(request)
     const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
@@ -316,7 +332,15 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const role = parsed ?? custom!.name
     const [existing] = await db.select().from(teamMembers).where(eq(teamMembers.id, id)).limit(1)
     if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Team member not found' })
-    if (parseOrgRole(existing.role) === 'owner') return reply.code(403).send({ error: 'The owner role cannot be changed' })
+    if (existing.userId === user.id) return reply.code(403).send({ error: 'You cannot change your own role' })
+    if (parseOrgRole(existing.role) === 'owner') {
+      const owners = await db
+        .select({ id: teamMembers.id })
+        .from(teamMembers)
+        .where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, 'owner')))
+      if (owners.length <= 1) return reply.code(403).send({ error: 'The last owner cannot be changed' })
+      return reply.code(403).send({ error: 'The owner role cannot be changed' })
+    }
     if (role === 'owner' && user.platformRole !== 'super_admin' && user.orgRole !== 'owner') {
       return reply.code(403).send({ error: 'Only an owner can assign the owner role' })
     }
@@ -331,7 +355,14 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const [existing] = await db.select().from(teamMembers).where(eq(teamMembers.id, id)).limit(1)
     if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Team member not found' })
-    if (parseOrgRole(existing.role) === 'owner') return reply.code(403).send({ error: 'The owner cannot be removed' })
+    if (parseOrgRole(existing.role) === 'owner') {
+      const owners = await db
+        .select({ id: teamMembers.id })
+        .from(teamMembers)
+        .where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, 'owner')))
+      if (owners.length <= 1) return reply.code(403).send({ error: 'The last owner cannot be removed' })
+      return reply.code(403).send({ error: 'The owner cannot be removed' })
+    }
     if (user.orgRole === 'admin' && parseOrgRole(existing.role) === 'admin' && existing.userId === user.id) {
       return reply.code(403).send({ error: 'Ask an owner to remove your admin seat' })
     }

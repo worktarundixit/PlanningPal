@@ -22,6 +22,12 @@ function publicLimit(method: string, path: string) {
   return null
 }
 
+function workspaceOptional(method: string, path: string) {
+  if (path === '/api/v1/me' || path.startsWith('/api/v1/ingest/') || path.startsWith('/api/v1/campaign-provider')) return true
+  if (method === 'GET' && (path === '/api/v1/planning/leads' || /^\/api\/v1\/planning\/leads\/[^/]+$/.test(path))) return true
+  return false
+}
+
 function trustedOrigin(origin: string | undefined) {
   if (!origin) return null
   const allowed = [
@@ -58,7 +64,7 @@ export function buildApp(): FastifyInstance {
     } else {
       reply.header('Access-Control-Allow-Origin', '*')
     }
-    reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AEC-Signature, X-Organisation-Id')
+    reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AEC-Signature, X-Organisation-Id, X-Workspace-Id')
     reply.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS')
     request.user = null
     if (request.method === 'OPTIONS') return reply.code(204).send()
@@ -81,10 +87,14 @@ export function buildApp(): FastifyInstance {
     const permission = permissionFor(request.method, path)
     if (permission === 'public') return
     const user = await loadSession(request)
+    if (request.missingWorkspace) return reply.code(404).send({ error: 'Not found' })
     if (!user) return reply.code(401).send({ error: 'Unauthorized' })
     request.user = user
     if (permission === 'deny' || !user.permissions.includes(permission)) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (!user.organisationId && !workspaceOptional(request.method, path)) {
+      return reply.code(404).send({ error: 'Not found' })
     }
   })
 

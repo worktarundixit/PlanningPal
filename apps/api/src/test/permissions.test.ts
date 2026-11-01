@@ -142,7 +142,7 @@ describe('permission matrix', () => {
       url: () => '/api/v1/campaigns',
       body: (role) => ({ name: `Campaign ${role}`, region: 'London' }),
       ok: 201,
-      allow: ['owner', 'admin', 'super'],
+      allow: ['owner', 'admin', 'member', 'super'],
     },
     { name: 'update workspace settings', method: 'PATCH', url: () => '/api/v1/workspace', body: { radius: 40 }, ok: 200, allow: ['owner', 'admin', 'super'] },
     { name: 'read billing', method: 'GET', url: () => '/api/v1/billing', ok: 200, allow: ['owner', 'super'] },
@@ -165,7 +165,7 @@ describe('permission matrix', () => {
         const response = await app.inject({
           method: entry.method,
           url: entry.url(),
-          headers: { cookie: cookies[role] },
+          headers: { cookie: cookies[role], ...(role === 'super' ? { 'x-workspace-id': orgA } : {}) },
           payload,
         })
         if (response.statusCode !== (allowed ? entry.ok : 403)) {
@@ -175,6 +175,11 @@ describe('permission matrix', () => {
       })
     }
   }
+
+  it('returns 404 when a super admin has not selected a workspace', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/v1/billing', headers: { cookie: cookies.super } })
+    expect(response.statusCode).toBe(404)
+  })
 
   it('stops an admin from changing the owner', async () => {
     const team = await app.inject({ method: 'GET', url: '/api/v1/team', headers: { cookie: cookies.admin } })

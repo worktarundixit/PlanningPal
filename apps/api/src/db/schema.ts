@@ -33,6 +33,7 @@ export const organisations = pgTable('organisations', {
   trackingDomain: text('tracking_domain').notNull().default('click.micraft-pipeline.co.uk'),
   portalSnapshot: jsonb('portal_snapshot').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   active: boolean('active').notNull().default(true),
+  slug: text('slug'),
   createdAt: timestamps.createdAt,
 })
 
@@ -52,6 +53,28 @@ export const users = pgTable('users', {
   emailPreferences: jsonb('email_preferences').$type<Record<string, boolean>>().notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamps.createdAt,
   updatedAt: timestamps.updatedAt,
+})
+
+export const workspaceMembers = pgTable('workspace_members', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  workspaceId: uuid('workspace_id')
+    .notNull()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  authUserId: text('auth_user_id').notNull(),
+  role: text('role').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const auditLog = pgTable('audit_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorUserId: uuid('actor_user_id'),
+  workspaceId: uuid('workspace_id'),
+  action: text('action').notNull(),
+  method: text('method').notNull().default(''),
+  path: text('path').notNull().default(''),
+  recordId: text('record_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
 export const teamMembers = pgTable('team_members', {
@@ -220,6 +243,7 @@ export const activities = pgTable('activities', {
   outcome: text('outcome').notNull().default(''),
   dueOn: date('due_on'),
   completedAt: timestamp('completed_at', { withTimezone: true }),
+  shared: boolean('shared').notNull().default(false),
   createdAt: timestamps.createdAt,
 })
 
@@ -307,6 +331,9 @@ export const inboxMessages = pgTable('inbox_messages', {
   body: text('body').notNull().default(''),
   deliveryStatus: text('delivery_status').notNull().default('delivered'),
   timeLabel: text('time_label').notNull().default(''),
+  workspaceId: uuid('workspace_id'),
+  ownerUserId: uuid('owner_user_id'),
+  shared: boolean('shared').notNull().default(true),
   createdAt: timestamps.createdAt,
 })
 

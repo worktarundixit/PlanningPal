@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
@@ -15,7 +15,14 @@ export async function inboxRoutes(app: FastifyInstance) {
       .where(eq(inboxConversations.organisationId, user.organisationId))
       .orderBy(asc(inboxConversations.createdAt))
     const messages = conversations.length
-      ? await db.select().from(inboxMessages).orderBy(asc(inboxMessages.createdAt))
+      ? await db
+          .select()
+          .from(inboxMessages)
+          .where(and(
+            inArray(inboxMessages.conversationId, conversations.map((conversation) => conversation.id)),
+            or(eq(inboxMessages.shared, true), eq(inboxMessages.ownerUserId, user.id), isNull(inboxMessages.ownerUserId)),
+          ))
+          .orderBy(asc(inboxMessages.createdAt))
       : []
     const leads = await db
       .select({ lead: crmLeads, application: planningApplications })
@@ -86,6 +93,9 @@ export async function inboxRoutes(app: FastifyInstance) {
       .insert(inboxMessages)
       .values({
         conversationId: id,
+        workspaceId: user.organisationId,
+        ownerUserId: user.id,
+        shared: true,
         direction: 'outbound',
         senderName: user.companyName,
         body: body.body,

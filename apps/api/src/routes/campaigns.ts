@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
@@ -80,9 +80,9 @@ export async function campaignRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(campaigns)
       .set({ ...body, updatedAt: new Date() })
-      .where(eq(campaigns.id, id))
+      .where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId)))
       .returning()
-    if (!updated || updated.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Campaign not found' })
+    if (!updated) return reply.code(404).send({ error: 'Campaign not found' })
     return presentCampaign(updated)
   })
 
@@ -196,9 +196,9 @@ export async function campaignRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const [removed] = await db
       .delete(sendingDomains)
-      .where(eq(sendingDomains.id, id))
+      .where(and(eq(sendingDomains.id, id), eq(sendingDomains.organisationId, user.organisationId)))
       .returning()
-    if (!removed || removed.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Domain not found' })
+    if (!removed) return reply.code(404).send({ error: 'Domain not found' })
     return { id: removed.id, name: removed.name }
   })
 }
@@ -243,6 +243,10 @@ async function setStatus(request: FastifyRequest, reply: FastifyReply, status: '
       }
     }
   }
-  const [updated] = await db.update(campaigns).set({ status: next, updatedAt: new Date() }).where(eq(campaigns.id, id)).returning()
+  const [updated] = await db
+    .update(campaigns)
+    .set({ status: next, updatedAt: new Date() })
+    .where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId)))
+    .returning()
   return updated ? presentCampaign(updated) : { error: 'Could not update campaign' }
 }
