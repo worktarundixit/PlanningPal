@@ -48,64 +48,49 @@ export function Landing() {
       <header className="sticky top-0 z-30 border-b border-[#DCE4F0] bg-[#F4F7FB]/95 backdrop-blur-md">
         <div className="mx-auto flex h-[78px] max-w-[1180px] items-center justify-between px-5">
           <a href="/" className="flex items-center">
-            <img src="/brand/logo-horizontal.svg" alt="PlanningPal" className="h-8 w-auto" />
+            <img src="/brand/logo-horizontal.svg" alt="PlanningPal" className="h-7 w-auto sm:h-8" />
           </a>
-          <nav className="hidden items-center gap-6 text-[11px] font-semibold text-[#52627A] md:flex" aria-label="Page">
-            <a href="#riba" className="hover:text-[#172554]">RIBA window</a>
-            <a href="#register" className="hover:text-[#172554]">Monday register</a>
-            <a href="#packages" className="hover:text-[#172554]">Packages</a>
-            <a href="/app" className="hover:text-[#172554]">Sign in</a>
-            <a href="#conversation" className="rounded-lg bg-[#172554] px-4 py-2.5 text-white hover:bg-[#1E3A8A]">Book a conversation</a>
+          <nav className="flex items-center gap-2 text-[11px] font-semibold text-[#52627A] sm:gap-6" aria-label="Page">
+            <a href="#riba" className="hidden hover:text-[#172554] md:inline">RIBA window</a>
+            <a href="#register" className="hidden hover:text-[#172554] lg:inline">Monday register</a>
+            <a href="#packages" className="hidden hover:text-[#172554] md:inline">Packages</a>
+            <a href="/app" className="whitespace-nowrap rounded-lg px-2 py-2 hover:text-[#172554] sm:px-0">Sign in</a>
+            <a href="#demo" className="rounded-lg bg-[#172554] px-3 py-2.5 text-white hover:bg-[#1E3A8A] sm:px-4">Book a demo</a>
           </nav>
-          <a href="/app" className="rounded-lg border border-[#DCE4F0] bg-white px-3 py-2 text-[10px] font-semibold text-[#172554] md:hidden">Sign in</a>
         </div>
       </header>
 
       <main id="sheet">
-        <section className="mx-auto grid max-w-[1180px] gap-10 px-5 py-16 lg:grid-cols-[1.05fr_.95fr] lg:py-24">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">For UK trade contractors</p>
-            <h1 className="mt-4 max-w-xl font-display text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-[#172033] sm:text-[52px]">Meet the architect while the scheme is still in planning.</h1>
-            <p className="mt-6 max-w-xl text-[15px] leading-7 text-[#52627A]">By RIBA Stage 4 the tender list is usually closed and the specification is already written. PlanningPal watches local planning registers and puts the architect, the applicant and the scheme on your desk at Stages 0 to 2, when early contractor involvement is still possible.</p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#conversation" className="rounded-lg bg-[#172554] px-5 py-3 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">Book a conversation</a>
-              <a href="/app" className="rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Open the command centre</a>
-            </div>
-            <dl className="mt-10 grid max-w-lg grid-cols-3 gap-4 border-t border-[#DCE4F0] pt-6">
-              {[['376', 'Planning authorities'], ['44', 'Columns in every drop'], ['Mon 08:00', 'Weekly delivery']].map(([value, label]) => (
-                <div key={label}>
-                  <dt className="font-display text-[22px] font-semibold text-[#172554]">{value}</dt>
-                  <dd className="mt-1 text-[10px] leading-4 text-[#64748B]">{label}</dd>
-                </div>
-              ))}
-            </dl>
+        <section className="mx-auto max-w-[1180px] px-5 py-16 lg:py-24">
+          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">For UK trade contractors and subcontractors</p>
+          <h1 className="mt-4 max-w-3xl font-display text-[40px] font-semibold leading-[1.05] tracking-[-0.03em] text-[#172033] sm:text-[56px]">Meet the architect while the scheme is still in planning.</h1>
+          <p className="mt-6 max-w-2xl text-[15px] leading-7 text-[#52627A]">By RIBA Stage 4 the tender list is usually closed and the specification is already written. PlanningPal reads local planning registers and puts the architect, the developer and the scheme on your desk at Stages 0 to 2, when early contractor involvement is still possible.</p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <a href="#demo" className="rounded-lg bg-[#172554] px-5 py-3 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">Book a demo</a>
+            <a href="/app" className="rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Sign in</a>
           </div>
-          <aside className="rounded-xl border border-[#DCE4F0] bg-white p-5 shadow-[0_1px_2px_rgba(30,58,138,0.04)]" aria-label="Example scheme card from the command centre">
-            <div className="flex items-center justify-between border-b border-[#EEF2F7] pb-4">
-              <div>
-                <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Scheme dossier</div>
-                <div className="mt-1 text-[10px] text-[#94A3B8]">26/02630/FUL · Croydon</div>
+          <dl className="mt-12 grid max-w-xl grid-cols-3 gap-4 border-t border-[#DCE4F0] pt-6">
+            {[['376', 'Local planning authorities'], ['44', 'Columns in the Monday file'], ['08:00', 'Monday delivery']].map(([value, label]) => (
+              <div key={label}>
+                <dt className="font-display text-[22px] font-semibold text-[#172554]">{value}</dt>
+                <dd className="mt-1 text-[10px] leading-4 text-[#64748B]">{label}</dd>
               </div>
-              <span className="rounded-full bg-[#E6F6D5] px-2.5 py-1 text-[8px] font-bold uppercase tracking-[0.08em] text-[#397047]">High fit</span>
+            ))}
+          </dl>
+        </section>
+
+        <section className="mx-auto max-w-[1180px] px-5 pb-16" aria-labelledby="command-centre-heading">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">The working surface</p>
+              <h2 id="command-centre-heading" className="mt-2 font-display text-[28px] font-semibold tracking-[-0.03em]">Command centre, from the seeded register.</h2>
             </div>
-            <h2 className="mt-5 font-display text-[22px] font-semibold leading-tight">Rear extension, Thornton Heath</h2>
-            <p className="mt-2 text-[11px] text-[#718096]">1041 London Road · detailed plans approved</p>
-            <div className="mt-5 grid grid-cols-3 overflow-hidden rounded-lg border border-[#DCE4F0]">
-              {[['£0.25–0.45m', 'Value'], ['Approved', 'Stage'], ['Dwelling', 'Type']].map(([value, label]) => (
-                <div key={label} className="border-r border-[#EEF2F7] p-3 last:border-0">
-                  <div className="font-display text-[13px] font-semibold">{value}</div>
-                  <div className="mt-1 text-[8px] uppercase tracking-wider text-[#94A3B8]">{label}</div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-5 rounded-lg bg-[#F8FAFD] p-4 text-[11px] leading-6 text-[#52627A]">
-              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#94A3B8]">Architect / agent</div>
-              <div className="mt-2 font-semibold text-[#1E293B]">Kashif Syed · Arista</div>
-              <div className="mt-1">k.syed@arista-architecture.com</div>
-              <div>07710 183 612</div>
-            </div>
-            <p className="mt-4 text-[9px] leading-5 text-[#94A3B8]">A real row from the seeded residential register. The command centre opens the full 44-column record, the portal link, and the CRM card.</p>
-          </aside>
+            <a href="/app" className="text-[11px] font-semibold text-[#2563EB]">Sign in to use it</a>
+          </div>
+          <figure className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white shadow-[0_1px_2px_rgba(30,58,138,0.04)]">
+            <img src="/marketing/command-centre-overview.png" alt="PlanningPal command centre showing 550 approved schemes, agent contact coverage, and the priority planning leads list." className="w-full" width="1440" height="900" />
+            <figcaption className="border-t border-[#EEF2F7] px-4 py-3 text-[10px] text-[#64748B]">Overview of the live workspace. Figures on this screen come from the seeded residential export and the workspace record, not from a marketing mock.</figcaption>
+          </figure>
         </section>
 
         <section id="riba" className="border-y border-[#DCE4F0] bg-white">
@@ -174,21 +159,20 @@ export function Landing() {
           </div>
         </section>
 
-        <section className="mx-auto max-w-[1180px] px-5 py-16">
-          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">After the drop</p>
-          <h2 className="mt-3 max-w-2xl font-display text-[32px] font-semibold tracking-[-0.03em]">The command centre keeps the scheme, the person and the reply together.</h2>
-          <div className="mt-10 space-y-4">
-            {[
-              ['01  Search', 'Filter the approved register by county, value, authority and whether a direct phone and email were published.'],
-              ['02  Intent', 'Five stages: new lead, active outreach, high intent, warm engagement, tender opportunity. Three opens or a deck click moves a card to high intent.'],
-              ['03  Outreach', 'Category 2 and 3 add secondary domains and a shared inbox. Replies are stored here. This build does not send live email.'],
-            ].map(([title, copy]) => (
-              <article key={title} className="grid gap-3 rounded-xl border border-[#DCE4F0] bg-white p-6 sm:grid-cols-[140px_1fr] sm:items-center">
-                <h3 className="font-display text-[16px] font-semibold text-[#172554]">{title}</h3>
-                <p className="text-[13px] leading-6 text-[#52627A]">{copy}</p>
-              </article>
-            ))}
+        <section className="mx-auto max-w-[1180px] space-y-14 px-5 py-16">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">After the drop</p>
+            <h2 className="mt-3 max-w-2xl font-display text-[32px] font-semibold tracking-[-0.03em]">Search the register, then move the person through intent.</h2>
+            <p className="mt-4 max-w-2xl text-[13px] leading-6 text-[#52627A]">Decision-maker enrichment fills the architect and applicant fields the council published, then checks the practice. The intent board has five stages. Three opens, or a click on the capability deck, promotes a card to high intent and queues a same-day call. Outreach copy stays inside RIBA and RICS language, and only claims certifications the contractor actually holds.</p>
           </div>
+          <figure>
+            <img src="/marketing/command-centre-search.png" alt="Planning search table of approved applications with value, council, contact coverage and fit score." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" />
+            <figcaption className="mt-3 text-[11px] text-[#64748B]">Planning search. Filter by county, value, authority and whether a direct phone and email were published.</figcaption>
+          </figure>
+          <figure>
+            <img src="/marketing/command-centre-crm.png" alt="Five-stage intent pipeline with cards for new leads, active outreach, high intent, warm engagement and tender opportunity." className="w-full rounded-xl border border-[#DCE4F0] bg-white" width="1440" height="900" />
+            <figcaption className="mt-3 text-[11px] text-[#64748B]">Intent CRM. New lead queue, active outreach, high intent, warm engagement, tender opportunity.</figcaption>
+          </figure>
         </section>
 
         <section id="packages" className="border-t border-[#DCE4F0] bg-white">
@@ -197,9 +181,9 @@ export function Landing() {
             <h2 className="mt-3 font-display text-[32px] font-semibold tracking-[-0.03em]">Three ways to buy the same register.</h2>
             <div className="mt-10 grid gap-4 lg:grid-cols-3">
               {[
-                ['Category 1', 'Planning leads feed', '£99–£299', 'a month', 'Weekly Monday file for a county. 40 to 50 vetted schemes, 44 columns, portal links, architect phone and email when published.'],
-                ['Category 2', 'Leads and outreach', '£950–£2,750', 'a month', 'The feed, plus 6 to 12 sending inboxes on secondary domains and 600 to 4,000 decision-makers contacted in a month, with intent signals.'],
-                ['Category 3', 'Business development partner', '£2,450–£3,950', 'a month, plus a success fee', 'The data and the inboxes, plus a person who follows up by phone. The target is 6 to 18 booked meetings a month.'],
+                ['Category 1', 'Planning Leads Feed', '£99–£299', 'a month', 'Weekly Monday file, 08:00. About 40 to 50 vetted schemes per licensed county, in the 44-column format, with the portal link and the architect’s phone and email when the register published them.'],
+                ['Category 2', 'Leads + Cold Outreach Engine', '£950–£2,750', 'a month', 'The feed, plus 6 to 12 sending inboxes on secondary domains, and 600 to 4,000 decision-makers contacted in a month, with intent signals when a message is opened or a deck is clicked.'],
+                ['Category 3', 'Full Business Development Partner', '£2,450–£3,950', 'a month, plus a success fee', 'Data, inboxes, and a person who follows up by phone. The contracted range is 6 to 18 booked meetings a month.'],
               ].map(([tier, name, price, cadence, copy]) => (
                 <article key={tier} className="flex flex-col rounded-xl border border-[#DCE4F0] p-6">
                   <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#2563EB]">{tier}</div>
@@ -213,7 +197,7 @@ export function Landing() {
           </div>
         </section>
 
-        <section id="conversation" className="mx-auto max-w-[1180px] px-5 py-16">
+        <section id="demo" className="mx-auto max-w-[1180px] px-5 py-16">
           <div className="grid gap-8 rounded-xl bg-[#172554] p-6 text-white sm:p-10 lg:grid-cols-[.9fr_1.1fr]">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#38BDF8]">A conversation, not a trial login</p>
@@ -230,7 +214,7 @@ export function Landing() {
                 <label className="text-[9px] font-bold uppercase tracking-wider text-white/50">Trade<input name="trade" placeholder="Groundworks, RC frame…" className="mt-2 w-full rounded-lg border border-white/10 bg-white px-3 py-3 text-[12px] font-normal normal-case tracking-normal text-[#172033] outline-none" /></label>
                 <label className="text-[9px] font-bold uppercase tracking-wider text-white/50 sm:col-span-2">Counties and anything else<textarea name="note" rows={4} className="mt-2 w-full rounded-lg border border-white/10 bg-white px-3 py-3 text-[12px] font-normal normal-case tracking-normal text-[#172033] outline-none" /></label>
                 {error && <p className="text-[11px] text-[#FCA5A5] sm:col-span-2">{error}</p>}
-                <button disabled={pending} className="rounded-lg bg-[#38BDF8] px-4 py-3 text-[12px] font-semibold text-[#172554] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Book a conversation'}</button>
+                <button disabled={pending} className="rounded-lg bg-[#38BDF8] px-4 py-3 text-[12px] font-semibold text-[#172554] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Book a demo'}</button>
               </form>
             )}
           </div>
