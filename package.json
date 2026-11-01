@@ -1,0 +1,31 @@
+{
+  "name": "planningpal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @planningpal/api --filter @planningpal/web dev",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint": "eslint .",
+    "test": "pnpm --filter @planningpal/api test",
+    "db:migrate": "pnpm --filter @planningpal/api db:migrate",
+    "db:seed": "pnpm --filter @planningpal/api db:seed",
+    "setup": "pnpm install && pnpm db:migrate && pnpm db:seed"
+  },
+  "pnpm": {
+    "overrides": {
+      "tinypool": "2.2.0"
+    }
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.28.0",
+    "eslint": "^9.28.0",
+    "globals": "^16.2.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.34.0"
+  }
+}
