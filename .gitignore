@@ -1,0 +1,12 @@
+node_modules
+dist
+.turbo
+.env
+.env.local
+*.log
+coverage
+.DS_Store
+apps/web/dist
+apps/api/dist
+.vite
+*.tsbuildinfo

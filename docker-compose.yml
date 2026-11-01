@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: planningpal-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: planningpal
+      POSTGRES_PASSWORD: planningpal
+      POSTGRES_DB: planningpal
+    ports:
+      - "5432:5432"
+    volumes:
+      - planningpal_pg:/var/lib/postgresql/data
+      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planningpal -d planningpal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  planningpal_pg:

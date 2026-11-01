@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: planningpal
+          POSTGRES_PASSWORD: planningpal
+          POSTGRES_DB: planningpal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U planningpal -d planningpal"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://planningpal:planningpal@localhost:5432/planningpal_test
+      AUTH_MODE: strict
+      TELEMETRY_SECRET: test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Create the test database
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          PGPASSWORD=planningpal psql -h localhost -U planningpal -d planningpal -c "CREATE DATABASE planningpal_test;"
+          PGPASSWORD=planningpal psql -h localhost -U planningpal -d planningpal_test -c "CREATE EXTENSION IF NOT EXISTS postgis;"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
