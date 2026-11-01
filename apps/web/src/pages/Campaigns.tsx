@@ -22,6 +22,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
   const [warmup, setWarmup] = useState(true)
   const [domains, setDomains] = useState<{ id: string; name: string; inboxes: number; health: string; status: string }[]>([])
   const [trackingDomain, setTrackingDomain] = useState('click.micraft-pipeline.co.uk')
+  const [leadText, setLeadText] = useState('')
   useEffect(() => {
     void Promise.all([api.campaigns(), api.domains(), api.campaignSettings()]).then(([campaignRows, domainRows, settings]) => {
       setCampaigns(campaignRows.data.map((campaign) => ({ ...campaign, status: presentStatus(campaign.status) })))
@@ -78,7 +79,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
   }, [createSignal])
   return (
     <>
-      <PageIntro eyebrow="Outbound engine" title="Campaigns" description="Coordinate RIBA-timed outreach across isolated sending domains without risking your primary company domain." />
+      <PageIntro eyebrow="PlanningPal Campaigns" title="Campaigns" description="Coordinate RIBA-timed outreach through the PlanningPal campaign engine, across isolated sending domains." />
       {settingsOpen && <section className="mb-5 rounded-xl border border-[#BFDBFE] bg-white p-5">
         <div className="flex items-start justify-between"><div><h3 className="font-display text-[14px] font-semibold">Global campaign settings</h3><p className="mt-1 text-[8px] text-[#94A3B8]">Controls apply to all active sending inboxes.</p></div><button onClick={() => setSettingsOpen(false)} className="text-[#94A3B8]"><Icon name="close" size={13} /></button></div>
         <div className="mt-5 grid gap-4 sm:grid-cols-3">
@@ -114,6 +115,13 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
           <label className="mt-6 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Campaign name<input autoFocus value={campaignName} onChange={(event) => setCampaignName(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-3 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]" placeholder="e.g. London approved schemes" /></label>
           <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Target region<select value={campaignRegion} onChange={(event) => setCampaignRegion(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-3 text-[10px] font-normal normal-case tracking-normal outline-none"><option>London</option><option>South East</option></select></label>
           <div className="mt-4 rounded-lg bg-[#F8FAFD] p-3 text-[9px] leading-relaxed text-[#64748B]">Matching approved schemes and verified contacts will be added after the campaign is saved.</div>
+          {editor !== null && editor >= 0 && <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Add contacts<textarea value={leadText} onChange={(event) => setLeadText(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[10px] font-normal normal-case tracking-normal outline-none" placeholder="one email per line" /></label>}
+          {editor !== null && editor >= 0 && <button type="button" onClick={() => {
+            const leads = leadText.split(/[\s,;]+/).map((email) => email.trim()).filter((email) => email.includes('@')).map((email) => ({ email }))
+            const campaign = campaigns[editor]
+            if (!campaign || !leads.length) return
+            void api.addCampaignLeads(campaign.id, leads).then((result) => { notify(`${result.added} contacts added`); setLeadText('') }).catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not add contacts'))
+          }} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-2.5 text-[9px] font-semibold text-[#172554]">Add contacts to this campaign</button>}
           <div className="mt-6 flex gap-3"><button type="button" onClick={() => setEditor(null)} className="flex-1 rounded-lg border border-[#DCE4F0] py-3 text-[9px] font-semibold text-[#64748B]">Cancel</button><button type="submit" className="flex-1 rounded-lg bg-[#172554] py-3 text-[9px] font-semibold text-white">{editor === -1 ? 'Create draft' : 'Save changes'}</button></div>
         </form>
       </div>}

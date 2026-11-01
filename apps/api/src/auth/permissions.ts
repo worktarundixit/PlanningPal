@@ -22,6 +22,7 @@ export const PERMISSIONS = [
   'profile.read',
   'profile.write',
   'ingest.admin',
+  'campaign.provider',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -125,6 +126,13 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'PATCH', pattern: /^\/api\/v1\/campaigns\/[^/]+$/, permission: 'campaigns.write' },
   { method: 'POST', pattern: /^\/api\/v1\/campaigns\/[^/]+\/pause$/, permission: 'campaigns.write' },
   { method: 'POST', pattern: /^\/api\/v1\/campaigns\/[^/]+\/resume$/, permission: 'campaigns.write' },
+  { method: 'POST', pattern: /^\/api\/v1\/campaigns\/[^/]+\/leads$/, permission: 'campaigns.write' },
+  { method: 'POST', pattern: /^\/api\/v1\/campaign-events\/[^/]+$/, permission: 'public' },
+  { method: 'GET', pattern: /^\/api\/v1\/campaign-provider$/, permission: 'campaign.provider' },
+  { method: 'PUT', pattern: /^\/api\/v1\/campaign-provider$/, permission: 'campaign.provider' },
+  { method: 'GET', pattern: /^\/api\/v1\/campaign-provider\/workspaces$/, permission: 'campaign.provider' },
+  { method: 'GET', pattern: /^\/api\/v1\/campaign-provider\/mappings$/, permission: 'campaign.provider' },
+  { method: 'PUT', pattern: /^\/api\/v1\/campaign-provider\/mappings$/, permission: 'campaign.provider' },
   { method: 'GET', pattern: /^\/api\/v1\/campaign-settings$/, permission: 'campaigns.read' },
   { method: 'PATCH', pattern: /^\/api\/v1\/campaign-settings$/, permission: 'campaigns.write' },
   { method: 'GET', pattern: /^\/api\/v1\/sending-domains$/, permission: 'campaigns.read' },

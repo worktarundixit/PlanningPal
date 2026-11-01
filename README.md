@@ -97,6 +97,10 @@ Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on
 
 PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
 
+## Campaign engine
+
+Client workspaces send through one Instantly agency account (API v2). A Super Admin saves that key on Campaign provider. The word does not appear in the client app. It is encrypted with `CAMPAIGN_KEY_ENCRYPTION_SECRET` and later responses only show a mask. Each client is mapped to a provider workspace id, with a tracking domain so links stay on the client's domain. With no key, or with `CAMPAIGN_PROVIDER=sandbox`, the engine stays in sandbox mode and the screens still work. Event delivery uses `CAMPAIGN_WEBHOOK_SECRET` on `/api/v1/campaign-events/:token`. The provider name stays on the server. The web build is checked so it does not contain it.
+
 ## What is stubbed
 
 No scraping fleet and no enrichment providers. Inbox replies and queued CRM emails are stored and marked `stubbed`. Team invites and new-lead alerts go through the mailer in `apps/api/src/auth/mailer.ts`: Resend when `RESEND_API_KEY` is set, otherwise a log line and a `mail_log` row. Sign-up, magic link, and password reset are Supabase Auth emails. Google sign-in is enabled in the Supabase dashboard.

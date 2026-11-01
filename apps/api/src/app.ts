@@ -3,6 +3,7 @@ import { permissionFor } from './auth/permissions.ts'
 import { loadSession } from './auth/session.ts'
 import { HttpError } from './lib/http.ts'
 import { campaignRoutes } from './routes/campaigns.ts'
+import { campaignProviderRoutes } from './routes/campaignProvider.ts'
 import { crmRoutes } from './routes/crm.ts'
 import { inboxRoutes } from './routes/inbox.ts'
 import { planningRoutes } from './routes/planning.ts'
@@ -92,6 +93,7 @@ export function buildApp(): FastifyInstance {
   app.register(crmRoutes)
   app.register(inboxRoutes)
   app.register(campaignRoutes)
+  app.register(campaignProviderRoutes)
   app.register(workspaceRoutes)
   app.register(ingestRoutes)
   app.register(telemetryRoutes)

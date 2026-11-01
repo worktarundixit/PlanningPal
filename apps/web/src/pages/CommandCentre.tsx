@@ -17,6 +17,7 @@ const nav = [
   { label: 'Reports & delivery', icon: 'chart' as const },
   { label: 'Workspace setup', icon: 'settings' as const },
   { label: 'Ingestion', icon: 'download' as const },
+  { label: 'Campaign provider', icon: 'briefcase' as const },
 ]
 
 const activity = [
@@ -113,7 +114,11 @@ export function CommandCentre() {
     `${scheme.title} ${scheme.location} ${scheme.type}`.toLowerCase().includes(query.toLowerCase())
   ).slice(0, 6), [filteredData, query])
 
-  const visibleNav = nav.filter((item) => item.label !== 'Ingestion' || can('ingest.admin'))
+  const visibleNav = nav.filter((item) => {
+    if (item.label === 'Ingestion') return can('ingest.admin')
+    if (item.label === 'Campaign provider') return can('campaign.provider')
+    return true
+  })
 
   if (!sessionReady) {
     return <div className="grid min-h-screen place-items-center bg-[#F4F7FB] text-[13px] text-[#52627A]">Checking your session…</div>

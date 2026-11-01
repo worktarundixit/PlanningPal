@@ -134,6 +134,14 @@ export const api = {
   savePersona: (body: { stakeholder: string; angle: string; proofPoints?: string[] }) => request('/api/v1/persona', { method: 'PUT', body: JSON.stringify(body) }),
   bookDemo: (body: { name: string; email: string; company: string; trade: string; note: string }) =>
     request('/api/v1/demo-requests', { method: 'POST', body: JSON.stringify(body) }),
+  campaignProvider: () => request<{ configured: boolean; hint: string; mode: 'sandbox' | 'live' }>('/api/v1/campaign-provider'),
+  saveCampaignProvider: (apiKey: string) => request<{ configured: boolean; hint: string; mode: 'sandbox' | 'live' }>('/api/v1/campaign-provider', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+  providerWorkspaces: () => request<{ data: ProviderWorkspace[]; canCreate: boolean }>('/api/v1/campaign-provider/workspaces'),
+  campaignMappings: () => request<{ data: CampaignMapping[] }>('/api/v1/campaign-provider/mappings'),
+  saveCampaignMapping: (body: { organisationId: string; providerWorkspaceId: string; trackingDomain: string }) =>
+    request<CampaignMapping>('/api/v1/campaign-provider/mappings', { method: 'PUT', body: JSON.stringify(body) }),
+  addCampaignLeads: (id: string, leads: { email: string; firstName?: string; lastName?: string; company?: string; title?: string }[]) =>
+    request<{ added: number }>(`/api/v1/campaigns/${id}/leads`, { method: 'POST', body: JSON.stringify({ leads }) }),
   ingestRuns: () => request<{ data: IngestRun[] }>('/api/v1/ingest/runs'),
   startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number }) =>
     request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),
@@ -145,6 +153,18 @@ export const api = {
     link.click()
     URL.revokeObjectURL(link.href)
   },
+}
+
+export type ProviderWorkspace = { id: string; name: string; status: string }
+
+export type CampaignMapping = {
+  organisationId: string
+  organisationName: string
+  providerWorkspaceId: string
+  trackingDomain: string
+  status: string
+  webhookStatus: string
+  health: string
 }
 
 export type IngestRun = {

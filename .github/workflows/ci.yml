@@ -44,3 +44,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      - name: Fail if the campaign provider name is in the web bundle
+        run: |
+          pnpm --filter @planningpal/web build
+          pnpm --filter @planningpal/web check:bundle
