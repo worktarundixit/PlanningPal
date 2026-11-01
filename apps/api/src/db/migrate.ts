@@ -3,6 +3,7 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createSql } from './connection.ts'
+import { seedLpas } from './seedLpas.ts'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,6 +28,7 @@ export async function runMigrations() {
   try {
     await ensureSupabaseRoles(sql)
     await migrate(database, { migrationsFolder: path.resolve(here, '../../drizzle') })
+    await seedLpas()
   } finally {
     await sql.end({ timeout: 5 })
   }

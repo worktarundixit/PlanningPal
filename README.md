@@ -53,7 +53,7 @@ Production Postgres and sign-in both use one Supabase project. Local development
 ### What to create
 
 1. Create a project in the Supabase dashboard.
-2. Authentication → Providers: enable Email (password), Magic Link, and Google. Add the Google client id and secret in that screen. Supabase sends the sign-up, magic-link, and password-reset emails. PlanningPal does not send those.
+2. Create the project in **eu-west-2 (London)**. Authentication → Providers: enable Email (password), Magic Link, and Google. Add the Google client id and secret in that screen. Supabase sends the sign-up, magic-link, and password-reset emails. PlanningPal does not send those.
 3. Authentication → URL configuration: set the site URL to the Vercel origin (and `http://127.0.0.1:5173` for local). Add redirect URLs for `/app` and `/reset-password` on both origins.
 4. Project Settings → API: copy the project URL, the `anon` key, and the `service_role` key.
 5. Project Settings → Database: copy the transaction pooler URI (port 6543) into `DATABASE_URL`, and the direct or session URI (port 5432) into `DIRECT_DATABASE_URL`. Both need `sslmode=require`.
@@ -91,7 +91,9 @@ pnpm ingest -- --recent 3 --max-pages 4
 
 On a long-running API process the pipeline runs at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. The process skips the timer when `VERCEL` is set.
 
-On Vercel the same hours are handled by Cron hitting `/api/cron/ingest`. The schedules in `apps/web/vercel.json` fire at both the GMT and BST hours, and the function runs only when the London clock is on one of those three hours. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots. Production requires `Authorization: Bearer $CRON_SECRET`. Vercel sends that header when `CRON_SECRET` is set. More than one cron run per day needs a Vercel plan that allows it.
+Ingestion targets come from the UK LPA master list (380 active authorities, 43 abolished with a successor). Shared services collapse to one PlanIt area, and Cumberland is read through Allerdale, Carlisle, and Copeland. Ebbsfleet, Middlesbrough, and Hartlepool development corporations have no PlanIt source and stay marked coverage unavailable. Super Admin → Ingestion flags a feed when its latest application is older than `FEED_STALE_DAYS` (default 92).
+
+On Vercel the same hours are handled by Cron hitting `/api/cron/ingest`. Functions run in `lhr1`. The schedules in `apps/web/vercel.json` fire at both the GMT and BST hours, and the function runs only when the London clock is on one of those three hours. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots. Production requires `Authorization: Bearer $CRON_SECRET`. Vercel sends that header when `CRON_SECRET` is set. More than one cron run per day needs a Vercel plan that allows it.
 
 A new workspace starts with no leads. Command Centre offers **Get recent applications**, then **Last 3 days** or **Last 7 days** (further windows can be added in `LEAD_WINDOWS`). The server walks that workspace's ICP councils in batches. The page polls `/api/v1/lead-fetches/:id/advance`, so cards and KPIs fill while the scan continues. A refresh resumes a running job. An empty window suggests 7 days or a broader ICP. A partial scan keeps what loaded and can retry the failed councils. The scheduled PlanIt runs at 06:00, 13:00 and 20:00 Europe/London keep the shared catalogue current after that first fetch.
 

@@ -14,6 +14,15 @@ export {
   validateIcp,
 } from './onboarding'
 export type { AlertFrequency, CoverageId, LeadWindowDays, OnboardingStep } from './onboarding'
+export {
+  LPA_RECORDS,
+  LPA_REGIONS,
+  feedHealth,
+  lpaAreas,
+  lpaByGss,
+  planItIngestAreas,
+} from './lpas'
+export type { LpaCoverage, LpaRecord, LpaStatus } from './lpas'
 
 export const MASTER_COLUMNS = [
   'Heading',

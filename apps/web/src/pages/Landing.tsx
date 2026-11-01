@@ -105,7 +105,7 @@ const plans = [
     featured: false,
     cta: 'Subscribe to Nationwide',
     points: [
-      'All 376 UK Planning Authorities',
+      'All 380 active UK planning authorities',
       '~2,000+ Qualified High Value Leads Weekly',
       'Multi Seat CSV/Excel and direct CRM sync format',
       'Custom value thresholds (e.g. £500k+, £1M+)',
@@ -199,7 +199,7 @@ export function Landing() {
               Win Construction Projects <span className="text-[#2563EB]">Before They Ever Go To Tender</span>
             </h1>
             <p className="pp-rise pp-d2 mx-auto mt-6 max-w-xl text-[16px] leading-7 text-[#52627A] lg:mx-0">
-              We monitor all 376 UK planning portals for high value residential & commercial schemes, identify lead architects and developers, and run hyper personalised trigger outreach on your behalf to secure high value contractor opportunities.
+              We monitor 377 UK planning authorities for high value residential and commercial schemes, identify lead architects and developers, and run hyper personalised trigger outreach on your behalf to secure high value contractor opportunities.
             </p>
             <div className="pp-rise pp-d3 mt-8 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
               <a href="#packages" className="pp-cta rounded-full bg-[#172554] px-6 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Explore Packages & Pricing</a>
@@ -216,7 +216,7 @@ export function Landing() {
             ['1.8M+', 'Targeted Emails Sent'],
             ['74.9%', 'Average Open Rate'],
             ['5,600+', 'PlanningPal Opportunities Generated'],
-            ['376', 'UK Planning Portals Monitored'],
+            ['377', 'UK planning authorities on the feed'],
           ].map(([value, label]) => (
             <div key={label} className="pp-card rounded-2xl border border-[#DCE4F0] bg-white px-5 py-6 text-center">
               <div className="text-[32px] font-semibold tracking-[-0.04em] text-[#172554]">{value}</div>

@@ -12,6 +12,7 @@
     "jsx": "react-jsx",
     "strict": true,
     "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "types": ["vite/client"]
   },

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { ALERT_FREQUENCIES, COVERAGE_TIERS, PROJECT_TYPES, RIBA_STAGES, UK_AREAS, VALUE_RANGES, councilsFor } from '@planningpal/shared'
+import { ALERT_FREQUENCIES, COVERAGE_TIERS, PROJECT_TYPES, RIBA_STAGES, UK_AREAS, VALUE_RANGES } from '@planningpal/shared'
 import { api, type OnboardingState } from '../lib/api'
 
 const field = 'mt-2 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-3 text-base outline-none focus:border-[#2563EB]'
@@ -34,6 +34,8 @@ export function OnboardingPage() {
   const [invites, setInvites] = useState([{ email: '', role: 'member' }])
   const [alertsEnabled, setAlertsEnabled] = useState(true)
   const [frequency, setFrequency] = useState('weekly')
+  const [areas, setAreas] = useState(UK_AREAS)
+  const [coverageByName, setCoverageByName] = useState<Record<string, string>>({})
 
   const apply = (next: OnboardingState) => {
     setState(next)
@@ -42,7 +44,7 @@ export function OnboardingPage() {
     setName(next.draft.name)
     setJobTitle(next.draft.jobTitle)
     setCoverage(next.draft.coverage || 'regional')
-    setRegions(next.draft.coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : next.draft.regions)
+    setRegions(next.draft.coverage === 'nationwide' ? areas.map((area) => area.region) : next.draft.regions)
     setCouncils(next.draft.councils)
     setProjectTypes(next.draft.projectTypes)
     setValueRanges(next.draft.valueRanges)
@@ -51,6 +53,14 @@ export function OnboardingPage() {
     setFrequency(next.draft.frequency || 'weekly')
     if (next.step === 'done') window.location.assign('/app')
   }
+
+  useEffect(() => {
+    void api.lpas().then((payload) => {
+      if (!payload.regions.length) return
+      setAreas(payload.regions.map((region) => ({ region: region.region, councils: region.councils.map((council) => council.name) })))
+      setCoverageByName(Object.fromEntries(payload.regions.flatMap((region) => region.councils.map((council) => [council.name, council.coverage]))))
+    }).catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -104,13 +114,13 @@ export function OnboardingPage() {
 
   const stepIndex = Math.max(0, state.steps.findIndex((step) => step.state === 'current'))
   const current = state.steps[stepIndex]
-  const councilOptions = councilsFor(coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : regions)
+  const councilOptions = areas.filter((area) => coverage === 'nationwide' || regions.includes(area.region)).flatMap((area) => area.councils)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (state.step === 'workspace') void save({ action: 'save-workspace', companyName, logoUrl })
     else if (state.step === 'profile') void save({ action: 'save-profile', name, jobTitle })
-    else if (state.step === 'icp') void save({ action: 'save-icp', coverage, regions: coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : regions, councils, projectTypes, valueRanges, ribaStages })
+    else if (state.step === 'icp') void save({ action: 'save-icp', coverage, regions: coverage === 'nationwide' ? areas.map((area) => area.region) : regions, councils, projectTypes, valueRanges, ribaStages })
     else if (state.step === 'team') void save({ action: 'save-team', invites: invites.filter((invite) => invite.email.trim()) })
     else void save({ action: 'save-alerts', enabled: alertsEnabled, frequency })
   }
@@ -152,7 +162,7 @@ export function OnboardingPage() {
               <p className="text-[13px] leading-relaxed text-[#52627A]">Match the feed to your pricing tier. Regional is one region, Multi County is two or three, Nationwide is every UK authority. Focus stays on RIBA stages 0–2.</p>
               <div className="grid gap-2 sm:grid-cols-3">
                 {COVERAGE_TIERS.map((tier) => (
-                  <button key={tier.id} type="button" onClick={() => { setCoverage(tier.id); setRegions(tier.id === 'nationwide' ? UK_AREAS.map((area) => area.region) : []); setCouncils([]) }} className={`rounded-xl border p-3 text-left ${coverage === tier.id ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
+                  <button key={tier.id} type="button" onClick={() => { setCoverage(tier.id); setRegions(tier.id === 'nationwide' ? areas.map((area) => area.region) : []); setCouncils([]) }} className={`rounded-xl border p-3 text-left ${coverage === tier.id ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
                     <div className="text-[13px] font-semibold">{tier.label}</div>
                     <div className="mt-1 text-[12px] text-[#52627A]">{tier.monthlyPrice}/mo</div>
                     <div className="mt-1 text-[11px] leading-relaxed text-[#64748B]">{tier.detail}</div>
@@ -162,14 +172,14 @@ export function OnboardingPage() {
               {coverage !== 'nationwide' && (
                 <fieldset>
                   <legend className={label}>Regions</legend>
-                  <div className="mt-2 flex flex-wrap gap-2">{UK_AREAS.map((area) => <Chip key={area.region} active={regions.includes(area.region)} onClick={() => { setRegions((currentRegions) => toggle(currentRegions, area.region)); setCouncils([]) }}>{area.region}</Chip>)}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">{areas.map((area) => <Chip key={area.region} active={regions.includes(area.region)} onClick={() => { setRegions((currentRegions) => toggle(currentRegions, area.region)); setCouncils([]) }}>{area.region}</Chip>)}</div>
                 </fieldset>
               )}
-              {coverage === 'nationwide' && <p className="rounded-lg bg-[#F8FAFC] px-3 py-2 text-[12px] text-[#52627A]">Nationwide includes all 376 planning authorities. Add councils below only if you want them called out.</p>}
+              {coverage === 'nationwide' && <p className="rounded-lg bg-[#F8FAFC] px-3 py-2 text-[12px] text-[#52627A]">Nationwide includes all 380 active planning authorities. Add councils below only if you want them called out.</p>}
               <fieldset>
                 <legend className={label}>Councils in those regions</legend>
                 <div className="mt-2 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-                  {councilOptions.map((council) => <Chip key={council} active={councils.includes(council)} onClick={() => setCouncils((currentCouncils) => toggle(currentCouncils, council))}>{council}</Chip>)}
+                  {councilOptions.map((council) => <Chip key={council} active={councils.includes(council)} onClick={() => setCouncils((currentCouncils) => toggle(currentCouncils, council))}>{coverageByName[council] === 'coverage unavailable' ? `${council} (coverage unavailable)` : council}</Chip>)}
                   {!councilOptions.length && <span className="text-[12px] text-[#64748B]">Choose a region to see its councils.</span>}
                 </div>
               </fieldset>

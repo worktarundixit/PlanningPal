@@ -90,6 +90,8 @@ export type SessionProfile = UserProfile & {
 
 export const api = {
   leads: () => request<{ data: Scheme[]; total: number }>('/api/v1/planning/leads?limit=1000'),
+  lpas: () => request<{ regions: { region: string; councils: { name: string; gssCode: string; coverage: string }[] }[] }>('/api/v1/lpas'),
+  lpaHealth: () => request<LpaHealth>('/api/v1/lpas/health'),
   workspaceLeads: () => request<{ data: Scheme[] }>('/api/v1/workspace-leads'),
   currentLeadFetch: () => request<{ job: LeadFetch | null }>('/api/v1/lead-fetches/current'),
   startLeadFetch: (days: number) => request<{ job: LeadFetch }>('/api/v1/lead-fetches', { method: 'POST', body: JSON.stringify({ days }) }),
@@ -177,6 +179,15 @@ export const api = {
     link.click()
     URL.revokeObjectURL(link.href)
   },
+}
+
+export type LpaHealth = {
+  active: number
+  abolished: number
+  planitCovered: number
+  staleDays: number
+  unavailable: { name: string; gssCode: string; coverage: string }[]
+  stale: { name: string; gssCode: string; latest: string | null }[]
 }
 
 export type LeadFetch = {

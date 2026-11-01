@@ -23,6 +23,7 @@
     { "path": "/api/cron/ingest", "schedule": "0 12,13 * * *" },
     { "path": "/api/cron/ingest", "schedule": "0 19,20 * * *" }
   ],
+  "regions": ["lhr1"],
   "functions": {
     "api/cron/ingest.ts": { "maxDuration": 60 },
     "api/[...path].ts": { "maxDuration": 30 }

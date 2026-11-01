@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { lpaByGss } from '@planningpal/shared'
 import { UK_MAP, councilAreas } from '../data/uk-councils'
 
 /**
@@ -32,7 +33,8 @@ export function UkCouncilMap() {
         const y = Math.min(84, Math.max(12, (area.cy / UK_MAP.height) * 100))
         chip.style.left = `${x}%`
         chip.style.top = `${y}%`
-        name.textContent = area.name
+        const lpa = lpaByGss(area.code)
+        name.textContent = lpa?.name ?? area.name
       }
       index = (index + 1) % paths.length
     }
@@ -60,7 +62,7 @@ export function UkCouncilMap() {
           </filter>
           {councilAreas.map((area, index) => (
             <path key={area.code} data-i={index} d={area.d} className="uk-area" fillRule="evenodd">
-              <title>{area.name}</title>
+              <title>{lpaByGss(area.code)?.coverage === 'unavailable' ? `${lpaByGss(area.code)?.name} — coverage unavailable` : (lpaByGss(area.code)?.name ?? area.name)}</title>
             </path>
           ))}
         </svg>

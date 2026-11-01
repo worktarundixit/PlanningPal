@@ -54,7 +54,9 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/me', async (request) => {
     const user = requireUser(request)
-    const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
+    const [client] = user.organisationId
+      ? await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
+      : []
     return {
       id: user.id,
       name: user.name,

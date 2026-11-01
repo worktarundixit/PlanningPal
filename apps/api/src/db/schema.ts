@@ -43,6 +43,37 @@ export const organisations = pgTable('organisations', {
   createdAt: timestamps.createdAt,
 })
 
+export const localPlanningAuthorities = pgTable(
+  'local_planning_authorities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id'),
+    name: text('name').notNull(),
+    nation: text('nation').notNull(),
+    region: text('region').notNull().default(''),
+    county: text('county').notNull().default(''),
+    type: text('type').notNull().default(''),
+    gssCode: text('gss_code').notNull(),
+    lpaGssCode: text('lpa_gss_code').notNull().default(''),
+    planitAreaName: text('planit_area_name').notNull().default(''),
+    planitAreaId: integer('planit_area_id'),
+    planitCovered: text('planit_covered').notNull().default(''),
+    planitScraperType: text('planit_scraper_type').notNull().default(''),
+    planitLatestAppDate: date('planit_latest_app_date'),
+    planitTotalApps: integer('planit_total_apps'),
+    planningPortalUrl: text('planning_portal_url').notNull().default(''),
+    website: text('website').notNull().default(''),
+    status: text('status').notNull(),
+    endDate: date('end_date'),
+    successor: text('successor').notNull().default(''),
+    notes: text('notes').notNull().default(''),
+    coverage: text('coverage').notNull().default(''),
+    planitQueryAreas: text('planit_query_areas').array().notNull().default(sql`ARRAY[]::text[]`),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('local_planning_authorities_gss_idx').on(table.gssCode)],
+)
+
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   organisationId: uuid('organisation_id').references(() => organisations.id, { onDelete: 'cascade' }),

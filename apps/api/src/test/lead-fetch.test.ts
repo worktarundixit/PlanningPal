@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, inArray, like, or } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../app.ts'
 import { db } from '../db/client.ts'
 import { runMigrations } from '../db/migrate.ts'
-import { organisations, planningApplications, workspaceLeads } from '../db/schema.ts'
+import { organisations, planningApplications, users, workspaceLeads } from '../db/schema.ts'
 import { useLeadScanner } from '../leads/fetch.ts'
 import { createActor } from './actors.ts'
 
@@ -23,9 +23,9 @@ async function application(authority: string, ref: string, published: string) {
     compositeHash: randomUUID(),
     heading: ref,
     localAuthority: authority,
-    region: authority === 'Camden' ? 'London' : 'Other',
+    region: authority === 'London Borough of Camden' ? 'London' : 'Other',
     publicationDate: published,
-    sourceRecord: { Heading: ref, 'Local Authority': authority, 'Application Reference': ref, Region: authority === 'Camden' ? 'London' : 'Other' },
+    sourceRecord: { Heading: ref, 'Local Authority': authority, 'Application Reference': ref, Region: authority === 'London Borough of Camden' ? 'London' : 'Other' },
     sourceIndex: Math.floor(Math.random() * 100000),
   }).returning()
   return row!
@@ -35,11 +35,19 @@ beforeAll(async () => {
   await runMigrations()
   app = buildApp()
   await app.ready()
+  await db.delete(planningApplications).where(or(
+    like(planningApplications.heading, 'RECENT-%'),
+    like(planningApplications.heading, 'OLD-%'),
+    like(planningApplications.heading, 'OTHER-%'),
+    like(planningApplications.heading, 'STALE-%'),
+  ))
+  await db.delete(users).where(inArray(users.email, ['fetch-owner@example.com', 'fetch-viewer@example.com', 'fetch-other@example.com', 'fetch-partial@example.com', 'fetch-empty@example.com']))
+  await db.delete(organisations).where(inArray(organisations.companyName, ['Fetch Windows', 'Other Fetch', 'Partial Fetch', 'Empty Fetch']))
   const [org] = await db.insert(organisations).values({
     companyName: 'Fetch Windows',
     coverage: 'regional',
     targetTerritories: ['London'],
-    councilTargets: ['Camden'],
+    councilTargets: ['London Borough of Camden'],
   }).returning()
   workspace = org!.id
   const [elsewhere] = await db.insert(organisations).values({
@@ -51,9 +59,9 @@ beforeAll(async () => {
   owner = (await createActor({ email: 'fetch-owner@example.com', name: 'Owner', organisationId: workspace, orgRole: 'owner' })).cookie
   viewer = (await createActor({ email: 'fetch-viewer@example.com', name: 'Viewer', organisationId: workspace, orgRole: 'viewer' })).cookie
   other = (await createActor({ email: 'fetch-other@example.com', name: 'Other', organisationId: elsewhere!.id, orgRole: 'owner' })).cookie
-  await application('Camden', `RECENT-${randomUUID()}`, today)
-  await application('Camden', `OLD-${randomUUID()}`, '2020-01-01')
-  await application('Westminster', `OTHER-${randomUUID()}`, today)
+  await application('London Borough of Camden', `RECENT-${randomUUID()}`, today)
+  await application('London Borough of Camden', `OLD-${randomUUID()}`, '2020-01-01')
+  await application('City of Westminster', `OTHER-${randomUUID()}`, today)
 })
 
 afterAll(async () => {
@@ -93,14 +101,13 @@ describe('workspace lead fetch', () => {
       companyName: 'Partial Fetch',
       coverage: 'multi_county',
       targetTerritories: ['London', 'South East'],
-      councilTargets: ['Camden', 'Broken'],
+      councilTargets: ['London Borough of Camden', 'Guildford Borough Council'],
     }).returning()
     const actor = await createActor({ email: 'fetch-partial@example.com', name: 'Partial', organisationId: org!.id, orgRole: 'owner' })
-    await application('Broken', `BROKEN-${randomUUID()}`, today)
     useLeadScanner(async (council, since) => {
-      if (council === 'Broken') throw new Error('council timeout')
+      if (council === 'Guildford Borough Council') throw new Error('council timeout')
       const rows = await db.select({ id: planningApplications.id }).from(planningApplications)
-      return rows.filter(() => council === 'Camden').map((row) => row.id).filter(() => since.getTime() > 0)
+      return rows.filter(() => council === 'London Borough of Camden').map((row) => row.id).filter(() => since.getTime() > 0)
     })
     const started = await app.inject({ method: 'POST', url: '/api/v1/lead-fetches', headers: { cookie: actor.cookie }, payload: { days: 3 } })
     let job = started.json().job
@@ -123,10 +130,10 @@ describe('workspace lead fetch', () => {
       companyName: 'Empty Fetch',
       coverage: 'regional',
       targetTerritories: ['Wales'],
-      councilTargets: ['Cardiff'],
+      councilTargets: ['Cardiff Council'],
     }).returning()
     const actor = await createActor({ email: 'fetch-empty@example.com', name: 'Empty', organisationId: org!.id, orgRole: 'owner' })
-    await application('Cardiff', `STALE-${randomUUID()}`, '2019-05-01')
+    await application('Cardiff Council', `STALE-${randomUUID()}`, '2019-05-01')
     useLeadScanner(null)
     const started = await app.inject({ method: 'POST', url: '/api/v1/lead-fetches', headers: { cookie: actor.cookie }, payload: { days: 3 } })
     const job = started.json().job

@@ -1,7 +1,6 @@
-import { planItAuthorityKeys } from '@planningpal/ingest'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { ingestCursors } from '../db/schema.ts'
+import { ingestCursors, localPlanningAuthorities } from '../db/schema.ts'
 import { isIngestSlot } from './scheduler.ts'
 import { startIngestRun } from './run.ts'
 
@@ -15,7 +14,10 @@ export async function ingestAuthorityBatch(options?: { budgetMs?: number; recent
   if (!options?.force && !isIngestSlot()) {
     return { skipped: true, reason: 'Outside the 06:00, 13:00 and 20:00 Europe/London windows' }
   }
-  const authorities = planItAuthorityKeys()
+  const catalogue = await db
+    .select({ areas: localPlanningAuthorities.planitQueryAreas, status: localPlanningAuthorities.status, coverage: localPlanningAuthorities.coverage })
+    .from(localPlanningAuthorities)
+  const authorities = [...new Set(catalogue.filter((row) => row.status === 'active' && row.coverage !== 'unavailable').flatMap((row) => row.areas))].sort((a, b) => a.localeCompare(b))
   const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45_000)
   const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, CURSOR)).limit(1)
   let index = Number(cursor?.lastDifferent || 0)

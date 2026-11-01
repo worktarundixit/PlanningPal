@@ -168,6 +168,9 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/persona$/, permission: 'settings.read' },
   { method: 'PUT', pattern: /^\/api\/v1\/persona$/, permission: 'settings.write' },
 
+  { method: 'GET', pattern: /^\/api\/v1\/lpas\/health$/, permission: 'ingest.admin' },
+  { method: 'GET', pattern: /^\/api\/v1\/lpas$/, permission: 'settings.read' },
+
   { method: 'GET', pattern: /^\/api\/v1\/ingest\/runs$/, permission: 'ingest.admin' },
   { method: 'GET', pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: 'ingest.admin' },
   { method: 'POST', pattern: /^\/api\/v1\/ingest\/runs$/, permission: 'ingest.admin' },

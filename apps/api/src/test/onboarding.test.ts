@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { alertDue, validateIcp } from '@planningpal/shared'
 import { buildApp } from '../app.ts'
@@ -19,7 +19,7 @@ const icp = {
   action: 'save-icp',
   coverage: 'regional',
   regions: ['London'],
-  councils: ['Camden'],
+  councils: ['London Borough of Camden'],
   projectTypes: ['Residential'],
   valueRanges: ['£1m–£5m'],
   ribaStages: ['0', '2'],
@@ -29,6 +29,14 @@ beforeAll(async () => {
   await runMigrations()
   app = buildApp()
   await app.ready()
+  await db.delete(users).where(inArray(users.email, [
+    'founder@onboarding.example',
+    'rival@onboarding.example',
+    'staff@onboarding.example',
+    'invited@onboarding.example',
+    'member-step@onboarding.example',
+  ]))
+  await db.delete(organisations).where(eq(organisations.companyName, 'Alpha Windows'))
   const owner = await createActor({
     email: 'founder@onboarding.example',
     name: 'Founder',
@@ -155,7 +163,7 @@ describe('onboarding flow', () => {
     const [stored] = await db.select().from(organisations).where(eq(organisations.id, alpha!.id))
     expect(stored?.coverage).toBe('regional')
     expect(stored?.planName).toBe('Regional Leads Feed')
-    expect(stored?.councilTargets).toEqual(['Camden'])
+    expect(stored?.councilTargets).toEqual(['London Borough of Camden'])
   })
 
   it('skips workspace creation for an invited member and blocks admin actions', async () => {
