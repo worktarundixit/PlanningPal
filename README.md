@@ -16,10 +16,25 @@ pnpm dev
 ```
 
 - Marketing site: http://localhost:5173/
-- Command centre: http://localhost:5173/app
+- Sign in: http://localhost:5173/sign-in
+- Command centre: http://localhost:5173/app (redirects to sign-in until a session exists)
 - API: http://localhost:3001
 
-`pnpm db:seed` loads `apps/api/data/master-approved-residential.csv` (550 applications, 44 columns) and the demo workspace for James Wilkins at Micraft Design Ltd. In `AUTH_MODE=dev` the API uses that user when no bearer token is sent. The seeded token is `dev-token`.
+`pnpm db:seed` loads `apps/api/data/master-approved-residential.csv` (550 applications, 44 columns) and one demo organisation.
+
+### Local demo accounts
+
+These passwords are for the seeded local database only. Do not reuse them anywhere else.
+
+Password for every account below: `PlanningPal-local-1`
+
+| Email | Access |
+| --- | --- |
+| priya@hitcaliber.co.uk | Super Admin (all organisations, ingestion admin) |
+| james@micraftdesign.co.uk | Owner of Micraft Design Ltd |
+| emily@micraftdesign.co.uk | Admin |
+| daniel@micraftdesign.co.uk | Member |
+| hannah@micraftdesign.co.uk | Viewer |
 
 Tests use a separate database, `planningpal_test`, and do not read `.env`:
 
@@ -65,10 +80,10 @@ pnpm ingest -- --authority Camden --recent 7
 pnpm ingest -- --recent 3 --max-pages 4
 ```
 
-The API process also runs the pipeline at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. On Railway or Fly, run `pnpm ingest` from a cron service instead of keeping a second scheduler. Each run stores the raw JSON under `apps/api/data/raw`, writes a 44-column CSV under `apps/api/data/ingest`, and upserts schemes so they show in Planning search. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run.
+The API process also runs the pipeline at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. On Railway or Fly, run `pnpm ingest` from a cron service instead of keeping a second scheduler. Each run stores the raw JSON under `apps/api/data/raw`, writes a 44-column CSV under `apps/api/data/ingest`, and upserts schemes so they show in Planning search. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
 
 PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
 
 ## What is stubbed
 
-No scraping fleet, no enrichment providers, no real email. Inbox replies and queued CRM emails are stored and marked `stubbed`. Auth is one seeded user, behind a hook that can later require a bearer token (`AUTH_MODE=strict`).
+No scraping fleet, no enrichment providers, no real email. Inbox replies and queued CRM emails are stored and marked `stubbed`. Account email (verification, password reset, magic link, and team invite) goes through a mailer interface that logs the message in development and stores it in `mail_log`. Google and Microsoft sign-in are registered only when their client id and secret are set.

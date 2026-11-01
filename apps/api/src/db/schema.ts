@@ -18,7 +18,7 @@ const timestamps = {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }
 
-export const clients = pgTable('clients', {
+export const organisations = pgTable('organisations', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyName: text('company_name').notNull(),
   tier: text('tier').notNull().default('CATEGORY_3'),
@@ -38,12 +38,13 @@ export const clients = pgTable('clients', {
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
-    .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+  organisationId: uuid('organisation_id').references(() => organisations.id, { onDelete: 'cascade' }),
+  authUserId: text('auth_user_id').unique(),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
   jobTitle: text('job_title').notNull().default('Account owner'),
+  orgRole: text('org_role').notNull().default('member'),
+  platformRole: text('platform_role'),
   apiToken: text('api_token').notNull().unique(),
   passwordHash: text('password_hash'),
   twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
@@ -54,22 +55,22 @@ export const users = pgTable('users', {
 
 export const teamMembers = pgTable('team_members', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   email: text('email').notNull(),
-  role: text('role').notNull().default('Member'),
+  role: text('role').notNull().default('member'),
   status: text('status').notNull().default('Active'),
   createdAt: timestamps.createdAt,
 })
 
 export const customRoles = pgTable('custom_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   permissions: text('permissions').array().notNull().default(sql`ARRAY[]::text[]`),
   createdAt: timestamps.createdAt,
@@ -165,6 +166,9 @@ export const savedSchemes = pgTable(
   'saved_schemes',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    organisationId: uuid('organisation_id')
+      .notNull()
+      .references(() => organisations.id, { onDelete: 'cascade' }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -173,16 +177,16 @@ export const savedSchemes = pgTable(
       .references(() => planningApplications.id, { onDelete: 'cascade' }),
     createdAt: timestamps.createdAt,
   },
-  (table) => [uniqueIndex('saved_schemes_user_app_idx').on(table.userId, table.applicationId)],
+  (table) => [uniqueIndex('saved_schemes_org_app_idx').on(table.organisationId, table.applicationId)],
 )
 
 export const crmLeads = pgTable(
   'crm_leads',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    clientId: uuid('client_id')
+    organisationId: uuid('organisation_id')
       .notNull()
-      .references(() => clients.id, { onDelete: 'cascade' }),
+      .references(() => organisations.id, { onDelete: 'cascade' }),
     applicationId: uuid('application_id')
       .notNull()
       .references(() => planningApplications.id, { onDelete: 'cascade' }),
@@ -198,14 +202,14 @@ export const crmLeads = pgTable(
     createdAt: timestamps.createdAt,
     updatedAt: timestamps.updatedAt,
   },
-  (table) => [index('crm_leads_client_stage_idx').on(table.clientId, table.stage)],
+  (table) => [index('crm_leads_client_stage_idx').on(table.organisationId, table.stage)],
 )
 
 export const activities = pgTable('activities', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   crmLeadId: uuid('crm_lead_id').references(() => crmLeads.id, { onDelete: 'cascade' }),
   applicationId: uuid('application_id').references(() => planningApplications.id, { onDelete: 'cascade' }),
@@ -220,9 +224,9 @@ export const activities = pgTable('activities', {
 
 export const campaigns = pgTable('campaigns', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   status: text('status').notNull().default('draft'),
   region: text('region').notNull().default('London'),
@@ -237,9 +241,9 @@ export const campaigns = pgTable('campaigns', {
 
 export const sendingDomains = pgTable('sending_domains', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   inboxes: integer('inboxes').notNull().default(0),
   health: text('health').notNull().default('Setup'),
@@ -249,9 +253,9 @@ export const sendingDomains = pgTable('sending_domains', {
 
 export const inboxConversations = pgTable('inbox_conversations', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   crmLeadId: uuid('crm_lead_id').references(() => crmLeads.id, { onDelete: 'set null' }),
   subject: text('subject').notNull().default(''),
   preview: text('preview').notNull().default(''),
@@ -276,9 +280,9 @@ export const inboxMessages = pgTable('inbox_messages', {
 
 export const intentEvents = pgTable('intent_events', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   crmLeadId: uuid('crm_lead_id').references(() => crmLeads.id, { onDelete: 'set null' }),
   actorName: text('actor_name').notNull(),
   actorInitials: text('actor_initials').notNull().default(''),
@@ -291,9 +295,9 @@ export const intentEvents = pgTable('intent_events', {
 
 export const personaTemplates = pgTable('persona_templates', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   stakeholder: text('stakeholder').notNull().default('Lead architect'),
   angle: text('angle').notNull().default(''),
   proofPoints: jsonb('proof_points').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
@@ -302,9 +306,9 @@ export const personaTemplates = pgTable('persona_templates', {
 
 export const meetings = pgTable('meetings', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   whenLabel: text('when_label').notNull(),
   firm: text('firm').notNull(),
   scheme: text('scheme').notNull(),
@@ -314,9 +318,9 @@ export const meetings = pgTable('meetings', {
 
 export const invoices = pgTable('invoices', {
   id: uuid('id').primaryKey().defaultRandom(),
-  clientId: uuid('client_id')
+  organisationId: uuid('organisation_id')
     .notNull()
-    .references(() => clients.id, { onDelete: 'cascade' }),
+    .references(() => organisations.id, { onDelete: 'cascade' }),
   issuedOn: text('issued_on').notNull(),
   number: text('number').notNull(),
   amount: text('amount').notNull(),
@@ -372,4 +376,98 @@ export const telemetryEvents = pgTable('telemetry_events', {
   eventType: text('event_type').notNull(),
   payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
   createdAt: timestamps.createdAt,
+})
+
+const authTimestamps = {
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}
+
+/** Better Auth identity. Domain profiles live in `users` and point here via auth_user_id. */
+export const authUser = pgTable('auth_user', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  emailVerified: boolean('email_verified').notNull().default(false),
+  image: text('image'),
+  createdAt: authTimestamps.createdAt,
+  updatedAt: authTimestamps.updatedAt,
+})
+
+export const authSession = pgTable(
+  'auth_session',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    token: text('token').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    createdAt: authTimestamps.createdAt,
+    updatedAt: authTimestamps.updatedAt,
+  },
+  (table) => [index('auth_session_user_idx').on(table.userId)],
+)
+
+export const authAccount = pgTable(
+  'auth_account',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+    scope: text('scope'),
+    password: text('password'),
+    createdAt: authTimestamps.createdAt,
+    updatedAt: authTimestamps.updatedAt,
+  },
+  (table) => [
+    uniqueIndex('auth_account_provider_idx').on(table.providerId, table.accountId),
+    index('auth_account_user_idx').on(table.userId),
+  ],
+)
+
+export const authVerification = pgTable(
+  'auth_verification',
+  {
+    id: text('id').primaryKey(),
+    identifier: text('identifier').notNull(),
+    value: text('value').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: authTimestamps.createdAt,
+    updatedAt: authTimestamps.updatedAt,
+  },
+  (table) => [index('auth_verification_identifier_idx').on(table.identifier)],
+)
+
+export const invitations = pgTable('invitations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  organisationId: uuid('organisation_id')
+    .notNull()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  role: text('role').notNull(),
+  token: text('token').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const mailLog = pgTable('mail_log', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').notNull(),
+  recipient: text('recipient').notNull(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })

@@ -54,7 +54,7 @@ export function Landing() {
             <a href="#riba" className="hidden hover:text-[#172554] md:inline">RIBA window</a>
             <a href="#register" className="hidden hover:text-[#172554] lg:inline">Monday register</a>
             <a href="#packages" className="hidden hover:text-[#172554] md:inline">Packages</a>
-            <a href="/app" className="whitespace-nowrap rounded-lg px-2 py-2 hover:text-[#172554] sm:px-0">Sign in</a>
+            <a href="/sign-in" className="whitespace-nowrap rounded-lg px-2 py-2 hover:text-[#172554] sm:px-0">Sign in</a>
             <a href="#demo" className="rounded-lg bg-[#172554] px-3 py-2.5 text-white hover:bg-[#1E3A8A] sm:px-4">Book a demo</a>
           </nav>
         </div>
@@ -67,7 +67,7 @@ export function Landing() {
           <p className="mt-6 max-w-2xl text-[15px] leading-7 text-[#52627A]">By RIBA Stage 4 the tender list is usually closed and the specification is already written. PlanningPal reads local planning registers and puts the architect, the developer and the scheme on your desk at Stages 0 to 2, when early contractor involvement is still possible.</p>
           <div className="mt-8 flex flex-wrap gap-3">
             <a href="#demo" className="rounded-lg bg-[#172554] px-5 py-3 text-[12px] font-semibold text-white hover:bg-[#1E3A8A]">Book a demo</a>
-            <a href="/app" className="rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Sign in</a>
+            <a href="/sign-in" className="rounded-lg border border-[#DCE4F0] bg-white px-5 py-3 text-[12px] font-semibold text-[#172554]">Sign in</a>
           </div>
           <dl className="mt-12 grid max-w-xl grid-cols-3 gap-4 border-t border-[#DCE4F0] pt-6">
             {[['376', 'Local planning authorities'], ['44', 'Columns in the Monday file'], ['08:00', 'Monday delivery']].map(([value, label]) => (
@@ -85,7 +85,7 @@ export function Landing() {
               <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">The working surface</p>
               <h2 id="command-centre-heading" className="mt-2 font-display text-[28px] font-semibold tracking-[-0.03em]">Command centre, from the seeded register.</h2>
             </div>
-            <a href="/app" className="text-[11px] font-semibold text-[#2563EB]">Sign in to use it</a>
+            <a href="/sign-in" className="text-[11px] font-semibold text-[#2563EB]">Sign in to use it</a>
           </div>
           <figure className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white shadow-[0_1px_2px_rgba(30,58,138,0.04)]">
             <img src="/marketing/command-centre-overview.png" alt="PlanningPal command centre showing 550 approved schemes, agent contact coverage, and the priority planning leads list." className="w-full" width="1440" height="900" />
@@ -229,7 +229,7 @@ export function Landing() {
             <p className="mt-3 max-w-xl">Business contact details are processed under legitimate interests for professional correspondence about a live planning reference. Messages to limited companies, LLPs and public bodies identify the sender, give this postal address, and include a way to opt out. Opt-outs are suppressed across client accounts.</p>
           </div>
           <div className="sm:text-right">
-            <a href="/app" className="font-semibold text-[#2563EB]">Sign in</a>
+            <a href="/sign-in" className="font-semibold text-[#2563EB]">Sign in</a>
             <div className="mt-2">Planning leads · Intent CRM · Outreach</div>
           </div>
         </div>

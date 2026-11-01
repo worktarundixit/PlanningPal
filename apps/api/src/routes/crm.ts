@@ -22,12 +22,12 @@ const activityBody = z.object({
   dueOn: z.string().optional(),
 })
 
-async function loadCards(clientId: string) {
+async function loadCards(organisationId: string) {
   const rows = await db
     .select({ lead: crmLeads, application: planningApplications })
     .from(crmLeads)
     .innerJoin(planningApplications, eq(crmLeads.applicationId, planningApplications.id))
-    .where(eq(crmLeads.clientId, clientId))
+    .where(eq(crmLeads.organisationId, organisationId))
     .orderBy(asc(planningApplications.sourceIndex))
 
   return rows.map(({ lead, application }) => {
@@ -62,7 +62,7 @@ function resolveStage(value: string) {
 export async function crmRoutes(app: FastifyInstance) {
   app.get('/api/v1/crm/kanban', async (request) => {
     const user = requireUser(request)
-    const cards = await loadCards(user.clientId)
+    const cards = await loadCards(user.organisationId)
     return {
       stages: CRM_STAGES.map((stage) => ({
         id: stage.id,
@@ -82,7 +82,7 @@ export async function crmRoutes(app: FastifyInstance) {
       .select({ activity: activities, applicationRef: planningApplications.applicationRef })
       .from(activities)
       .leftJoin(planningApplications, eq(activities.applicationId, planningApplications.id))
-      .where(type ? and(eq(activities.clientId, user.clientId), eq(activities.type, type)) : eq(activities.clientId, user.clientId))
+      .where(type ? and(eq(activities.organisationId, user.organisationId), eq(activities.type, type)) : eq(activities.organisationId, user.organisationId))
       .orderBy(desc(activities.createdAt))
     return { data: rows.map((row) => ({ ...presentActivity(row.activity), applicationRef: row.applicationRef })) }
   })
@@ -102,7 +102,7 @@ export async function crmRoutes(app: FastifyInstance) {
       applicationId = appRow.id
     }
     if (body.crmLeadId) {
-      const [lead] = await db.select().from(crmLeads).where(and(eq(crmLeads.id, body.crmLeadId), eq(crmLeads.clientId, user.clientId))).limit(1)
+      const [lead] = await db.select().from(crmLeads).where(and(eq(crmLeads.id, body.crmLeadId), eq(crmLeads.organisationId, user.organisationId))).limit(1)
       if (!lead) return reply.code(404).send({ error: 'CRM lead not found' })
       applicationId = applicationId ?? lead.applicationId
     }
@@ -116,7 +116,7 @@ export async function crmRoutes(app: FastifyInstance) {
     const [created] = await db
       .insert(activities)
       .values({
-        clientId: user.clientId,
+        organisationId: user.organisationId,
         userId: user.id,
         crmLeadId: body.crmLeadId,
         applicationId,
@@ -139,7 +139,7 @@ export async function crmRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(activities)
       .set({ completedAt: body.completed ? new Date() : null })
-      .where(and(eq(activities.id, id), eq(activities.clientId, user.clientId)))
+      .where(and(eq(activities.id, id), eq(activities.organisationId, user.organisationId)))
       .returning()
     if (!updated) return reply.code(404).send({ error: 'Activity not found' })
     return presentActivity(updated)
@@ -152,7 +152,7 @@ export async function crmRoutes(app: FastifyInstance) {
     if (!body) return
     const stage = resolveStage(body.stage)
     if (!stage) return reply.code(400).send({ error: 'Unknown CRM stage' })
-    const [existing] = await db.select().from(crmLeads).where(and(eq(crmLeads.id, id), eq(crmLeads.clientId, user.clientId))).limit(1)
+    const [existing] = await db.select().from(crmLeads).where(and(eq(crmLeads.id, id), eq(crmLeads.organisationId, user.organisationId))).limit(1)
     if (!existing) return reply.code(404).send({ error: 'CRM lead not found' })
     const [updated] = await db
       .update(crmLeads)
@@ -164,7 +164,7 @@ export async function crmRoutes(app: FastifyInstance) {
       .where(eq(crmLeads.id, id))
       .returning()
     await db.insert(activities).values({
-      clientId: user.clientId,
+      organisationId: user.organisationId,
       userId: user.id,
       crmLeadId: id,
       applicationId: existing.applicationId,
@@ -172,7 +172,7 @@ export async function crmRoutes(app: FastifyInstance) {
       title: 'Stage updated',
       body: body.notes ?? `Moved to ${stage.label}`,
     })
-    const cards = await loadCards(user.clientId)
+    const cards = await loadCards(user.organisationId)
     return { lead: updated, card: cards.find((card) => card.id === id) }
   })
 
@@ -184,7 +184,7 @@ export async function crmRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(crmLeads)
       .set({ archived: body.archived, updatedAt: new Date() })
-      .where(and(eq(crmLeads.id, id), eq(crmLeads.clientId, user.clientId)))
+      .where(and(eq(crmLeads.id, id), eq(crmLeads.organisationId, user.organisationId)))
       .returning()
     if (!updated) return reply.code(404).send({ error: 'CRM lead not found' })
     return { id: updated.id, archived: updated.archived }

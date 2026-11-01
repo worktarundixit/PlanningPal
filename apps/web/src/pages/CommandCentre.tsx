@@ -3,6 +3,7 @@ import type { Scheme, UserProfile } from '@planningpal/shared'
 import { Icon } from '../components/Icon'
 import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
+import { authClient } from '../lib/auth-client'
 import { api, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { WorkspaceView } from './WorkspaceView'
@@ -44,9 +45,17 @@ export function CommandCentre() {
   const [campaignCreateSignal, setCampaignCreateSignal] = useState(0)
   const [accountOpen, setAccountOpen] = useState(false)
   const accountMenuRef = useRef<HTMLDivElement>(null)
-  const [profile, setProfile] = useState<UserProfile>({ name: 'James Wilkins', role: 'Account owner', company: 'Micraft Design Ltd', email: 'james@micraftdesign.co.uk' })
+  const [profile, setProfile] = useState<UserProfile>({ name: '', role: '', company: '', email: '' })
+  const [permissions, setPermissions] = useState<string[]>([])
+  const [orgRole, setOrgRole] = useState<string | null>(null)
+  const [sessionReady, setSessionReady] = useState(false)
+  const can = (permission: string) => permissions.includes(permission)
 
   const toggleSave = async (id: string) => {
+    if (!can('saved.write')) {
+      notify('Your role can view schemes. Saving is turned off.')
+      return
+    }
     const already = saved.includes(id)
     setSaved((items) => already ? items.filter((item) => item !== id) : [...items, id])
     try {
@@ -60,17 +69,29 @@ export function CommandCentre() {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([api.leads(), api.saved(), api.me(), api.overview()])
-      .then(([leads, savedIds, me, overview]) => {
+    api.me()
+      .then(async (me) => {
+        if (cancelled) return
+        setProfile(me)
+        setPermissions(me.permissions)
+        setOrgRole(me.orgRole)
+        const [leads, savedIds, overview] = await Promise.all([api.leads(), api.saved(), api.overview()])
         if (cancelled) return
         setData(leads.data)
         setSaved(savedIds.ids)
-        setProfile(me)
         setOverview(overview)
         setLoadError('')
+        setSessionReady(true)
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'The planning API is unavailable')
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : 'The planning API is unavailable'
+        if (message === 'Unauthorized') {
+          window.location.assign('/sign-in')
+          return
+        }
+        setLoadError(message)
+        setSessionReady(true)
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
@@ -91,6 +112,12 @@ export function CommandCentre() {
   const visibleSchemes = useMemo(() => filteredData.filter((scheme) =>
     `${scheme.title} ${scheme.location} ${scheme.type}`.toLowerCase().includes(query.toLowerCase())
   ).slice(0, 6), [filteredData, query])
+
+  const visibleNav = nav.filter((item) => item.label !== 'Ingestion' || can('ingest.admin'))
+
+  if (!sessionReady) {
+    return <div className="grid min-h-screen place-items-center bg-[#F4F7FB] text-[13px] text-[#52627A]">Checking your session…</div>
+  }
 
   return (
     <div className="min-h-screen bg-[#F4F7FB] text-[#172033]">
@@ -116,7 +143,7 @@ export function CommandCentre() {
           <div className="px-3 pt-6">
             <div className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/35">Workspace</div>
             <nav className="space-y-1">
-              {nav.map((item) => (
+              {visibleNav.map((item) => (
                 <button
                   key={item.label}
                   onClick={() => { setActive(item.label); setMobileNav(false) }}
@@ -143,8 +170,8 @@ export function CommandCentre() {
               {accountOpen && <div className="absolute bottom-[58px] left-0 right-0 overflow-hidden rounded-xl border border-white/10 bg-[#203363] p-1.5 shadow-2xl">
                 <div className="border-b border-white/10 px-3 py-2.5"><div className="text-[10px] font-semibold text-white">{profile.company}</div><div className="mt-1 text-[8px] text-white/40">Team Plan</div></div>
                 <button onClick={() => { setActive('My profile'); setAccountOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-white/65 hover:bg-white/10 hover:text-white"><Icon name="users" size={13} /> My profile</button>
-                <button onClick={() => { setActive('Billing'); setAccountOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-white/65 hover:bg-white/10 hover:text-white"><Icon name="briefcase" size={13} /> Billing</button>
-                <button onClick={() => { window.location.assign('/') }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-[#FCA5A5] hover:bg-white/10"><Icon name="arrow" size={13} /> Sign out</button>
+                {can('billing.manage') && <button onClick={() => { setActive('Billing'); setAccountOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-white/65 hover:bg-white/10 hover:text-white"><Icon name="briefcase" size={13} /> Billing</button>}
+                <button onClick={() => { void authClient.signOut().finally(() => { window.location.assign('/') }) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-[#FCA5A5] hover:bg-white/10"><Icon name="arrow" size={13} /> Sign out</button>
               </div>}
               <button onClick={() => setAccountOpen((open) => !open)} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-white/5" aria-expanded={accountOpen}>
                 <div className="grid h-9 w-9 place-items-center rounded-full bg-[#BDD8FF] text-[11px] font-bold text-[#152328]">{profile.name.split(' ').map((name) => name[0]).join('').slice(0, 2)}</div>
@@ -212,15 +239,15 @@ export function CommandCentre() {
             )}
             {active === 'Campaigns' && (
               <nav className="flex items-center gap-1" aria-label="Campaign actions">
-                <button onClick={() => setCampaignSettingsOpen((open) => !open)} className={`rounded-md px-3 py-2 text-[10px] font-semibold transition ${campaignSettingsOpen ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'text-[#64748B] hover:bg-[#E8EDF5]'}`}>Campaign settings</button>
-                <button onClick={() => setCampaignCreateSignal((signal) => signal + 1)} className="rounded-md px-3 py-2 text-[10px] font-semibold text-[#2563EB] transition hover:bg-[#DBEAFE]">+ New campaign</button>
+                <button disabled={!can('campaigns.write')} onClick={() => setCampaignSettingsOpen((open) => !open)} className={`rounded-md px-3 py-2 text-[10px] font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${campaignSettingsOpen ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'text-[#64748B] hover:bg-[#E8EDF5]'}`}>Campaign settings</button>
+                <button disabled={!can('campaigns.write')} onClick={() => setCampaignCreateSignal((signal) => signal + 1)} className="rounded-md px-3 py-2 text-[10px] font-semibold text-[#2563EB] transition hover:bg-[#DBEAFE] disabled:cursor-not-allowed disabled:opacity-40">+ New campaign</button>
               </nav>
             )}
             {active === 'Overview' && <button onClick={() => { setActive('CRM & intent'); notify('Showing your priority CRM actions') }} className="relative grid h-9 w-9 place-items-center rounded-lg border border-[#D8DDD5] bg-white text-[#52605F] hover:border-[#AEB8B3]">
               <Icon name="bell" size={16} /><span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#E96345] ring-2 ring-white" />
             </button>}
             {active === 'Overview' && (
-              <button onClick={() => exportSchemes(filteredData)} className="hidden items-center gap-2 rounded-lg bg-[#172554] px-4 py-2.5 text-[11px] font-semibold text-white shadow-sm hover:bg-[#1E3A8A] sm:flex">
+              <button disabled={!can('leads.export')} onClick={() => exportSchemes(filteredData)} className="hidden items-center gap-2 rounded-lg bg-[#172554] px-4 py-2.5 text-[11px] font-semibold text-white shadow-sm hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-40 sm:flex">
                 <Icon name="download" size={14} /> Export leads
               </button>
             )}
@@ -373,6 +400,13 @@ export function CommandCentre() {
             saved={saved}
             onOpen={setSelected}
             onSave={(id) => { void toggleSave(id) }}
+            canSave={can('saved.write')}
+            canExport={can('leads.export')}
+            canCampaign={can('campaigns.write')}
+            canCrm={can('crm.write')}
+            canSettings={can('settings.write')}
+            canTeam={can('team.manage')}
+            actorRole={orgRole}
           />
         )}
       </main>
@@ -468,7 +502,7 @@ export function CommandCentre() {
               )}
 
               <div className="mt-7 flex gap-3">
-                <button onClick={() => { notify(`${selected.title} noted for the next campaign draft`); setSelected(null) }} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#172554] px-4 py-3 text-[10px] font-semibold text-white hover:bg-[#1E3A8A]"><Icon name="send" size={14} /> Add to campaign</button>
+                <button disabled={!can('campaigns.write')} onClick={() => { notify(`${selected.title} noted for the next campaign draft`); setSelected(null) }} className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#172554] px-4 py-3 text-[10px] font-semibold text-white hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-40"><Icon name="send" size={14} /> Add to campaign</button>
                 <button onClick={() => { void toggleSave(selected.id) }} className="rounded-lg border border-[#D7DCD5] bg-white px-4 py-3 text-[10px] font-semibold text-[#596562] hover:bg-[#F0F3ED]">{saved.includes(selected.id) ? 'Saved' : 'Save lead'}</button>
               </div>
               {selected.portalUrl && <a href={selected.portalUrl} target="_blank" rel="noreferrer" className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#DCE4F0] bg-white py-3 text-[9px] font-semibold text-[#2563EB]">Open council planning record <Icon name="external" size={12} /></a>}

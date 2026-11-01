@@ -11,7 +11,7 @@ function presentStatus(status: string) {
   return status
 }
 
-export function Campaigns({ settingsOpen, setSettingsOpen, createSignal }: { settingsOpen: boolean; setSettingsOpen: (open: boolean) => void; createSignal: number }) {
+export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrite = true }: { settingsOpen: boolean; setSettingsOpen: (open: boolean) => void; createSignal: number; canWrite?: boolean }) {
   const [campaigns, setCampaigns] = useState<(Campaign & { status: string })[]>([])
   const [editor, setEditor] = useState<number | null>(null)
   const [campaignName, setCampaignName] = useState('')
@@ -39,7 +39,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal }: { set
     setCampaignRegion(index >= 0 && campaigns[index].name.includes('Surrey') ? 'South East' : 'London')
   }
   const saveCampaign = () => {
-    if (!campaignName.trim()) return
+    if (!canWrite || !campaignName.trim()) return
     const persist = editor === -1
       ? api.createCampaign({ name: campaignName, region: campaignRegion })
       : editor !== null ? api.updateCampaign(campaigns[editor].id, { name: campaignName, region: campaignRegion }) : Promise.resolve(null)
@@ -72,7 +72,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal }: { set
   }
   const lastCreateSignal = useRef(createSignal)
   useEffect(() => {
-    if (lastCreateSignal.current === createSignal) return
+    if (!canWrite || lastCreateSignal.current === createSignal) return
     lastCreateSignal.current = createSignal
     openEditor(-1)
   }, [createSignal])
@@ -86,7 +86,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal }: { set
           <button onClick={() => setWarmup((enabled) => !enabled)} className={`flex items-center justify-between rounded-lg p-3 text-left ${warmup ? 'bg-[#ECFDF5] text-[#047857]' : 'bg-[#F1F5F9] text-[#64748B]'}`}><div><div className="text-[8px] font-bold uppercase tracking-wider">Automated warm-up</div><div className="mt-1 text-[8px] opacity-70">Maintain mailbox reputation</div></div><span className="text-[8px] font-bold">{warmup ? 'ON' : 'OFF'}</span></button>
           <div className="rounded-lg bg-[#F8FAFD] p-3"><div className="text-[8px] font-bold uppercase tracking-wider text-[#64748B]">Tracking domain</div><div className="mt-2 text-[9px] font-semibold text-[#334155]">{trackingDomain}</div><div className="mt-1 text-[7px] text-[#15803D]">Verified</div></div>
         </div>
-        <button onClick={() => { void api.saveCampaignSettings({ dailyLimit, warmup }).then(() => notify('Campaign settings saved')).catch(() => notify('Could not save campaign settings')) }} className="mt-4 rounded-lg bg-[#172554] px-4 py-2.5 text-[8px] font-semibold text-white">Save campaign settings</button>
+        <button disabled={!canWrite} onClick={() => { void api.saveCampaignSettings({ dailyLimit, warmup }).then(() => notify('Campaign settings saved')).catch(() => notify('Could not save campaign settings')) }} className="mt-4 rounded-lg bg-[#172554] px-4 py-2.5 text-[8px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Save campaign settings</button>
       </section>}
       <div className="grid gap-3 sm:grid-cols-3">
         {[[String(activeInboxes), 'Active inboxes', `${domains.length} sending domains`], ['98.4%', 'Inbox placement', '+0.6% this week'], [`${dailyLimit}/day`, 'Sending limit', 'Per inbox']].map(([value, label, note]) => <div key={label} className="rounded-xl border border-[#DCE4F0] bg-white p-5"><div className="font-display text-2xl font-semibold">{value}</div><div className="mt-2 text-[10px] font-semibold text-[#52627A]">{label}</div><div className="mt-1 text-[9px] text-[#94A3B8]">{note}</div></div>)}
@@ -98,7 +98,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal }: { set
           return <div key={campaign.name} className="grid grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(80px,.5fr))_140px] items-center border-t border-[#EEF2F7] px-5 py-5 text-[10px]">
             <div><div className="font-display text-[12px] font-semibold">{campaign.name}</div><div className={`mt-1.5 inline-flex items-center gap-1.5 text-[8px] font-bold ${campaign.status === 'Live' && !isPaused ? 'text-[#36805A]' : 'text-[#94A3B8]'}`}><i className={`h-1.5 w-1.5 rounded-full ${campaign.status === 'Live' && !isPaused ? 'bg-[#4ADE80]' : 'bg-[#CBD5E1]'}`} />{isPaused ? 'Paused' : campaign.status}</div></div>
             <span>{campaign.contacts.toLocaleString()}</span><span>{campaign.sent}</span><span className="font-semibold">{campaign.open}</span><span>{campaign.reply}</span><span className="font-semibold text-[#2563EB]">{campaign.meetings}</span>
-            <div className="flex gap-1.5"><button onClick={() => openEditor(campaignIndex)} className="rounded-md border border-[#DCE4F0] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">Manage</button>{campaign.status !== 'Draft' && <button onClick={() => { const action = isPaused ? api.resumeCampaign(campaign.id) : api.pauseCampaign(campaign.id); void action.then((saved) => setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...saved, status: presentStatus(saved.status) } : item))).catch(() => notify('Could not update the campaign')) }} className="rounded-md bg-[#F1F5F9] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">{isPaused ? 'Resume' : 'Pause'}</button>}</div>
+            <div className="flex gap-1.5"><button onClick={() => openEditor(campaignIndex)} className="rounded-md border border-[#DCE4F0] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">Manage</button>{campaign.status !== 'Draft' && <button disabled={!canWrite} onClick={() => { if (!canWrite) return; const action = isPaused ? api.resumeCampaign(campaign.id) : api.pauseCampaign(campaign.id); void action.then((saved) => setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...saved, status: presentStatus(saved.status) } : item))).catch(() => notify('Could not update the campaign')) }} className="rounded-md bg-[#F1F5F9] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">{isPaused ? 'Resume' : 'Pause'}</button>}</div>
           </div>
         })}
       </div>

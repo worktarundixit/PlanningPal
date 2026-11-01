@@ -12,7 +12,7 @@ export async function inboxRoutes(app: FastifyInstance) {
     const conversations = await db
       .select()
       .from(inboxConversations)
-      .where(eq(inboxConversations.clientId, user.clientId))
+      .where(eq(inboxConversations.organisationId, user.organisationId))
       .orderBy(asc(inboxConversations.createdAt))
     const messages = conversations.length
       ? await db.select().from(inboxMessages).orderBy(asc(inboxMessages.createdAt))
@@ -21,7 +21,7 @@ export async function inboxRoutes(app: FastifyInstance) {
       .select({ lead: crmLeads, application: planningApplications })
       .from(crmLeads)
       .innerJoin(planningApplications, eq(crmLeads.applicationId, planningApplications.id))
-      .where(eq(crmLeads.clientId, user.clientId))
+      .where(eq(crmLeads.organisationId, user.organisationId))
     const leadById = new Map(leads.map((row) => [row.lead.id, row]))
 
     const data = conversations.map((conversation) => {
@@ -67,7 +67,7 @@ export async function inboxRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/inbox/read-all', async (request) => {
     const user = requireUser(request)
-    await db.update(inboxConversations).set({ unread: false, updatedAt: new Date() }).where(eq(inboxConversations.clientId, user.clientId))
+    await db.update(inboxConversations).set({ unread: false, updatedAt: new Date() }).where(eq(inboxConversations.organisationId, user.organisationId))
     return { ok: true }
   })
 
@@ -81,7 +81,7 @@ export async function inboxRoutes(app: FastifyInstance) {
       .from(inboxConversations)
       .where(eq(inboxConversations.id, id))
       .limit(1)
-    if (!conversation || conversation.clientId !== user.clientId) return reply.code(404).send({ error: 'Conversation not found' })
+    if (!conversation || conversation.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Conversation not found' })
     const [message] = await db
       .insert(inboxMessages)
       .values({
@@ -115,7 +115,7 @@ async function setUnread(request: FastifyRequest, reply: FastifyReply, unread: b
   const [updated] = await db
     .update(inboxConversations)
     .set({ unread, updatedAt: new Date() })
-    .where(and(eq(inboxConversations.id, id), eq(inboxConversations.clientId, user.clientId)))
+    .where(and(eq(inboxConversations.id, id), eq(inboxConversations.organisationId, user.organisationId)))
     .returning()
   if (!updated) return reply.code(404).send({ error: 'Conversation not found' })
   return { id: updated.id, unread: updated.unread }

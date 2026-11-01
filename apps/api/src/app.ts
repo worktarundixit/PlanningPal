@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { db } from './db/client.ts'
-import { clients, users } from './db/schema.ts'
+import { getAuth, oauthProviders } from './auth/auth.ts'
+import { permissionFor } from './auth/permissions.ts'
+import { loadSession } from './auth/session.ts'
 import { HttpError } from './lib/http.ts'
 import { campaignRoutes } from './routes/campaigns.ts'
 import { crmRoutes } from './routes/crm.ts'
@@ -11,26 +11,42 @@ import { telemetryRoutes } from './routes/telemetry.ts'
 import { ingestRoutes } from './routes/ingest.ts'
 import { workspaceRoutes } from './routes/workspace.ts'
 import './types.ts'
-import type { AuthUser } from './types.ts'
 
-async function userFromToken(token: string): Promise<AuthUser | null> {
-  const [row] = await db
-    .select({ user: users, companyName: clients.companyName })
-    .from(users)
-    .innerJoin(clients, eq(users.clientId, clients.id))
-    .where(eq(users.apiToken, token))
-    .limit(1)
-  if (!row) return null
-  return {
-    id: row.user.id,
-    clientId: row.user.clientId,
-    email: row.user.email,
-    name: row.user.name,
-    jobTitle: row.user.jobTitle,
-    companyName: row.companyName,
-    twoFactorEnabled: row.user.twoFactorEnabled,
-    apiToken: row.user.apiToken,
+function trustedOrigin(origin: string | undefined) {
+  if (!origin) return null
+  const allowed = [
+    process.env.WEB_ORIGIN,
+    process.env.BETTER_AUTH_URL,
+    'http://127.0.0.1:5173',
+    'http://localhost:5173',
+    'http://127.0.0.1:3001',
+    'http://localhost:3001',
+  ].filter((value): value is string => Boolean(value))
+  return allowed.some((value) => origin === value.replace(/\/$/, '')) ? origin : null
+}
+
+async function forwardAuth(request: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) {
+  const base = process.env.BETTER_AUTH_URL || 'http://127.0.0.1:3001'
+  const url = new URL(request.url, base)
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (value === undefined) continue
+    if (Array.isArray(value)) value.forEach((entry) => headers.append(key, entry))
+    else headers.set(key, value)
   }
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
+  const body = hasBody ? (request.rawBody ?? (request.body ? JSON.stringify(request.body) : undefined)) : undefined
+  const response = await getAuth().handler(new Request(url, { method: request.method, headers, body }))
+  reply.hijack()
+  reply.raw.statusCode = response.status
+  response.headers.forEach((value, key) => {
+    if (key.toLowerCase() === 'set-cookie') return
+    reply.raw.setHeader(key, value)
+  })
+  const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : []
+  if (cookies.length) reply.raw.setHeader('set-cookie', cookies)
+  const payload = Buffer.from(await response.arrayBuffer())
+  reply.raw.end(payload)
 }
 
 export function buildApp(): FastifyInstance {
@@ -49,32 +65,32 @@ export function buildApp(): FastifyInstance {
   })
 
   app.addHook('onRequest', async (request, reply) => {
-    reply.header('Access-Control-Allow-Origin', '*')
-    reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AEC-Signature')
+    const origin = trustedOrigin(typeof request.headers.origin === 'string' ? request.headers.origin : undefined)
+    if (origin) {
+      reply.header('Access-Control-Allow-Origin', origin)
+      reply.header('Access-Control-Allow-Credentials', 'true')
+      reply.header('Vary', 'Origin')
+    } else {
+      reply.header('Access-Control-Allow-Origin', '*')
+    }
+    reply.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AEC-Signature, X-Organisation-Id')
     reply.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS')
     request.user = null
-    if (request.method === 'OPTIONS') {
-      return reply.code(204).send()
-    }
+    if (request.method === 'OPTIONS') return reply.code(204).send()
   })
 
   app.addHook('preHandler', async (request, reply) => {
+    const path = request.url.split('?')[0] || request.url
+    if (path.startsWith('/api/auth')) return
     if (request.routeOptions.config.public) return
-    const header = request.headers.authorization
-    const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : ''
-    if (token) {
-      const user = await userFromToken(token)
-      if (!user) return reply.code(401).send({ error: 'Unauthorized' })
-      request.user = user
-      return
+    const permission = permissionFor(request.method, path)
+    if (permission === 'public') return
+    const user = await loadSession(request)
+    if (!user) return reply.code(401).send({ error: 'Unauthorized' })
+    request.user = user
+    if (permission === 'deny' || !user.permissions.includes(permission)) {
+      return reply.code(403).send({ error: 'Forbidden' })
     }
-    if ((process.env.AUTH_MODE ?? 'dev') !== 'strict') {
-      const demo = await userFromToken(process.env.DEMO_USER_TOKEN || 'dev-token')
-      if (!demo) return reply.code(401).send({ error: 'Unauthorized', hint: 'Seed the demo user or send a bearer token' })
-      request.user = demo
-      return
-    }
-    return reply.code(401).send({ error: 'Unauthorized' })
   })
 
   app.setErrorHandler((error: unknown, request, reply) => {
@@ -88,9 +104,23 @@ export function buildApp(): FastifyInstance {
     return reply.code(statusCode).send({ error: message })
   })
 
+  app.route({
+    method: ['GET', 'POST'],
+    url: '/api/auth/*',
+    config: { public: true },
+    handler: forwardAuth,
+  })
+
   app.get('/api/v1/health', { config: { public: true } }, async () => ({
     ok: true,
     service: 'planningpal-api',
+  }))
+
+  app.get('/api/v1/auth/providers', { config: { public: true } }, async () => ({
+    email: true,
+    magicLink: true,
+    google: oauthProviders.google,
+    microsoft: oauthProviders.microsoft,
   }))
 
   app.register(planningRoutes)

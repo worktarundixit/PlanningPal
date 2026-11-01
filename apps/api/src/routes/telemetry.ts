@@ -88,7 +88,7 @@ export async function telemetryRoutes(app: FastifyInstance) {
         })
         .where(eq(crmLeads.id, lead.id))
       await db.insert(activities).values({
-        clientId: lead.clientId,
+        organisationId: lead.organisationId,
         crmLeadId: lead.id,
         applicationId: application.id,
         type: 'system',

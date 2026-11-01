@@ -1,12 +1,17 @@
+import type { OrgRole, Permission, PlatformRole } from './auth/permissions.ts'
+
 export type AuthUser = {
   id: string
-  clientId: string
+  authUserId: string
+  organisationId: string
   email: string
   name: string
   jobTitle: string
   companyName: string
   twoFactorEnabled: boolean
-  apiToken: string
+  orgRole: OrgRole | null
+  platformRole: PlatformRole | null
+  permissions: Permission[]
 }
 
 declare module 'fastify' {

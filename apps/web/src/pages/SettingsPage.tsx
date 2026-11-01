@@ -4,7 +4,7 @@ import { PageIntro } from '../components/PageIntro'
 import { api } from '../lib/api'
 import { notify } from '../lib/notify'
 
-export function Settings() {
+export function Settings({ canWrite = true }: { canWrite?: boolean }) {
   const [alerts, setAlerts] = useState(true)
   const [territories, setTerritories] = useState(['Surrey', 'Berkshire', 'Greater London'])
   const [trades, setTrades] = useState(['Groundworks', 'RC Frame', 'Civil Engineering', 'Drainage'])
@@ -38,7 +38,7 @@ export function Settings() {
           <button onClick={() => setUpgradeSuccess(false)} className="text-[#94A3B8]" aria-label="Dismiss success message"><Icon name="close" size={13} /></button>
         </div>
       </div>}
-      <PageIntro eyebrow="Workspace configuration" title="Workspace settings" description="Manage Micraft Design Ltd’s territory coverage, trade specialisms and intent alerts." action={<button onClick={() => { void api.saveWorkspace({ territories, trades, radius, signalAlerts: alerts }).then(() => notify('Workspace settings saved')).catch(() => notify('Could not save workspace settings')) }} className="rounded-lg bg-[#172554] px-4 py-2.5 text-[9px] font-semibold text-white">Save changes</button>} />
+      <PageIntro eyebrow="Workspace configuration" title="Workspace settings" description="Manage Micraft Design Ltd’s territory coverage, trade specialisms and intent alerts." action={<button disabled={!canWrite} onClick={() => { void api.saveWorkspace({ territories, trades, radius, signalAlerts: alerts }).then(() => notify('Workspace settings saved')).catch(() => notify('Could not save workspace settings')) }} className="rounded-lg bg-[#172554] px-4 py-2.5 text-[9px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">Save changes</button>} />
       <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
         <div className="space-y-5">
           <section className="rounded-xl border border-[#DCE4F0] bg-white p-5">

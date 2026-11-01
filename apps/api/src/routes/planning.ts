@@ -212,7 +212,7 @@ export async function planningRoutes(app: FastifyInstance) {
       .select({ applicationRef: planningApplications.applicationRef })
       .from(savedSchemes)
       .innerJoin(planningApplications, eq(savedSchemes.applicationId, planningApplications.id))
-      .where(eq(savedSchemes.userId, user.id))
+      .where(eq(savedSchemes.organisationId, user.organisationId))
       .orderBy(asc(savedSchemes.createdAt))
     return { ids: rows.map((row) => row.applicationRef) }
   })
@@ -221,7 +221,7 @@ export async function planningRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     const body = parseBody(z.object({ applicationRef: z.string().min(1) }), request.body, reply)
     if (!body) return
-    const saved = await saveRef(user.id, body.applicationRef)
+    const saved = await saveRef(user, body.applicationRef)
     if (!saved) return reply.code(404).send({ error: 'Planning lead not found' })
     return { saved: true, applicationRef: body.applicationRef }
   })
@@ -232,7 +232,7 @@ export async function planningRoutes(app: FastifyInstance) {
     if (!body) return
     let count = 0
     for (const applicationRef of body.applicationRefs) {
-      const saved = await saveRef(user.id, applicationRef)
+      const saved = await saveRef(user, applicationRef)
       if (saved) count += 1
     }
     return { saved: count }
@@ -247,12 +247,15 @@ export async function planningRoutes(app: FastifyInstance) {
       .where(eq(planningApplications.applicationRef, decodeURIComponent(ref)))
       .limit(1)
     if (!appRow) return reply.code(404).send({ error: 'Planning lead not found' })
-    await db.delete(savedSchemes).where(and(eq(savedSchemes.userId, user.id), eq(savedSchemes.applicationId, appRow.id)))
+    await db
+      .delete(savedSchemes)
+      .where(and(eq(savedSchemes.organisationId, user.organisationId), eq(savedSchemes.applicationId, appRow.id)))
     return { saved: false, applicationRef: decodeURIComponent(ref) }
   })
 }
 
-async function saveRef(userId: string, applicationRef: string) {
+async function saveRef(user: { id: string; organisationId: string }, applicationRef: string) {
+  if (!user.organisationId) return false
   const [appRow] = await db
     .select({ id: planningApplications.id })
     .from(planningApplications)
@@ -261,8 +264,8 @@ async function saveRef(userId: string, applicationRef: string) {
   if (!appRow) return false
   await db
     .insert(savedSchemes)
-    .values({ userId, applicationId: appRow.id })
-    .onConflictDoNothing({ target: [savedSchemes.userId, savedSchemes.applicationId] })
+    .values({ userId: user.id, organisationId: user.organisationId, applicationId: appRow.id })
+    .onConflictDoNothing({ target: [savedSchemes.organisationId, savedSchemes.applicationId] })
   return true
 }
 

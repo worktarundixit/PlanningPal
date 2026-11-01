@@ -1,13 +1,15 @@
 import { councilCode, mapRecord, parseCsv } from '@planningpal/shared'
-import { createHash } from 'node:crypto'
+import { hashPassword } from 'better-auth/crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { db, sqlClient } from './db/client.ts'
 import {
   activities,
+  authAccount,
+  authUser,
   campaigns,
-  clients,
   councils,
   crmLeads,
   decisionMakers,
@@ -16,6 +18,7 @@ import {
   intentEvents,
   invoices,
   meetings,
+  organisations,
   personaTemplates,
   planningApplications,
   savedSchemes,
@@ -23,6 +26,66 @@ import {
   teamMembers,
   users,
 } from './db/schema.ts'
+
+/** Local demo password for every seeded account. Documented in the README. Not for production. */
+export const LOCAL_DEMO_PASSWORD = 'PlanningPal-local-1'
+
+async function createLogin(input: {
+  email: string
+  name: string
+  jobTitle: string
+  organisationId: string | null
+  orgRole: 'owner' | 'admin' | 'member' | 'viewer'
+  platformRole?: 'super_admin' | null
+  emailPreferences?: Record<string, boolean>
+}) {
+  const now = new Date()
+  const authId = randomUUID()
+  await db.insert(authUser).values({
+    id: authId,
+    name: input.name,
+    email: input.email.toLowerCase(),
+    emailVerified: true,
+    createdAt: now,
+    updatedAt: now,
+  })
+  await db.insert(authAccount).values({
+    id: randomUUID(),
+    accountId: authId,
+    providerId: 'credential',
+    userId: authId,
+    password: await hashPassword(LOCAL_DEMO_PASSWORD),
+    createdAt: now,
+    updatedAt: now,
+  })
+  const [user] = await db
+    .insert(users)
+    .values({
+      organisationId: input.organisationId,
+      authUserId: authId,
+      email: input.email.toLowerCase(),
+      name: input.name,
+      jobTitle: input.jobTitle,
+      orgRole: input.orgRole,
+      platformRole: input.platformRole ?? null,
+      apiToken: randomUUID(),
+      twoFactorEnabled: false,
+      emailPreferences: input.emailPreferences ?? {},
+    })
+    .returning()
+  if (!user) throw new Error(`Could not seed ${input.email}`)
+  if (input.organisationId) {
+    await db.insert(teamMembers).values({
+      organisationId: input.organisationId,
+      userId: user.id,
+      name: input.name,
+      email: input.email.toLowerCase(),
+      role: input.orgRole,
+      status: 'Active',
+    })
+  }
+  return user
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const csvPath = path.resolve(here, '../data/master-approved-residential.csv')
@@ -132,6 +195,8 @@ async function main() {
 
   await sqlClient.unsafe(`
     TRUNCATE TABLE
+      mail_log,
+      invitations,
       demo_requests,
       telemetry_events,
       invoices,
@@ -151,12 +216,16 @@ async function main() {
       custom_roles,
       team_members,
       users,
-      clients
+      auth_session,
+      auth_account,
+      auth_verification,
+      auth_user,
+      organisations
     RESTART IDENTITY CASCADE
   `)
 
   const [client] = await db
-    .insert(clients)
+    .insert(organisations)
     .values({
       companyName: 'Micraft Design Ltd',
       tier: 'CATEGORY_3',
@@ -174,67 +243,85 @@ async function main() {
     .returning()
   if (!client) throw new Error('Client seed failed')
 
-  const [user] = await db
-    .insert(users)
-    .values({
-      clientId: client.id,
-      email: 'james@micraftdesign.co.uk',
-      name: 'James Wilkins',
-      jobTitle: 'Account owner',
-      apiToken: process.env.DEMO_USER_TOKEN || 'dev-token',
-      twoFactorEnabled: false,
-      emailPreferences: {
-        'High-intent alerts': true,
-        'Task reminders': true,
-        'Weekly planning digest': true,
-      },
-    })
-    .returning()
-  if (!user) throw new Error('User seed failed')
-
-  await db.insert(teamMembers).values([
-    { clientId: client.id, userId: user.id, name: 'James Wilkins', email: 'james@micraftdesign.co.uk', role: 'Owner', status: 'Active' },
-    { clientId: client.id, name: 'Emily Rhodes', email: 'emily@micraftdesign.co.uk', role: 'Admin', status: 'Active' },
-    { clientId: client.id, name: 'Daniel Kaur', email: 'daniel@micraftdesign.co.uk', role: 'Member', status: 'Active' },
-  ])
+  await createLogin({
+    email: 'priya@hitcaliber.co.uk',
+    name: 'Priya Shah',
+    jobTitle: 'Hitcaliber staff',
+    organisationId: null,
+    orgRole: 'member',
+    platformRole: 'super_admin',
+  })
+  const user = await createLogin({
+    email: 'james@micraftdesign.co.uk',
+    name: 'James Wilkins',
+    jobTitle: 'Account owner',
+    organisationId: client.id,
+    orgRole: 'owner',
+    emailPreferences: {
+      'High-intent alerts': true,
+      'Task reminders': true,
+      'Weekly planning digest': true,
+    },
+  })
+  await createLogin({
+    email: 'emily@micraftdesign.co.uk',
+    name: 'Emily Rhodes',
+    jobTitle: 'Commercial director',
+    organisationId: client.id,
+    orgRole: 'admin',
+  })
+  await createLogin({
+    email: 'daniel@micraftdesign.co.uk',
+    name: 'Daniel Kaur',
+    jobTitle: 'Business development',
+    organisationId: client.id,
+    orgRole: 'member',
+  })
+  await createLogin({
+    email: 'hannah@micraftdesign.co.uk',
+    name: 'Hannah Cole',
+    jobTitle: 'Project coordinator',
+    organisationId: client.id,
+    orgRole: 'viewer',
+  })
 
   await db.insert(personaTemplates).values({
-    clientId: client.id,
+    organisationId: client.id,
     stakeholder: 'Lead architect',
     angle: 'Offer complimentary early technical review, CAD/BIM detailing and compliant NBS specification support.',
     proofPoints: ['Two ready groundworks gangs in Guildford', 'CAT 320 excavator fleet availability', 'CHAS Elite accredited', '£10m public liability cover'],
   })
 
   await db.insert(campaigns).values([
-    { clientId: client.id, name: 'Micraft Design · RIBA 1–2', status: 'live', region: 'South East', contacts: 842, sent: 616, openRate: '66.8%', replyRate: '8.4%', meetings: 7 },
-    { clientId: client.id, name: 'Berkshire Commercial New Build', status: 'live', region: 'South East', contacts: 514, sent: 381, openRate: '63.1%', replyRate: '6.9%', meetings: 4 },
-    { clientId: client.id, name: 'Greater London RC Frame', status: 'draft', region: 'London', contacts: 1240, sent: 0, openRate: '—', replyRate: '—', meetings: 0 },
+    { organisationId: client.id, name: 'Micraft Design · RIBA 1–2', status: 'live', region: 'South East', contacts: 842, sent: 616, openRate: '66.8%', replyRate: '8.4%', meetings: 7 },
+    { organisationId: client.id, name: 'Berkshire Commercial New Build', status: 'live', region: 'South East', contacts: 514, sent: 381, openRate: '63.1%', replyRate: '6.9%', meetings: 4 },
+    { organisationId: client.id, name: 'Greater London RC Frame', status: 'draft', region: 'London', contacts: 1240, sent: 0, openRate: '—', replyRate: '—', meetings: 0 },
   ])
 
   await db.insert(sendingDomains).values([
-    { clientId: client.id, name: 'micraft-projects.co.uk', inboxes: 3, health: '98.1%', status: 'Healthy' },
-    { clientId: client.id, name: 'get-micraft.co.uk', inboxes: 3, health: '97.6%', status: 'Healthy' },
-    { clientId: client.id, name: 'micraft-commercial.co.uk', inboxes: 3, health: '98.8%', status: 'Healthy' },
-    { clientId: client.id, name: 'micraft-pipeline.co.uk', inboxes: 3, health: '99.1%', status: 'Healthy' },
+    { organisationId: client.id, name: 'micraft-projects.co.uk', inboxes: 3, health: '98.1%', status: 'Healthy' },
+    { organisationId: client.id, name: 'get-micraft.co.uk', inboxes: 3, health: '97.6%', status: 'Healthy' },
+    { organisationId: client.id, name: 'micraft-commercial.co.uk', inboxes: 3, health: '98.8%', status: 'Healthy' },
+    { organisationId: client.id, name: 'micraft-pipeline.co.uk', inboxes: 3, health: '99.1%', status: 'Healthy' },
   ])
 
   await db.insert(intentEvents).values([
-    { clientId: client.id, actorName: 'Maya Evans', actorInitials: 'ME', action: 'opened your case study', detail: 'Guildford Innovation District', hot: true, timeLabel: '3m' },
-    { clientId: client.id, actorName: 'Daniel Kaur', actorInitials: 'DK', action: 'clicked portfolio link', detail: 'Harrowgate Living Quarter', hot: true, timeLabel: '18m' },
-    { clientId: client.id, actorName: 'Alice Morgan', actorInitials: 'AM', action: 'opened introduction', detail: 'Marlow Health Hub', hot: false, timeLabel: '1h' },
-    { clientId: client.id, actorName: 'Tom Ridley', actorInitials: 'TR', action: 'replied to campaign', detail: 'Egham Logistics Campus', hot: false, timeLabel: '2h' },
+    { organisationId: client.id, actorName: 'Maya Evans', actorInitials: 'ME', action: 'opened your case study', detail: 'Guildford Innovation District', hot: true, timeLabel: '3m' },
+    { organisationId: client.id, actorName: 'Daniel Kaur', actorInitials: 'DK', action: 'clicked portfolio link', detail: 'Harrowgate Living Quarter', hot: true, timeLabel: '18m' },
+    { organisationId: client.id, actorName: 'Alice Morgan', actorInitials: 'AM', action: 'opened introduction', detail: 'Marlow Health Hub', hot: false, timeLabel: '1h' },
+    { organisationId: client.id, actorName: 'Tom Ridley', actorInitials: 'TR', action: 'replied to campaign', detail: 'Egham Logistics Campus', hot: false, timeLabel: '2h' },
   ])
 
   await db.insert(meetings).values([
-    { clientId: client.id, whenLabel: '20 Jun · 10:30', firm: 'Northbank Studio', scheme: 'Guildford Innovation District', kind: 'Discovery call' },
-    { clientId: client.id, whenLabel: '24 Jun · 14:00', firm: 'Fieldwork Architects', scheme: 'Harrowgate Living Quarter', kind: 'Technical review' },
-    { clientId: client.id, whenLabel: '27 Jun · 09:30', firm: 'Element Architects', scheme: 'Staines Campus', kind: 'Tender qualification' },
+    { organisationId: client.id, whenLabel: '20 Jun · 10:30', firm: 'Northbank Studio', scheme: 'Guildford Innovation District', kind: 'Discovery call' },
+    { organisationId: client.id, whenLabel: '24 Jun · 14:00', firm: 'Fieldwork Architects', scheme: 'Harrowgate Living Quarter', kind: 'Technical review' },
+    { organisationId: client.id, whenLabel: '27 Jun · 09:30', firm: 'Element Architects', scheme: 'Staines Campus', kind: 'Tender qualification' },
   ])
 
   await db.insert(invoices).values([
-    { clientId: client.id, issuedOn: '01 Jun 2025', number: 'INV-2025-0601', amount: '£2,950', status: 'Paid' },
-    { clientId: client.id, issuedOn: '01 May 2025', number: 'INV-2025-0501', amount: '£2,950', status: 'Paid' },
-    { clientId: client.id, issuedOn: '01 Apr 2025', number: 'INV-2025-0401', amount: '£2,950', status: 'Paid' },
+    { organisationId: client.id, issuedOn: '01 Jun 2025', number: 'INV-2025-0601', amount: '£2,950', status: 'Paid' },
+    { organisationId: client.id, issuedOn: '01 May 2025', number: 'INV-2025-0501', amount: '£2,950', status: 'Paid' },
+    { organisationId: client.id, issuedOn: '01 Apr 2025', number: 'INV-2025-0401', amount: '£2,950', status: 'Paid' },
   ])
 
   const councilMap = new Map<string, { code: string; name: string; county: string; region: string; baseUrl: string }>()
@@ -351,13 +438,15 @@ async function main() {
     await db.insert(decisionMakers).values(contacts.slice(offset, offset + 200))
   }
 
-  await db.insert(savedSchemes).values(insertedApps.slice(0, 14).map((app) => ({ userId: user.id, applicationId: app.id })))
+  await db.insert(savedSchemes).values(
+    insertedApps.slice(0, 14).map((app) => ({ userId: user.id, organisationId: client.id, applicationId: app.id })),
+  )
 
   const leadRows = await db
     .insert(crmLeads)
     .values(
       crmBlueprint.map((card, index) => ({
-        clientId: client.id,
+        organisationId: client.id,
         applicationId: insertedApps[index]?.id ?? insertedApps[0]!.id,
         stage: card.stage,
         openCount: card.opens,
@@ -377,7 +466,7 @@ async function main() {
         const scheme = app ? mapRecord(app.sourceRecord, app.sourceIndex) : undefined
         const blueprint = crmBlueprint[index]
         return {
-          clientId: client.id,
+          organisationId: client.id,
           crmLeadId: lead.id,
           subject: `Re: ${scheme?.title ?? 'Scheme'}`,
           preview: (blueprint?.opens ?? 0) >= 3 ? 'Thanks, this looks relevant. Can you send…' : 'I have received your introduction regarding…',
@@ -421,7 +510,7 @@ async function main() {
   const taskLeads = leadRows.filter((lead) => lead.openCount >= 3)
   await db.insert(activities).values(
     taskLeads.map((lead, index) => ({
-      clientId: client.id,
+      organisationId: client.id,
       userId: user.id,
       crmLeadId: lead.id,
       applicationId: lead.applicationId,
@@ -432,7 +521,7 @@ async function main() {
     })),
   )
 
-  console.log(`Seeded ${insertedApps.length} planning applications, ${leadRows.length} CRM cards, demo user ${user.email} (token ${user.apiToken})`)
+  console.log(`Seeded ${insertedApps.length} planning applications, ${leadRows.length} CRM cards, and the local demo accounts (password in the README).`)
   await sqlClient.end()
 }
 

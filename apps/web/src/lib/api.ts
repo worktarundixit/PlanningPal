@@ -6,7 +6,7 @@ const base = import.meta.env.VITE_API_URL ?? ''
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const response = await fetch(`${base}${path}`, { ...init, headers })
+  const response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string }
     throw new Error(payload.error || `Request failed (${response.status})`)
@@ -61,6 +61,14 @@ export type Campaign = {
 
 export type Domain = { id: string; name: string; inboxes: number; health: string; status: string }
 
+export type SessionProfile = UserProfile & {
+  organisationId: string | null
+  orgRole: 'owner' | 'admin' | 'member' | 'viewer' | null
+  orgRoleLabel: string
+  platformRole: 'super_admin' | null
+  permissions: string[]
+}
+
 export const api = {
   leads: () => request<{ data: Scheme[]; total: number }>('/api/v1/planning/leads?limit=1000'),
   saved: () => request<{ ids: string[] }>('/api/v1/saved-schemes'),
@@ -78,7 +86,9 @@ export const api = {
     link.click()
     URL.revokeObjectURL(link.href)
   },
-  me: () => request<UserProfile>('/api/v1/me'),
+  me: () => request<SessionProfile>('/api/v1/me'),
+  providers: () => request<{ email: boolean; magicLink: boolean; google: boolean; microsoft: boolean }>('/api/v1/auth/providers'),
+  invitation: (token: string) => request<{ email: string; role: string; organisation: string; expired: boolean }>(`/api/v1/team/invites/${token}`),
   updateMe: (profile: UserProfile) => request<UserProfile>('/api/v1/me', { method: 'PATCH', body: JSON.stringify(profile) }),
   overview: () => request<Overview>('/api/v1/overview'),
   reports: () => request<NonNullable<Overview['metrics']['reports']>>('/api/v1/reports'),
@@ -109,7 +119,11 @@ export const api = {
   saveWorkspace: (body: { territories?: string[]; trades?: string[]; radius?: number; signalAlerts?: boolean }) =>
     request('/api/v1/workspace', { method: 'PATCH', body: JSON.stringify(body) }),
   team: () => request<{ members: { id: string; name: string; email: string; role: string; status: string }[]; customRoles: { id: string; name: string; permissions: string[] }[] }>('/api/v1/team'),
-  invite: (email: string, role: string) => request('/api/v1/team/invites', { method: 'POST', body: JSON.stringify({ email, role }) }),
+  invite: (email: string, role: string) =>
+    request<{ id: string; name: string; email: string; role: string; status: string; inviteUrl: string }>('/api/v1/team/invites', {
+      method: 'POST',
+      body: JSON.stringify({ email, role }),
+    }),
   updateMember: (id: string, role: string) => request(`/api/v1/team/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   removeMember: (id: string) => request(`/api/v1/team/${id}`, { method: 'DELETE' }),
   createRole: (name: string, permissions: string[]) => request('/api/v1/roles', { method: 'POST', body: JSON.stringify({ name, permissions }) }),
