@@ -77,3 +77,100 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+@keyframes land-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes land-window {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes lpa-arrive {
+  0%,
+  58%,
+  100% {
+    opacity: 0.28;
+    transform: scale(1);
+  }
+  74% {
+    opacity: 1;
+    transform: scale(2);
+  }
+}
+
+.land-enter {
+  animation: land-rise 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.land-d1 { animation-delay: 90ms; }
+.land-d2 { animation-delay: 190ms; }
+.land-d3 { animation-delay: 300ms; }
+.land-d4 { animation-delay: 420ms; }
+.land-d5 { animation-delay: 560ms; }
+.land-d6 { animation-delay: 700ms; }
+.land-d7 { animation-delay: 840ms; }
+
+.land-window {
+  transform-origin: left center;
+  animation: land-window 1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.55s both;
+}
+
+.lpa-live {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lpa-arrive 2.8s ease-in-out infinite;
+}
+
+.land-cta {
+  box-shadow: 0 1px 0 rgba(23, 37, 84, 0.04);
+}
+
+.land-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(23, 37, 84, 0.12);
+}
+
+.land-card {
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.land-card:hover {
+  transform: translateY(-2px);
+  border-color: #93c5fd;
+  box-shadow: 0 12px 28px rgba(23, 37, 84, 0.07);
+}
+
+@supports (animation-timeline: view()) {
+  .land-reveal {
+    animation: land-rise 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 28%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .land-enter,
+  .land-window,
+  .lpa-live,
+  .land-reveal {
+    animation: none !important;
+  }
+
+  .land-cta:hover,
+  .land-card:hover {
+    transform: none;
+  }
+}
