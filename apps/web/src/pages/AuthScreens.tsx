@@ -40,6 +40,13 @@ function safeRedirect(path: string) {
   }
 }
 
+/** Where a completed sign-in should land. Only the Super Admin console is accepted besides /app. */
+function destinationAfterSignIn() {
+  const next = new URLSearchParams(window.location.search).get('next')
+  if (next === '/app/admin') return '/app/admin'
+  return '/app'
+}
+
 export function SignInPage() {
   const expired = new URLSearchParams(window.location.search).get('expired') === '1'
   const [email, setEmail] = useState('')
@@ -56,7 +63,7 @@ export function SignInPage() {
     const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
     setBusy(false)
     if (signInError) return setError(signInError.message)
-    window.location.assign('/app')
+    window.location.assign(destinationAfterSignIn())
   }
 
   const sendLink = async () => {
@@ -66,7 +73,7 @@ export function SignInPage() {
     setError('')
     const { error: linkError } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: safeRedirect('/app') },
+      options: { emailRedirectTo: safeRedirect(destinationAfterSignIn()) },
     })
     setBusy(false)
     if (linkError) return setError(linkError.message)
@@ -89,7 +96,7 @@ export function SignInPage() {
         className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
         onClick={() => {
           if (!supabase) return setError(missingClient())
-          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: safeRedirect('/app') } })
+          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: safeRedirect(destinationAfterSignIn()) } })
         }}
       >
         Continue with Google
@@ -98,6 +105,12 @@ export function SignInPage() {
         <a href="/forgot-password" className="font-semibold text-[#2563EB]">Forgot password</a>
         <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
       </div>
+      {/* TEMPORARY Admin login. TODO remove later.
+          Same sign-in form and the same Supabase session. After login the browser goes to /app/admin.
+          Nothing is prefilled. The server still checks super_admin before ingestion data is returned. */}
+      <p className="mt-4 text-center text-[13px]">
+        <a href="/sign-in?next=/app/admin" className="font-semibold text-[#2563EB]">Admin login</a>
+      </p>
     </Shell>
   )
 }

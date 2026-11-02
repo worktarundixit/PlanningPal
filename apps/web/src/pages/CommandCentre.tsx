@@ -51,7 +51,7 @@ function CountUp({ value, text }: { value: number; text: string }) {
 }
 
 export function CommandCentre() {
-  const [active, setActive] = useState('Overview')
+  const [active, setActive] = useState(() => (window.location.pathname.replace(/\/$/, '') === '/app/admin' ? 'Ingestion' : 'Overview'))
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Scheme | null>(null)
   const [saved, setSaved] = useState<string[]>([])

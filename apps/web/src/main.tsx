@@ -8,7 +8,7 @@ import { OnboardingPage } from './pages/Onboarding'
 import { Landing } from './pages/Landing'
 import './index.css'
 
-const known = new Set(['/', '/sign-in', '/sign-up', '/forgot-password', '/reset-password', '/accept-invite', '/onboarding', '/app'])
+const known = new Set(['/', '/sign-in', '/sign-up', '/forgot-password', '/reset-password', '/accept-invite', '/onboarding', '/app', '/app/admin'])
 
 function screenFor(path: string) {
   if (!known.has(path)) return <StatusScreen kind="missing" />
