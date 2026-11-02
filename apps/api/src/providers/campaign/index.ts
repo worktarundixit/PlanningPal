@@ -22,6 +22,17 @@ export function parseClientKeyHint(rawHint: string): { organisationId: string; h
   return { organisationId: rest.slice(0, sep), hint: rest.slice(sep + 1) }
 }
 
+export function resolveCampaignEncryptionSecret(): string {
+  return (
+    process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.TELEMETRY_SECRET ||
+    process.env.CRON_SECRET ||
+    process.env.DATABASE_URL ||
+    'planningpal-default-campaign-key-secret'
+  )
+}
+
 export async function loadCampaignEngine(
   organisationId?: string,
   overrideApiKey?: string,
@@ -30,7 +41,7 @@ export async function loadCampaignEngine(
   if (process.env.CAMPAIGN_PROVIDER === 'sandbox') return { mode: 'sandbox', provider: createSandboxProvider() }
   if (overrideApiKey?.trim()) return { mode: 'live', provider: createInstantlyProvider(overrideApiKey.trim()) }
   const rows = await db.select().from(campaignProviderSettings)
-  const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET
+  const secret = resolveCampaignEncryptionSecret()
   if (!rows.length || !secret) return { mode: 'sandbox', provider: createSandboxProvider() }
   const clientRow = organisationId
     ? rows.find((item) => parseClientKeyHint(item.hint)?.organisationId === organisationId)

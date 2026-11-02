@@ -6,11 +6,11 @@ import { db } from '../db/client.ts'
 import { campaignProviderMappings, campaignProviderSettings, crmLeads, intentEvents, organisations, planningApplications } from '../db/schema.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 import { maskSecret, openSecret, sealSecret } from '../providers/campaign/crypto.ts'
-import { CLIENT_KEY_PREFIX, formatClientKeyHint, loadCampaignEngine, parseClientKeyHint, readProviderEvent } from '../providers/campaign/index.ts'
+import { CLIENT_KEY_PREFIX, formatClientKeyHint, loadCampaignEngine, parseClientKeyHint, readProviderEvent, resolveCampaignEncryptionSecret } from '../providers/campaign/index.ts'
 import { ENGINE_UNAVAILABLE } from '../providers/campaign/types.ts'
 
 function encryptionSecret() {
-  const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET
+  const secret = resolveCampaignEncryptionSecret()
   if (!secret) throw new HttpError(503, 'Campaign key storage is not configured')
   return secret
 }

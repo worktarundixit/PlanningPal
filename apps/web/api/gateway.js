@@ -68762,11 +68762,14 @@ function parseClientKeyHint(rawHint) {
   if (sep <= 0) return null;
   return { organisationId: rest.slice(0, sep), hint: rest.slice(sep + 1) };
 }
+function resolveCampaignEncryptionSecret() {
+  return process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.TELEMETRY_SECRET || process.env.CRON_SECRET || process.env.DATABASE_URL || "planningpal-default-campaign-key-secret";
+}
 async function loadCampaignEngine(organisationId, overrideApiKey) {
   if (process.env.CAMPAIGN_PROVIDER === "sandbox") return { mode: "sandbox", provider: createSandboxProvider() };
   if (overrideApiKey?.trim()) return { mode: "live", provider: createInstantlyProvider(overrideApiKey.trim()) };
   const rows = await db.select().from(campaignProviderSettings);
-  const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET;
+  const secret = resolveCampaignEncryptionSecret();
   if (!rows.length || !secret) return { mode: "sandbox", provider: createSandboxProvider() };
   const clientRow = organisationId ? rows.find((item) => parseClientKeyHint(item.hint)?.organisationId === organisationId) : void 0;
   const agencyRow = rows.find((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX));
@@ -69021,7 +69024,7 @@ async function setStatus(request, reply, status) {
 // ../api/src/routes/campaignProvider.ts
 import { timingSafeEqual } from "node:crypto";
 function encryptionSecret() {
-  const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET;
+  const secret = resolveCampaignEncryptionSecret();
   if (!secret) throw new HttpError(503, "Campaign key storage is not configured");
   return secret;
 }
