@@ -20,10 +20,11 @@ export function Contacts({ data, embedded = false, crmCards = [], onCrmAction }:
     || (filter === 'Studio match' && contact.confidence === 'Studio match')
     || (filter === 'High intent' && (contact.crm?.opens ?? 0) >= 3)
   const crmFor = (contact: (typeof contacts)[number]): BoardCard => contact.crm ?? {
-    id: 1000 + contact.index,
+    id: `contact-${contact.index}`,
     person: contact.scheme.architect,
     firm: contact.scheme.practice,
     scheme: contact.scheme.title,
+    schemeId: contact.scheme.id,
     value: contact.scheme.value,
     opens: 0,
     stage: 0,
