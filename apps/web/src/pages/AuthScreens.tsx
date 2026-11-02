@@ -40,10 +40,8 @@ function safeRedirect(path: string) {
   }
 }
 
-/** Where a completed sign-in should land. Only the Super Admin console is accepted besides /app. */
+/** Where a completed sign-in should land. The temporary Admin login link is /sign-in?next=/app. */
 function destinationAfterSignIn() {
-  const next = new URLSearchParams(window.location.search).get('next')
-  if (next === '/app/admin') return '/app/admin'
   return '/app'
 }
 
@@ -106,10 +104,10 @@ export function SignInPage() {
         <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
       </div>
       {/* TEMPORARY Admin login. TODO remove later.
-          Same sign-in form and the same Supabase session. After login the browser goes to /app/admin.
-          Nothing is prefilled. The server still checks super_admin before ingestion data is returned. */}
+          Same sign-in form and the same Supabase session. After login the browser goes to /app.
+          Nothing is prefilled. */}
       <p className="mt-4 text-center text-[13px]">
-        <a href="/sign-in?next=/app/admin" className="font-semibold text-[#2563EB]">Admin login</a>
+        <a href="/sign-in?next=/app" className="font-semibold text-[#2563EB]">Admin login</a>
       </p>
     </Shell>
   )
