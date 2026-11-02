@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '../components/Icon'
 
 const previews = [
@@ -475,33 +475,39 @@ function PreviewScreen({ id }: { id: PreviewId }) {
   return <CommandScreen />
 }
 
-function ScaledScreen({ screenKey, children }: { screenKey: string; children: ReactNode }) {
+function ScaledScreen({ children }: { screenKey: string; children: ReactNode }) {
   const frame = useRef<HTMLDivElement>(null)
-  const sheet = useRef<HTMLDivElement>(null)
+  const measure = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
-  const [sheetHeight, setSheetHeight] = useState(1)
+  const [frameHeight, setFrameHeight] = useState(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const frameNode = frame.current
-    const sheetNode = sheet.current
-    if (!frameNode || !sheetNode) return
+    const measureNode = measure.current
+    if (!frameNode || !measureNode) return
     const fit = () => {
       const width = frameNode.clientWidth
       const nextScale = width > 0 ? width / SCREEN_WIDTH : 1
+      const crmHeight = measureNode.scrollHeight
       setScale(nextScale)
-      setSheetHeight(sheetNode.scrollHeight)
+      if (crmHeight > 0) setFrameHeight(crmHeight)
     }
     fit()
     const observer = new ResizeObserver(fit)
     observer.observe(frameNode)
-    observer.observe(sheetNode)
+    observer.observe(measureNode)
     return () => observer.disconnect()
-  }, [screenKey])
+  }, [])
+
+  const height = frameHeight > 0 ? frameHeight : 1
 
   return (
-    <div ref={frame} className="relative w-full bg-[#F4F7FB]" style={{ height: sheetHeight * scale }} data-preview-frame>
-      <div ref={sheet} data-preview-sheet className="absolute top-0 left-0 origin-top-left bg-[#F4F7FB]" style={{ width: SCREEN_WIDTH, transform: `scale(${scale})` }}>
+    <div ref={frame} className="relative w-full overflow-hidden bg-[#F4F7FB]" style={{ height: height * scale }} data-preview-frame>
+      <div data-preview-sheet className="absolute top-0 left-0 origin-top-left overflow-hidden bg-[#F4F7FB]" style={{ width: SCREEN_WIDTH, height, transform: `scale(${scale})` }}>
         {children}
+      </div>
+      <div ref={measure} aria-hidden="true" className="pointer-events-none absolute top-0 left-0" style={{ width: SCREEN_WIDTH, visibility: 'hidden' }} data-crm-measure>
+        <CrmScreen />
       </div>
     </div>
   )
