@@ -25,7 +25,7 @@ import {
 } from './db/schema.ts'
 
 /** Local demo password for every seeded account. Documented in the README. Not for production. */
-export const LOCAL_DEMO_PASSWORD = 'PlanningPal-local-1'
+export const LOCAL_DEMO_PASSWORD = 'Classic@123'
 
 async function createLogin(input: {
   email: string
@@ -244,7 +244,7 @@ async function main() {
     platformRole: 'super_admin',
   })
   const user = await createLogin({
-    email: 'james@micraftdesign.co.uk',
+    email: 'tarun@design.com',
     name: 'James Wilkins',
     jobTitle: 'Account owner',
     organisationId: client.id,

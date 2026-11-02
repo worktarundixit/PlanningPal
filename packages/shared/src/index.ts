@@ -277,6 +277,6 @@ export const DEMO_PROFILE: UserProfile = {
   name: 'James Wilkins',
   role: 'Account owner',
   company: 'Micraft Design Ltd',
-  email: 'james@micraftdesign.co.uk',
+  email: 'tarun@design.com',
   twoFactorEnabled: false,
 }

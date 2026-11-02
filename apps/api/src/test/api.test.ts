@@ -43,7 +43,7 @@ beforeAll(async () => {
     .values({ companyName: 'Micraft Design Ltd', tier: 'CATEGORY_2' })
     .returning()
   const actor = await createActor({
-    email: 'james@micraftdesign.co.uk',
+    email: 'tarun@design.com',
     name: 'James Wilkins',
     organisationId: client!.id,
     orgRole: 'owner',
@@ -333,7 +333,7 @@ describe('planningpal api', () => {
       method: 'PATCH',
       url: '/api/v1/me',
       headers: { cookie },
-      payload: { name: 'James Wilkins', role: 'Commercial director', company: 'Micraft Design Ltd', email: 'james@micraftdesign.co.uk' },
+      payload: { name: 'James Wilkins', role: 'Commercial director', company: 'Micraft Design Ltd', email: 'tarun@design.com' },
     })
     expect(response.statusCode).toBe(200)
     expect(response.json().role).toBe('Commercial director')

@@ -28,12 +28,12 @@ Sign-in uses Supabase Auth. With `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` 
 
 These passwords are for the seeded local database only. Do not reuse them anywhere else.
 
-Password for every account below: `PlanningPal-local-1`
+Password for every account below: `Classic@123`
 
 | Email | Access |
 | --- | --- |
 | priya@hitcaliber.co.uk | Super Admin (all organisations, ingestion admin) |
-| james@micraftdesign.co.uk | Owner of Micraft Design Ltd |
+| tarun@design.com | Owner of Micraft Design Ltd |
 | emily@micraftdesign.co.uk | Admin |
 | daniel@micraftdesign.co.uk | Member |
 | hannah@micraftdesign.co.uk | Viewer |
