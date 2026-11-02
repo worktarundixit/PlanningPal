@@ -24,7 +24,7 @@ function Shell({ title, lede, children }: { title: string; lede: string; childre
 
 const field = 'mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-3 text-sm outline-none focus:border-[#2563EB]'
 const label = 'mt-4 block text-[11px] font-semibold uppercase tracking-[0.12em] text-[#64748B]'
-const primary = 'mt-6 w-full rounded-lg bg-[#172554] py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-50'
+const primary = 'mt-6 w-full rounded-xl bg-[#172554] py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-50'
 
 function missingClient() {
   return 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'

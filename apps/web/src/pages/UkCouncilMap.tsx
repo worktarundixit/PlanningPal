@@ -11,6 +11,7 @@ export function UkCouncilMap() {
   const svgRef = useRef<SVGSVGElement>(null)
   const chipRef = useRef<HTMLDivElement>(null)
   const nameRef = useRef<HTMLSpanElement>(null)
+  const countRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -35,6 +36,8 @@ export function UkCouncilMap() {
         chip.style.top = `${y}%`
         const lpa = lpaByGss(area.code)
         name.textContent = lpa?.name ?? area.name
+        const count = 1 + Math.floor(Math.random() * 29)
+        if (countRef.current) countRef.current.textContent = count === 1 ? '1 new application' : `${count} new applications`
       }
       index = (index + 1) % paths.length
     }
@@ -49,7 +52,7 @@ export function UkCouncilMap() {
         <svg
           ref={svgRef}
           viewBox={`0 0 ${UK_MAP.width} ${UK_MAP.height}`}
-          className="mx-auto h-[min(64vh,640px)] w-auto max-w-full"
+          className="mx-auto h-[min(72vh,760px)] w-auto max-w-full"
           role="img"
           aria-label="Map of United Kingdom local authority districts. Areas light one by one, as a stand-in for planning applications arriving from each council."
         >
@@ -68,13 +71,11 @@ export function UkCouncilMap() {
         </svg>
         <div ref={chipRef} className="uk-chip" aria-hidden="true">
           <span ref={nameRef} className="block font-semibold text-[#172554]">United Kingdom</span>
-          <span className="mt-0.5 block text-[11px] font-medium text-[#52627A]">New application</span>
+          <span ref={countRef} className="mt-0.5 block text-[11px] font-medium text-[#52627A]">1 new application</span>
         </div>
       </div>
-      <figcaption className="mx-auto mt-3 max-w-md text-center text-[11px] leading-5 text-[#64748B]">
-        Each council lights as an application arrives. Illustrative sequence, not a live feed.
-        Local authority districts, May 2025, Office for National Statistics. Contains OS data © Crown copyright and database right 2025.
-        Contains National Statistics data © Crown copyright and database right 2025. Open Government Licence v3.0.
+      <figcaption className="mx-auto mt-3 max-w-md text-center text-[11px] font-normal leading-5 text-[#64748B]">
+        Illustrative sequence, not a live feed. Contains OS and ONS data © Crown copyright and database right. Open Government Licence v3.0.
       </figcaption>
     </figure>
   )
