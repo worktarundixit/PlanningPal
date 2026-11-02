@@ -245,7 +245,9 @@ export function CommandCentre() {
         <div className="flex h-full flex-col">
           <div className="flex h-[78px] items-center justify-between border-b border-white/8 px-6">
             <div className="min-w-0">
-              <img src="/brand/logo-horizontal-white.svg" alt="PlanningPal" className="h-[22px] w-auto" />
+              <a href="/" className="inline-flex" aria-label="PlanningPal home">
+                <img src="/brand/logo-horizontal-white.svg" alt="" className="h-[22px] w-auto" />
+              </a>
               <div>
                 <label className="mt-1.5 flex items-center gap-1 text-white/45">
                   <Icon name="map" size={10} />
