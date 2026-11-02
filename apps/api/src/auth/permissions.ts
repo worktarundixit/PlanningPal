@@ -102,6 +102,11 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/team\/invites\/[^/]+$/, permission: 'public' },
 
   { method: 'GET', pattern: /^\/api\/v1\/planning\/leads$/, permission: 'leads.read' },
+  { method: 'GET', pattern: /^\/api\/v1\/workspace-leads$/, permission: 'leads.read' },
+  { method: 'GET', pattern: /^\/api\/v1\/lead-fetches\/current$/, permission: 'leads.read' },
+  { method: 'POST', pattern: /^\/api\/v1\/lead-fetches$/, permission: 'saved.write' },
+  { method: 'POST', pattern: /^\/api\/v1\/lead-fetches\/[^/]+\/advance$/, permission: 'saved.write' },
+  { method: 'POST', pattern: /^\/api\/v1\/lead-fetches\/[^/]+\/retry$/, permission: 'saved.write' },
   { method: 'GET', pattern: /^\/api\/v1\/planning\/leads\/[^/]+$/, permission: 'leads.read' },
   { method: 'POST', pattern: /^\/api\/v1\/planning\/leads\/export$/, permission: 'leads.export' },
   { method: 'GET', pattern: /^\/api\/v1\/saved-schemes$/, permission: 'saved.read' },

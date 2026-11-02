@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Scheme, UserProfile } from '@planningpal/shared'
 import { EmptyState, LoadingBlock, SampleBars } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
+import { LeadFetchProgress, LeadWindowPicker } from '../components/LeadFetchPanel'
 import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
 import { supabase } from '../lib/auth-client'
 import { ClientOnboardingList, GettingStarted } from '../components/GettingStarted'
-import { api, type ClientOnboarding, type OnboardingState, type Overview } from '../lib/api'
+import { api, type ClientOnboarding, type LeadFetch, type OnboardingState, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { StatusScreen } from '../components/StatusScreen'
 import { WorkspaceView } from './WorkspaceView'
@@ -22,6 +23,32 @@ const nav = [
   { label: 'Ingestion', icon: 'download' as const },
   { label: 'Campaign provider', icon: 'briefcase' as const },
 ]
+
+function CountUp({ value, text }: { value: number; text: string }) {
+  const [shown, setShown] = useState(value)
+  const from = useRef(value)
+  useEffect(() => {
+    const start = from.current
+    const delta = value - start
+    if (!delta || Number.isNaN(value)) {
+      setShown(value)
+      from.current = value
+      return
+    }
+    const started = performance.now()
+    let frame = 0
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / 600)
+      setShown(Math.round(start + delta * progress))
+      if (progress < 1) frame = requestAnimationFrame(tick)
+      else from.current = value
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [value])
+  if (Number.isNaN(value)) return <>{text}</>
+  return <>{shown.toLocaleString()}</>
+}
 
 export function CommandCentre() {
   const [active, setActive] = useState('Overview')
@@ -47,6 +74,12 @@ export function CommandCentre() {
   const [orgRole, setOrgRole] = useState<string | null>(null)
   const [checklist, setChecklist] = useState<OnboardingState['checklist'] | null>(null)
   const [clients, setClients] = useState<ClientOnboarding[] | null>(null)
+  const [workspaceLeads, setWorkspaceLeads] = useState<Scheme[]>([])
+  const [leadJob, setLeadJob] = useState<LeadFetch | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [fetchBusy, setFetchBusy] = useState(false)
+  const [freshIds, setFreshIds] = useState<string[]>([])
+  const seenLeads = useRef(new Set<string>())
   const [sessionReady, setSessionReady] = useState(false)
   const can = (permission: string) => permissions.includes(permission)
 
@@ -84,9 +117,17 @@ export function CommandCentre() {
           const listed = await api.onboardingClients().catch(() => ({ data: [] as ClientOnboarding[] }))
           if (!cancelled) setClients(listed.data)
         }
-        const [leads, savedIds, overview] = await Promise.all([api.leads(), api.saved(), api.overview()])
+        const [leads, savedIds, overview, workspace, fetchState] = await Promise.all([
+          api.leads(),
+          api.saved(),
+          api.overview(),
+          api.workspaceLeads(),
+          api.currentLeadFetch(),
+        ])
         if (cancelled) return
         setData(leads.data)
+        setWorkspaceLeads(workspace.data)
+        setLeadJob(fetchState.job)
         setSaved(savedIds.ids)
         setOverview(overview)
         setLoadError('')
@@ -104,6 +145,38 @@ export function CommandCentre() {
   }, [])
 
   useEffect(() => {
+    if (!leadJob || leadJob.status !== 'running') return
+    let stop = false
+    const tick = async () => {
+      try {
+        const next = await api.advanceLeadFetch(leadJob.id)
+        if (stop) return
+        setLeadJob(next.job)
+        const rows = await api.workspaceLeads()
+        if (!stop) setWorkspaceLeads(rows.data)
+      } catch {
+        if (!stop) setLeadJob((current) => current ? { ...current, status: 'partial', message: 'Some councils could not be scanned.', suggest: 'retry' } : current)
+      }
+    }
+    const timer = window.setInterval(() => { void tick() }, 800)
+    void tick()
+    return () => { stop = true; window.clearInterval(timer) }
+  }, [leadJob?.id, leadJob?.status])
+
+  useEffect(() => {
+    const incoming = workspaceLeads.map((lead) => lead.id).filter((id) => !seenLeads.current.has(id))
+    if (!incoming.length) return
+    if (seenLeads.current.size === 0) {
+      incoming.forEach((id) => seenLeads.current.add(id))
+      return
+    }
+    incoming.forEach((id) => seenLeads.current.add(id))
+    setFreshIds(incoming)
+    const timer = window.setTimeout(() => setFreshIds([]), 700)
+    return () => window.clearTimeout(timer)
+  }, [workspaceLeads])
+
+  useEffect(() => {
     if (!accountOpen) return
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (accountMenuRef.current && !accountMenuRef.current.contains(event.target as Node)) setAccountOpen(false)
@@ -115,9 +188,32 @@ export function CommandCentre() {
   const filteredData = useMemo(() => region === 'All regions' ? data : data.filter((scheme) => scheme.region === region), [data, region])
   const regions = useMemo(() => [...new Set(data.map((scheme) => scheme.region).filter(Boolean))].sort() as string[], [data])
 
-  const visibleSchemes = useMemo(() => filteredData.filter((scheme) =>
+  const board = useMemo(() => region === 'All regions' ? workspaceLeads : workspaceLeads.filter((scheme) => scheme.region === region), [workspaceLeads, region])
+  const visibleSchemes = useMemo(() => board.filter((scheme) =>
     `${scheme.title} ${scheme.location} ${scheme.type}`.toLowerCase().includes(query.toLowerCase())
-  ).slice(0, 6), [filteredData, query])
+  ).slice(0, 6), [board, query])
+  const pipelineMillions = board.reduce((sum, scheme) => sum + (scheme.valueNum || 0), 0)
+  const pipelineBars = useMemo(() => {
+    const groups: number[] = []
+    for (let index = 0; index < board.length; index += 4) {
+      groups.push(board.slice(index, index + 4).reduce((sum, scheme) => sum + (scheme.valueNum || 0), 0))
+    }
+    const peak = Math.max(...groups, 1)
+    return groups.map((value) => Math.max(8, Math.round((value / peak) * 100)))
+  }, [board])
+
+  const beginFetch = async (days: number) => {
+    setFetchBusy(true)
+    try {
+      const started = await api.startLeadFetch(days)
+      setLeadJob(started.job)
+      setPickerOpen(false)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not start the fetch')
+    } finally {
+      setFetchBusy(false)
+    }
+  }
 
   const visibleNav = nav.filter((item) => {
     if (item.label === 'Ingestion') return can('ingest.admin')
@@ -282,8 +378,8 @@ export function CommandCentre() {
           {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {[
-              { label: 'Approved schemes', value: filteredData.length.toLocaleString(), meta: data.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: data.length ? 'active region' : 'no leads yet', icon: 'building' as const },
-              { label: 'Agent contacts found', value: filteredData.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: filteredData.length ? `${Math.round(filteredData.filter((scheme) => scheme.email || scheme.phone).length / filteredData.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
+              { label: 'Approved schemes', value: board.length.toLocaleString(), meta: board.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: board.length ? 'in your ICP' : 'no leads yet', icon: 'building' as const },
+              { label: 'Agent contacts found', value: board.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: board.length ? `${Math.round(board.filter((scheme) => scheme.email || scheme.phone).length / board.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
               { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? String(overview?.intent.length ?? 0), meta: overview?.metrics.highIntentNew ?? (overview?.intent.length ? 'live' : '—'), note: overview?.intent.length ? 'need attention' : 'none yet', icon: 'signal' as const },
               { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '0', meta: overview?.metrics.meetingsTarget ?? '—', note: 'of monthly target', icon: 'calendar' as const },
             ].map((stat) => (
@@ -292,7 +388,7 @@ export function CommandCentre() {
                   <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#74807E]">{stat.label}</span>
                   <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#F0F3EC] text-[#5E6A68]"><Icon name={stat.icon} size={15} /></span>
                 </div>
-                <div className="mt-4 font-display text-[27px] font-semibold leading-none tracking-[-0.03em] sm:text-[31px]">{stat.value}</div>
+                <div className="mt-4 font-display text-[27px] font-semibold leading-none tracking-[-0.03em] sm:text-[31px]"><CountUp value={Number(String(stat.value).replace(/,/g, '')) || 0} text={stat.value} /></div>
                 <div className="mt-3 flex items-center gap-1.5 text-[10px]">
                   <span className="font-bold text-[#367552]">{stat.meta}</span>
                   <span className="text-[#8B9593]">{stat.note}</span>
@@ -317,9 +413,11 @@ export function CommandCentre() {
                 </div>
               </div>
 
+              {leadJob?.status === 'running' && <LeadFetchProgress job={leadJob} />}
+              {leadJob?.status === 'partial' && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#FDE68A] bg-[#FFFBEB] px-5 py-3 text-[12px] text-[#92400E]"><span>{leadJob.message} {leadJob.found} applications are already listed.</span><button type="button" onClick={() => { void api.retryLeadFetch(leadJob.id).then((next) => setLeadJob(next.job)).catch(() => notify('Could not retry the remaining councils')) }} className="rounded-lg bg-[#172554] px-3 py-2 text-[12px] font-semibold text-white">Retry failed councils</button></div>}
               <div>
-                {data.length === 0 ? <div className="p-5"><EmptyState icon="search" title="No planning leads in this workspace yet." action={{ label: 'Run your first planning search', onClick: () => setActive('Planning search') }} /></div> : visibleSchemes.length === 0 ? <div className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match this search." action={{ label: 'Clear search', onClick: () => setQuery('') }} /></div> : visibleSchemes.map((scheme) => (
-                  <article key={scheme.id} className="group grid cursor-pointer gap-4 border-b border-[#ECEEEA] p-4 transition last:border-0 hover:bg-[#FAFBF8] sm:grid-cols-[42px_minmax(0,1fr)_auto] sm:p-5" onClick={() => setSelected(scheme)}>
+                {board.length === 0 && leadJob?.status === 'running' ? <p className="px-5 py-8 text-center text-[13px] text-[#52627A]">Scanning your councils. Leads will appear here as they are found.</p> : board.length === 0 && leadJob?.status === 'empty' ? <div className="p-5"><EmptyState icon="search" title={leadJob.message} action={leadJob.suggest === 'widen' ? { label: 'Widen to 7 days', onClick: () => { void beginFetch(7) } } : { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } }} secondary={leadJob.suggest === 'widen' ? { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } } : undefined} /></div> : board.length === 0 ? <div className="p-5"><EmptyState icon="search" title="No planning leads in this workspace yet." action={{ label: 'Get recent applications', onClick: () => setPickerOpen(true) }} /></div> : visibleSchemes.length === 0 ? <div className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match this search." action={{ label: 'Clear search', onClick: () => setQuery('') }} /></div> : visibleSchemes.map((scheme) => (
+                  <article key={scheme.id} className={`group grid cursor-pointer gap-4 border-b border-[#ECEEEA] p-4 transition last:border-0 hover:bg-[#FAFBF8] sm:grid-cols-[42px_minmax(0,1fr)_auto] sm:p-5 ${freshIds.includes(scheme.id) ? 'animate-slide-in' : ''}`} onClick={() => setSelected(scheme)}>
                     <div className={`grid h-10 w-10 place-items-center rounded-lg ${scheme.colour} text-[10px] font-bold text-[#172224]`}>{scheme.initials}</div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -347,12 +445,24 @@ export function CommandCentre() {
                 ))}
               </div>
               {visibleSchemes.length > 0 && <button onClick={() => setActive('Planning search')} className="flex w-full items-center justify-center gap-2 border-t border-[#E6E9E3] py-4 text-[10px] font-semibold text-[#4F5C5A] hover:bg-[#FAFBF8]">
-                View all {filteredData.length} applications <Icon name="arrow" size={13} />
+                View all {board.length} applications <Icon name="arrow" size={13} />
               </button>}
             </div>
 
             <div className="space-y-5">
-              {overview?.metrics.pipelineValue ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
+              {board.length > 0 ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
+                <div className="p-5">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
+                  <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{pipelineMillions >= 1 ? `£${pipelineMillions.toFixed(1)}m` : `£${Math.round(pipelineMillions * 1000)}k`}</div>
+                  <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
+                    {pipelineBars.map((height, index) => (
+                      <div key={index} className="flex h-full flex-1 items-end">
+                        <div className={`w-full rounded-t-sm transition-all duration-500 ${index === pipelineBars.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/20'}`} style={{ height: `${height}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div> : overview?.metrics.pipelineValue ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
                 <div className="p-5">
                   <div className="flex items-center justify-between">
                     <div>
@@ -435,6 +545,7 @@ export function CommandCentre() {
         )}
       </main>
 
+      {pickerOpen && <LeadWindowPicker busy={fetchBusy} onClose={() => setPickerOpen(false)} onConfirm={(days) => { void beginFetch(days) }} />}
       {mobileNav && <button className="fixed inset-0 z-30 bg-[#0F172A]/50 lg:hidden" onClick={() => setMobileNav(false)} aria-label="Close navigation overlay" />}
 
       {selected && (

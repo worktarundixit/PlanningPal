@@ -64,7 +64,7 @@ describe('row level security', () => {
       'saved_schemes', 'crm_leads', 'activities', 'campaigns', 'sending_domains', 'inbox_conversations',
       'inbox_messages', 'intent_events', 'persona_templates', 'meetings', 'invoices', 'invitations',
       'campaign_provider_settings', 'campaign_provider_mappings', 'campaign_engine_links',
-      'planning_applications', 'councils', 'decision_makers', 'pipeline_runs', 'raw_payloads',
+      'planning_applications', 'workspace_leads', 'lead_fetches', 'councils', 'decision_makers', 'pipeline_runs', 'raw_payloads',
       'ingest_cursors', 'mail_log', 'demo_requests', 'telemetry_events',
     ]
     const flags = await sqlClient<{ relname: string; relrowsecurity: boolean }[]>`

@@ -10,6 +10,7 @@ import { inboxRoutes } from './routes/inbox.ts'
 import { planningRoutes } from './routes/planning.ts'
 import { telemetryRoutes } from './routes/telemetry.ts'
 import { ingestRoutes } from './routes/ingest.ts'
+import { leadFetchRoutes } from './routes/leadFetches.ts'
 import { onboardingRoutes } from './routes/onboarding.ts'
 import { workspaceRoutes } from './routes/workspace.ts'
 import './types.ts'
@@ -132,6 +133,7 @@ export function buildApp(): FastifyInstance {
   app.register(workspaceRoutes)
   app.register(onboardingRoutes)
   app.register(ingestRoutes)
+  app.register(leadFetchRoutes)
   app.register(telemetryRoutes)
 
   return app
