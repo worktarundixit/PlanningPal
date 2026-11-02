@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { pipelineRuns } from '../db/schema.ts'
-import { presentRun, readRunCsv, startIngestRun } from '../ingest/run.ts'
+import { enrichMissingContacts, presentRun, readRunCsv, startIngestRun } from '../ingest/run.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 
 const runBody = z.object({
@@ -12,6 +12,11 @@ const runBody = z.object({
   authority: z.string().optional(),
   recent: z.number().int().positive().max(30).optional(),
   maxPages: z.number().int().positive().max(40).optional(),
+  source: z.enum(['planit', 'london-datahub', 'auto']).optional(),
+})
+
+const enrichBody = z.object({
+  limit: z.number().int().positive().max(100).optional(),
 })
 
 export async function ingestRoutes(app: FastifyInstance) {
@@ -45,6 +50,7 @@ export async function ingestRoutes(app: FastifyInstance) {
         authority: body.authority,
         recentDays: body.recent ?? (body.from || body.to ? undefined : 3),
         maxPages: body.maxPages,
+        source: body.source,
       })
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, started.id)).limit(1)
       return reply.code(202).send(run ? presentRun(run) : { id: started.id, status: 'running' })
@@ -52,5 +58,13 @@ export async function ingestRoutes(app: FastifyInstance) {
       if (error instanceof Error && 'statusCode' in error) throw new HttpError(409, error.message)
       throw error
     }
+  })
+
+  app.post('/api/v1/ingest/enrich', async (request, reply) => {
+    requireUser(request)
+    const body = parseBody(enrichBody, request.body ?? {}, reply)
+    if (!body) return
+    const result = await enrichMissingContacts({ limit: body.limit ?? 20 })
+    return reply.code(200).send(result)
   })
 }

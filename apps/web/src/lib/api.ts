@@ -166,8 +166,10 @@ export const api = {
   addCampaignLeads: (id: string, leads: { email: string; firstName?: string; lastName?: string; company?: string; title?: string }[]) =>
     request<{ added: number }>(`/api/v1/campaigns/${id}/leads`, { method: 'POST', body: JSON.stringify({ leads }) }),
   ingestRuns: () => request<{ data: IngestRun[] }>('/api/v1/ingest/runs'),
-  startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number }) =>
+  startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number; source?: 'planit' | 'london-datahub' | 'auto' }) =>
     request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),
+  enrichContacts: (limit = 25) =>
+    request<{ scanned: number; enriched: number }>('/api/v1/ingest/enrich', { method: 'POST', body: JSON.stringify({ limit }) }),
   onboarding: () => request<OnboardingState>('/api/v1/onboarding'),
   saveOnboarding: (body: Record<string, unknown>) => request<OnboardingState>('/api/v1/onboarding', { method: 'PUT', body: JSON.stringify(body) }),
   onboardingClients: () => request<{ data: ClientOnboarding[] }>('/api/v1/onboarding/clients'),

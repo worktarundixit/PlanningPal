@@ -20,6 +20,8 @@ export type PlanItRecord = {
   other_fields?: Record<string, unknown> | null
 }
 
+export type IngestSourceId = 'planit' | 'london-datahub' | 'auto'
+
 export type FetchQuery = {
   recentDays?: number
   from?: string
@@ -29,6 +31,7 @@ export type FetchQuery = {
   maxPages?: number
   /** Skip records whose last_different is at or before this ISO timestamp. */
   since?: string
+  source?: IngestSourceId
 }
 
 export type RawPage = {

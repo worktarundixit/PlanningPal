@@ -4,11 +4,16 @@ import { PageIntro } from '../components/PageIntro'
 import { api, type IngestRun, type LpaHealth } from '../lib/api'
 import { notify } from '../lib/notify'
 
+type IngestSourceOption = 'auto' | 'planit' | 'london-datahub'
+
 export function Ingestion() {
   const [runs, setRuns] = useState<IngestRun[]>([])
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [busy, setBusy] = useState(false)
+  const [enrichBusy, setEnrichBusy] = useState(false)
   const [authority, setAuthority] = useState('')
+  const [source, setSource] = useState<IngestSourceOption>('auto')
+  const [recentDays, setRecentDays] = useState(3)
   const [health, setHealth] = useState<LpaHealth | null>(null)
   const [healthError, setHealthError] = useState(false)
 
@@ -23,20 +28,73 @@ export function Ingestion() {
 
   const run = () => {
     setBusy(true)
-    void api.startIngest(authority.trim() ? { authority: authority.trim(), recent: 7, maxPages: 4 } : { recent: 3, maxPages: 8 })
-      .then(() => notify('PlanIt run started'))
+    const maxPages = authority.trim() ? 4 : 8
+    void api.startIngest({
+      source,
+      recent: recentDays,
+      maxPages,
+      ...(authority.trim() ? { authority: authority.trim() } : {}),
+    })
+      .then(() => notify(`Ingestion started (${source === 'auto' ? 'Auto hybrid' : source})`))
       .catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not start a run'))
       .finally(() => { setBusy(false); void load() })
+  }
+
+  const runEnrich = () => {
+    setEnrichBusy(true)
+    void api.enrichContacts(25)
+      .then((res) => notify(`Idox enrichment complete: ${res.enriched}/${res.scanned} schemes updated`))
+      .catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not enrich contacts'))
+      .finally(() => { setEnrichBusy(false) })
   }
 
   return (
     <>
       <PageIntro
         eyebrow="Planning data"
-        title="Ingestion"
-        description="PlanIt is fetched at 06:00, 13:00 and 20:00 Europe/London. Raw responses are kept, noise is filtered, and the Monday-format CSV is written for each run."
-        action={<button disabled={busy} onClick={run} className="rounded-lg bg-[#172554] px-4 py-2.5 text-[10px] font-semibold text-white disabled:opacity-50">{busy ? 'Starting…' : 'Run PlanIt now'}</button>}
+        title="Ingestion & Enrichment"
+        description="Hybrid ingestion paces PlanIt overnight (18:00–06:00, ≥60s interval, ≤300 req/day, compress=on) with automatic GLA London Datahub fallback and direct Idox portal contact enrichment."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              disabled={enrichBusy}
+              onClick={runEnrich}
+              className="rounded-lg border border-[#DCE4F0] bg-white px-3.5 py-2.5 text-[10px] font-semibold text-[#172554] hover:bg-[#F8FAFD] disabled:opacity-50"
+            >
+              {enrichBusy ? 'Enriching Idox…' : 'Enrich Idox Contacts'}
+            </button>
+            <button
+              disabled={busy}
+              onClick={run}
+              className="rounded-lg bg-[#172554] px-4 py-2.5 text-[10px] font-semibold text-white disabled:opacity-50"
+            >
+              {busy ? 'Starting…' : 'Run Ingestion Now'}
+            </button>
+          </div>
+        }
       />
+      <section className="mb-5 grid gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">Rate-limit guard</div>
+          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">60s + Retry-After</div>
+          <div className="mt-0.5 text-[11px] text-[#64748B]">Strict PlanIt pacing & compression</div>
+        </div>
+        <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#15803D]">Overnight cap</div>
+          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">≤ 300 req / night</div>
+          <div className="mt-0.5 text-[11px] text-[#64748B]">18:00–06:00 UTC (~100k apps/day max)</div>
+        </div>
+        <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">Daytime fallback</div>
+          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">GLA Datahub Live</div>
+          <div className="mt-0.5 text-[11px] text-[#64748B]">Zero rate limit when PlanIt throttles</div>
+        </div>
+        <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#172554]">Contact enrichment</div>
+          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">Direct Idox + GH Actions</div>
+          <div className="mt-0.5 text-[11px] text-[#64748B]">Resolves "See source" architects & clients</div>
+        </div>
+      </section>
       <section className="mb-5 rounded-xl border border-[#DCE4F0] bg-white p-5">
         <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#2563EB]">Feed health</div>
         <h3 className="mt-1 font-display text-[16px] font-semibold">PlanIt authority coverage</h3>
@@ -58,20 +116,45 @@ export function Ingestion() {
         )}
       </section>
       <form className="mb-5 flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); run() }}>
+        <label className="text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Data source
+          <select
+            value={source}
+            onChange={(event) => setSource(event.target.value as IngestSourceOption)}
+            className="mt-2 block w-64 rounded-lg border border-[#DCE4F0] bg-white px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal outline-none"
+          >
+            <option value="auto">Auto (PlanIt + GLA Datahub fallback)</option>
+            <option value="london-datahub">GLA London Datahub (Instant / No 429)</option>
+            <option value="planit">PlanIt only (Polite 60s pacing)</option>
+          </select>
+        </label>
+        <label className="text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Time window
+          <select
+            value={recentDays}
+            onChange={(event) => setRecentDays(Number(event.target.value))}
+            className="mt-2 block w-40 rounded-lg border border-[#DCE4F0] bg-white px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal outline-none"
+          >
+            <option value={1}>Last 24 hours</option>
+            <option value={3}>Last 3 days</option>
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+        </label>
         <label className="text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Authority, optional
           <input value={authority} onChange={(event) => setAuthority(event.target.value)} placeholder="Camden" className="mt-2 block w-56 rounded-lg border border-[#DCE4F0] px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal outline-none" />
         </label>
       </form>
       <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
-        <div className="grid grid-cols-[140px_90px_repeat(5,minmax(70px,.6fr))_120px] bg-[#F8FAFD] px-4 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]">
-          <span>Started</span><span>Status</span><span>Fetched</span><span>Filtered</span><span>New</span><span>Updated</span><span>Errors</span><span></span>
+        <div className="grid grid-cols-[140px_90px_80px_repeat(5,minmax(65px,.6fr))_120px] bg-[#F8FAFD] px-4 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]">
+          <span>Started</span><span>Source</span><span>Status</span><span>Fetched</span><span>Filtered</span><span>New</span><span>Updated</span><span>Errors</span><span></span>
         </div>
         {status === 'loading' && <div className="p-4"><LoadingBlock label="Loading ingestion runs" /></div>}
         {status === 'error' && <div className="p-4"><EmptyState kind="error" title="Ingestion runs could not be loaded." action={{ label: 'Try again', onClick: () => void load() }} /></div>}
-        {status === 'ready' && runs.length === 0 && <div className="p-4"><EmptyState icon="download" title="No ingestion runs yet." action={{ label: 'Run PlanIt now', onClick: run }} /></div>}
+        {status === 'ready' && runs.length === 0 && <div className="p-4"><EmptyState icon="download" title="No ingestion runs yet." action={{ label: 'Run Ingestion Now', onClick: run }} /></div>}
         {runs.map((run) => (
-          <div key={run.id} className="grid grid-cols-[140px_90px_repeat(5,minmax(70px,.6fr))_120px] items-center border-t border-[#EEF2F7] px-4 py-4 text-[10px]">
+          <div key={run.id} className="grid grid-cols-[140px_90px_80px_repeat(5,minmax(65px,.6fr))_120px] items-center border-t border-[#EEF2F7] px-4 py-4 text-[10px]">
             <span className="text-[#64748B]">{new Date(run.startedAt).toLocaleString('en-GB', { hour12: false })}</span>
+            <span className="font-medium text-[#52627A]">{run.source}</span>
             <span className={`font-semibold ${run.status === 'succeeded' ? 'text-[#15803D]' : run.status === 'failed' ? 'text-[#B91C1C]' : 'text-[#C2410C]'}`}>{run.status}</span>
             <span>{run.fetched}</span>
             <span>{run.filteredOut}</span>

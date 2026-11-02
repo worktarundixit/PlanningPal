@@ -9682,6 +9682,99 @@ function applicationReference(record) {
   return slash >= 0 ? name.slice(slash + 1) : name;
 }
 
+// ../../packages/ingest/src/planit.ts
+var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; mailto:alerts@aecpipeline.co.uk; +https://aecpipeline.co.uk)";
+var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+var sharedLastRequestAt = 0;
+function parseRetryAfterMs(header, fallbackMs, maxWaitMs = 65e3, nowMs = Date.now()) {
+  if (!header) return Math.min(fallbackMs, maxWaitMs);
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.max(1e3, Math.round(seconds * 1e3)), maxWaitMs);
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - nowMs;
+    return Math.min(Math.max(1e3, delta), maxWaitMs);
+  }
+  return Math.min(fallbackMs, maxWaitMs);
+}
+function planItUrl(query, index2) {
+  const params = new URLSearchParams();
+  params.set("pg_sz", String(query.pageSize ?? 300));
+  params.set("index", String(index2));
+  params.set("compress", "on");
+  if (query.from) params.set("start_date", query.from);
+  if (query.to) params.set("end_date", query.to);
+  if (!query.from && !query.to && query.recentDays) params.set("recent", String(query.recentDays));
+  if (query.authority) params.set("auth", query.authority);
+  return `${ENDPOINT}?${params.toString()}`;
+}
+async function getJson(url, fetchImpl, maxRetryWaitMs) {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {
+        headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
+      });
+      if (response.status === 429) {
+        const retryAfter = response.headers?.get?.("retry-after") ?? null;
+        const waitMs = parseRetryAfterMs(retryAfter, 15e3 * 2 ** attempt, maxRetryWaitMs);
+        const err = new Error(`PlanIt responded 429${retryAfter ? ` (Retry-After: ${retryAfter}s)` : ""}`);
+        err.retryAfterMs = waitMs;
+        err.status = 429;
+        throw err;
+      }
+      if (response.status >= 500) {
+        throw new Error(`PlanIt responded ${response.status}`);
+      }
+      if (!response.ok) throw new Error(`PlanIt responded ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      if (attempt === 3) break;
+      const customWait = error instanceof Error && "retryAfterMs" in error && typeof error.retryAfterMs === "number" ? error.retryAfterMs : Math.min(1e3 * 2 ** attempt, maxRetryWaitMs);
+      await sleep(customWait);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("PlanIt request failed");
+}
+function createPlanItSource(options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const envInterval = process.env.PLANIT_MIN_INTERVAL_MS ? Number(process.env.PLANIT_MIN_INTERVAL_MS) : void 0;
+  const interval2 = options.minIntervalMs ?? (Number.isFinite(envInterval) ? envInterval : 2e3);
+  const maxRetryWaitMs = options.maxRetryWaitMs ?? 3e4;
+  const now = options.now ?? Date.now;
+  return {
+    id: "planit",
+    async *fetchPages(query) {
+      const pageSize = query.pageSize ?? 300;
+      const maxPages = query.maxPages ?? 40;
+      let index2 = 0;
+      let total = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        const wait = interval2 - (now() - sharedLastRequestAt);
+        if (sharedLastRequestAt && wait > 0) await sleep(wait);
+        const url = planItUrl(query, index2);
+        sharedLastRequestAt = now();
+        const body = await getJson(url, fetchImpl, maxRetryWaitMs);
+        const records = Array.isArray(body.records) ? body.records : [];
+        total = typeof body.total === "number" ? body.total : total;
+        const raw = { url, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
+        yield raw;
+        if (records.length === 0) return;
+        index2 += records.length;
+        if (total !== null && index2 >= total) return;
+        if (records.length < pageSize) return;
+      }
+    }
+  };
+}
+
 // ../../packages/ingest/src/filter.ts
 var DEFAULT_FILTER = {
   dropTypes: ["Trees", "Conditions", "Advertising", "Telecoms", "Amendment"],
@@ -9859,6 +9952,181 @@ var AUTHORITIES = {
 function lookupAuthority(areaName) {
   const key = areaName.trim().toLowerCase().replace(/\s+/g, " ");
   return AUTHORITIES[key] ?? { name: areaName.trim(), county: "", region: "" };
+}
+
+// ../../packages/ingest/src/londonDatahub.ts
+var LONDON_DATAHUB_ENDPOINT = "https://planningdata.london.gov.uk/api-guest/applications/_search";
+var LONDON_ALLOW_HEADER = "be2rmRnt&";
+function parseUkDateToIso(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const slash = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slash?.[1] && slash[2] && slash[3]) {
+    const year = Number(slash[3]);
+    if (year < 2e3 || year > 2100) return null;
+    return `${slash[3]}-${slash[2]}-${slash[1]}`;
+  }
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso?.[1] && iso[2] && iso[3]) {
+    const year = Number(iso[1]);
+    if (year < 2e3 || year > 2100) return null;
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  }
+  return null;
+}
+function buildAddress(source) {
+  const parts = [
+    source.site_name ? String(source.site_name).trim() : "",
+    [source.site_number ? String(source.site_number).trim() : "", source.street_name ? String(source.street_name).trim() : ""].filter(Boolean).join(" "),
+    source.locality ? String(source.locality).trim() : "London",
+    source.postcode ? String(source.postcode).trim() : ""
+  ].filter(Boolean);
+  const deduped = [];
+  for (const part of parts) {
+    if (!deduped.some((existing) => existing.toLowerCase().includes(part.toLowerCase()))) {
+      deduped.push(part);
+    }
+  }
+  return deduped.join(", ");
+}
+function mapLondonDatahubHit(source) {
+  const area = (source.lpa_name || source.borough || "").replace(/^London Borough of\s+/i, "").trim();
+  const uid2 = (source.lpa_app_no || "").trim();
+  if (!area || !uid2) return null;
+  const details = source.application_details && typeof source.application_details === "object" ? source.application_details : {};
+  const applicant = String(
+    details.lead_developer_company_name ?? details.applicant_company ?? details.applicant_name ?? ""
+  ).trim();
+  const agentCompany = String(details.agent_company ?? details.agent_company_name ?? "").trim();
+  const agentName = String(details.agent_name ?? "").trim();
+  const agentAddress = String(details.agent_address ?? "").trim();
+  const startDate = parseUkDateToIso(source.valid_date) ?? (source.last_updated ? source.last_updated.slice(0, 10) : null);
+  const decidedDate = parseUkDateToIso(source.decision_date);
+  const state = (source.decision || source.status || "Undecided").trim();
+  const fullType = (source.application_type_full || source.application_type || "Full").trim();
+  const lat = typeof source.centroid?.lat === "number" ? source.centroid.lat : null;
+  const lon = typeof source.centroid?.lon === "number" ? source.centroid.lon : null;
+  return {
+    name: `${area}/${uid2}`,
+    uid: uid2,
+    reference: uid2,
+    area_name: area,
+    address: buildAddress(source),
+    postcode: source.postcode ? String(source.postcode).trim() : null,
+    description: source.description ?? "",
+    app_type: fullType,
+    app_size: String(details.development_scale ?? "Medium"),
+    app_state: state,
+    start_date: startDate,
+    decided_date: decidedDate,
+    url: source.url_planning_app ?? null,
+    link: source.url_planning_app ?? null,
+    last_different: source.last_updated ?? source.last_synced ?? null,
+    last_changed: source.last_updated ?? null,
+    location_x: lon,
+    location_y: lat,
+    other_fields: {
+      application_type: fullType,
+      date_validated: startDate ?? "",
+      applicant_name: applicant,
+      agent_name: agentName,
+      agent_company: agentCompany,
+      agent_address: agentAddress
+    }
+  };
+}
+function buildLondonDatahubBody(query, fromIndex) {
+  const size2 = Math.min(query.pageSize ?? 200, 500);
+  const must = [];
+  if (query.authority) {
+    must.push({
+      multi_match: {
+        query: query.authority,
+        fields: ["lpa_name", "borough"]
+      }
+    });
+  }
+  const now = Date.now();
+  const sinceIso = query.from ? `${query.from}T00:00:00Z` : query.recentDays ? new Date(now - query.recentDays * 864e5).toISOString() : new Date(now - 7 * 864e5).toISOString();
+  const range = { gte: sinceIso };
+  if (query.to) range.lte = `${query.to}T23:59:59Z`;
+  must.push({ range: { last_updated: range } });
+  return {
+    from: fromIndex,
+    size: size2,
+    sort: [{ last_updated: { order: "desc" } }],
+    query: { bool: { must } }
+  };
+}
+function createLondonDatahubSource(options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return {
+    id: "london-datahub",
+    async *fetchPages(query) {
+      const pageSize = Math.min(query.pageSize ?? 200, 500);
+      const maxPages = query.maxPages ?? 15;
+      let index2 = 0;
+      for (let page = 0; page < maxPages; page += 1) {
+        const payload = buildLondonDatahubBody(query, index2);
+        const response = await fetchImpl(LONDON_DATAHUB_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": PLANIT_USER_AGENT,
+            "X-API-AllowRequest": LONDON_ALLOW_HEADER
+          },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          throw new Error(`London Datahub responded ${response.status}`);
+        }
+        const json2 = await response.json();
+        const rawHits = json2.hits?.hits ?? [];
+        const total = typeof json2.hits?.total === "number" ? json2.hits.total : typeof json2.hits?.total?.value === "number" ? json2.hits.total.value : null;
+        const records = rawHits.map((hit) => hit._source ? mapLondonDatahubHit(hit._source) : null).filter((item) => item !== null);
+        const raw = {
+          url: `${LONDON_DATAHUB_ENDPOINT}?from=${index2}&size=${pageSize}`,
+          body: json2,
+          records,
+          total,
+          from: index2
+        };
+        yield raw;
+        if (rawHits.length === 0) return;
+        index2 += rawHits.length;
+        if (total !== null && index2 >= total) return;
+        if (rawHits.length < pageSize) return;
+      }
+    }
+  };
+}
+function createHybridPlanningSource(options = {}) {
+  const planit = createPlanItSource(options);
+  const london = createLondonDatahubSource({ fetchImpl: options.fetchImpl });
+  return {
+    id: "auto",
+    async *fetchPages(query) {
+      if (query.source === "london-datahub") {
+        yield* london.fetchPages(query);
+        return;
+      }
+      if (query.source === "planit") {
+        yield* planit.fetchPages(query);
+        return;
+      }
+      try {
+        yield* planit.fetchPages(query);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/429|rate|5\d\d|fetch/i.test(message)) {
+          yield* london.fetchPages(query);
+          return;
+        }
+        throw error;
+      }
+    }
+  };
 }
 
 // ../../packages/shared/src/data/uk-lpa-master.json
@@ -21609,72 +21877,6 @@ function mapPlanItRecord(record) {
   };
 }
 
-// ../../packages/ingest/src/planit.ts
-var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; +https://aecpipeline.co.uk)";
-var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function planItUrl(query, index2) {
-  const params = new URLSearchParams();
-  params.set("pg_sz", String(query.pageSize ?? 300));
-  params.set("index", String(index2));
-  if (query.from) params.set("start_date", query.from);
-  if (query.to) params.set("end_date", query.to);
-  if (!query.from && !query.to && query.recentDays) params.set("recent", String(query.recentDays));
-  if (query.authority) params.set("auth", query.authority);
-  return `${ENDPOINT}?${params.toString()}`;
-}
-async function getJson(url, fetchImpl) {
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const response = await fetchImpl(url, {
-        headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
-      });
-      if (response.status === 429 || response.status >= 500) {
-        throw new Error(`PlanIt responded ${response.status}`);
-      }
-      if (!response.ok) throw new Error(`PlanIt responded ${response.status}`);
-      return await response.json();
-    } catch (error) {
-      lastError = error;
-      if (attempt === 3) break;
-      await sleep(1e3 * 2 ** attempt);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("PlanIt request failed");
-}
-function createPlanItSource(options = {}) {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const interval2 = options.minIntervalMs ?? 2e3;
-  let lastRequest = 0;
-  return {
-    id: "planit",
-    async *fetchPages(query) {
-      const pageSize = query.pageSize ?? 300;
-      const maxPages = query.maxPages ?? 40;
-      let index2 = 0;
-      let total = null;
-      for (let page = 0; page < maxPages; page += 1) {
-        const wait = interval2 - (Date.now() - lastRequest);
-        if (lastRequest && wait > 0) await sleep(wait);
-        const url = planItUrl(query, index2);
-        lastRequest = Date.now();
-        const body = await getJson(url, fetchImpl);
-        const records = Array.isArray(body.records) ? body.records : [];
-        total = typeof body.total === "number" ? body.total : total;
-        const raw = { url, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
-        yield raw;
-        if (records.length === 0) return;
-        index2 += records.length;
-        if (total !== null && index2 >= total) return;
-        if (records.length < pageSize) return;
-      }
-    }
-  };
-}
-
 // ../../packages/ingest/src/transform.ts
 function transformRecords(records, config, since) {
   const kept = /* @__PURE__ */ new Map();
@@ -21784,6 +21986,11 @@ async function notifyNewLeads(inserted, titles) {
 
 // ../api/src/ingest/run.ts
 var dataRoot = process.env.VERCEL ? "/tmp/planningpal" : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../data");
+function sourceFor(sourceId) {
+  if (sourceId === "london-datahub") return createLondonDatahubSource();
+  if (sourceId === "auto") return createHybridPlanningSource();
+  return createPlanItSource();
+}
 function hashFor(authority, reference) {
   return createHash("sha256").update(`${councilCode(authority)}|${reference}`).digest("hex");
 }
@@ -21810,32 +22017,34 @@ async function startIngestRun(options) {
     error.statusCode = 409;
     throw error;
   }
-  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, "planit")).limit(1);
+  const sourceId = options.source ?? "planit";
+  const cursorKey = sourceId === "london-datahub" ? "london-datahub" : "planit";
+  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1);
   const since = options.since ?? (options.from || options.to || options.authority ? void 0 : cursor?.lastDifferent || void 0);
-  const query = { ...options, since };
+  const query = { ...options, source: sourceId, since };
   const [run] = await db.insert(pipelineRuns).values({
-    source: "planit",
+    source: sourceId,
     status: "running",
     cursorBefore: since ?? "",
     options: query
   }).returning();
   if (!run) throw new Error("Could not start pipeline run");
-  active = executeRun(run.id, query).finally(() => {
+  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => {
     active = null;
   });
   return { id: run.id, status: "running", done: active };
 }
-async function executeRun(runId, query) {
-  const source = createPlanItSource();
+async function executeRun(runId, sourceId, cursorKey, query) {
+  const source = sourceFor(sourceId);
   const rawRecords = [];
   try {
     let pageNumber = 0;
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records);
-      const rawDir = path.join(dataRoot, "raw", "planit", runId);
+      const rawDir = path.join(dataRoot, "raw", sourceId, runId);
       await mkdir(rawDir, { recursive: true });
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, "0")}.json`), JSON.stringify(page.body));
-      await db.insert(rawPayloads).values({ runId, source: "planit", requestUrl: page.url, body: page.body });
+      await db.insert(rawPayloads).values({ runId, source: sourceId, requestUrl: page.url, body: page.body });
       pageNumber += 1;
     }
     const transformed = transformRecords(rawRecords, void 0, query.since);
@@ -21845,7 +22054,7 @@ async function executeRun(runId, query) {
     const counts = await upsertRows(transformed.rows);
     await notifyNewLeads(counts.inserted, counts.titles);
     if (transformed.cursor) {
-      await db.insert(ingestCursors).values({ source: "planit", lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
+      await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
     }
     await db.update(pipelineRuns).set({
       status: "succeeded",
@@ -21998,24 +22207,38 @@ function isIngestSlot(date2 = /* @__PURE__ */ new Date()) {
 
 // ../api/src/ingest/batch.ts
 var CURSOR = "planit-authorities";
+function sleep2(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 async function ingestAuthorityBatch(options) {
   if (!options?.force && !isIngestSlot()) {
-    return { skipped: true, reason: "Outside the 06:00, 13:00 and 20:00 Europe/London windows" };
+    return { skipped: true, reason: "Outside the scheduled Europe/London windows" };
   }
   const catalogue = await db.select({ areas: localPlanningAuthorities.planitQueryAreas, status: localPlanningAuthorities.status, coverage: localPlanningAuthorities.coverage }).from(localPlanningAuthorities);
   const authorities = [...new Set(catalogue.filter((row) => row.status === "active" && row.coverage !== "unavailable").flatMap((row) => row.areas))].sort((a, b2) => a.localeCompare(b2));
   const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45e3);
+  const maxAuthorities = options?.maxAuthorities ?? Number(process.env.INGEST_BATCH_LIMIT || 1);
+  const intervalMs = options?.intervalMs ?? Number(process.env.PLANIT_MIN_INTERVAL_MS || 6e4);
   const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, CURSOR)).limit(1);
   let index2 = Number(cursor?.lastDifferent || 0);
   if (!Number.isFinite(index2) || index2 < 0 || index2 >= authorities.length) index2 = 0;
   const started = Date.now();
   const processed = [];
   const failed = [];
-  while (index2 < authorities.length && Date.now() - started < budgetMs) {
+  while (index2 < authorities.length && processed.length < maxAuthorities && Date.now() - started < budgetMs) {
     const authority = authorities[index2];
     if (!authority) break;
+    if (processed.length > 0 && intervalMs > 0) {
+      if (Date.now() - started + intervalMs >= budgetMs) break;
+      await sleep2(intervalMs);
+    }
     try {
-      const run = await startIngestRun({ authority, recentDays: options?.recentDays ?? 3, maxPages: 1 });
+      const run = await startIngestRun({
+        authority,
+        recentDays: options?.recentDays ?? 3,
+        maxPages: 1,
+        source: options?.source
+      });
       await run.done;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Authority scan failed";
