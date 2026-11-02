@@ -10,6 +10,7 @@ import { inboxRoutes } from './routes/inbox.ts'
 import { planningRoutes } from './routes/planning.ts'
 import { telemetryRoutes } from './routes/telemetry.ts'
 import { ingestRoutes } from './routes/ingest.ts'
+import { onboardingRoutes } from './routes/onboarding.ts'
 import { workspaceRoutes } from './routes/workspace.ts'
 import './types.ts'
 
@@ -23,7 +24,7 @@ function publicLimit(method: string, path: string) {
 }
 
 function workspaceOptional(method: string, path: string) {
-  if (path === '/api/v1/me' || path.startsWith('/api/v1/ingest/') || path.startsWith('/api/v1/campaign-provider')) return true
+  if (path === '/api/v1/me' || path.startsWith('/api/v1/onboarding') || path.startsWith('/api/v1/ingest/') || path.startsWith('/api/v1/campaign-provider')) return true
   if (method === 'GET' && (path === '/api/v1/planning/leads' || /^\/api\/v1\/planning\/leads\/[^/]+$/.test(path))) return true
   return false
 }
@@ -129,6 +130,7 @@ export function buildApp(): FastifyInstance {
   app.register(campaignRoutes)
   app.register(campaignProviderRoutes)
   app.register(workspaceRoutes)
+  app.register(onboardingRoutes)
   app.register(ingestRoutes)
   app.register(telemetryRoutes)
 

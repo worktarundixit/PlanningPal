@@ -1,0 +1,239 @@
+import { useEffect, useState, type FormEvent } from 'react'
+import { ALERT_FREQUENCIES, COVERAGE_TIERS, PROJECT_TYPES, RIBA_STAGES, UK_AREAS, VALUE_RANGES, councilsFor } from '@planningpal/shared'
+import { api, type OnboardingState } from '../lib/api'
+
+const field = 'mt-2 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-3 text-base outline-none focus:border-[#2563EB]'
+const label = 'block text-[11px] font-semibold uppercase tracking-[0.12em] text-[#64748B]'
+
+function Chip({ active, children, onClick }: { active: boolean; children: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className={`rounded-full border px-3 py-2 text-left text-[13px] font-semibold ${active ? 'border-[#2563EB] bg-[#EFF6FF] text-[#1D4ED8]' : 'border-[#E2E8F0] bg-white text-[#334155]'}`}>
+      {children}
+    </button>
+  )
+}
+
+function toggle(list: string[], value: string) {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value]
+}
+
+export function OnboardingPage() {
+  const [state, setState] = useState<OnboardingState | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [companyName, setCompanyName] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
+  const [name, setName] = useState('')
+  const [jobTitle, setJobTitle] = useState('')
+  const [coverage, setCoverage] = useState('regional')
+  const [regions, setRegions] = useState<string[]>([])
+  const [councils, setCouncils] = useState<string[]>([])
+  const [projectTypes, setProjectTypes] = useState<string[]>([])
+  const [valueRanges, setValueRanges] = useState<string[]>([])
+  const [ribaStages, setRibaStages] = useState<string[]>(['0', '1', '2'])
+  const [invites, setInvites] = useState([{ email: '', role: 'member' }])
+  const [alertsEnabled, setAlertsEnabled] = useState(true)
+  const [frequency, setFrequency] = useState('weekly')
+
+  const apply = (next: OnboardingState) => {
+    setState(next)
+    setCompanyName(next.draft.companyName)
+    setLogoUrl(next.draft.logoUrl)
+    setName(next.draft.name)
+    setJobTitle(next.draft.jobTitle)
+    setCoverage(next.draft.coverage || 'regional')
+    setRegions(next.draft.coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : next.draft.regions)
+    setCouncils(next.draft.councils)
+    setProjectTypes(next.draft.projectTypes)
+    setValueRanges(next.draft.valueRanges)
+    setRibaStages(next.draft.ribaStages.length ? next.draft.ribaStages : ['0', '1', '2'])
+    setAlertsEnabled(next.draft.alertsEnabled)
+    setFrequency(next.draft.frequency || 'weekly')
+    if (next.step === 'done') window.location.assign('/app')
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    void api.onboarding().then((next) => {
+      if (!cancelled) apply(next)
+    }).catch((reason: unknown) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : 'Setup could not be loaded')
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const save = async (body: Record<string, unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      apply(await api.saveOnboarding(body))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'That step could not be saved')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onLogo = (file: File | undefined) => {
+    if (!file) return
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setError('Use a PNG, JPEG, or WebP logo.')
+      return
+    }
+    if (file.size > 120_000) {
+      setError('Logo must be smaller than 120KB.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setLogoUrl(typeof reader.result === 'string' ? reader.result : '')
+    reader.readAsDataURL(file)
+  }
+
+  if (!state) {
+    return (
+      <div className="min-h-screen bg-[#F4F7FB] px-5 py-16">
+        {error ? <p className="mx-auto max-w-lg rounded-xl bg-white p-6 text-[14px] font-medium text-[#B91C1C]">{error}</p> : (
+          <>
+            <div className="mx-auto h-8 w-40 animate-pulse rounded-lg bg-[#E2E8F0]" />
+            <div className="mx-auto mt-6 h-64 max-w-lg animate-pulse rounded-2xl bg-white" />
+          </>
+        )}
+      </div>
+    )
+  }
+
+  const stepIndex = Math.max(0, state.steps.findIndex((step) => step.state === 'current'))
+  const current = state.steps[stepIndex]
+  const councilOptions = councilsFor(coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : regions)
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (state.step === 'workspace') void save({ action: 'save-workspace', companyName, logoUrl })
+    else if (state.step === 'profile') void save({ action: 'save-profile', name, jobTitle })
+    else if (state.step === 'icp') void save({ action: 'save-icp', coverage, regions: coverage === 'nationwide' ? UK_AREAS.map((area) => area.region) : regions, councils, projectTypes, valueRanges, ribaStages })
+    else if (state.step === 'team') void save({ action: 'save-team', invites: invites.filter((invite) => invite.email.trim()) })
+    else void save({ action: 'save-alerts', enabled: alertsEnabled, frequency })
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F4F7FB] text-[#172033]">
+      <header className="mx-auto flex max-w-3xl items-center justify-between px-4 py-5 sm:px-6">
+        <a href="/" aria-label="PlanningPal home"><img src="/brand/logo-horizontal.svg" alt="PlanningPal" className="h-8 w-auto" /></a>
+        <span className="text-[12px] font-semibold text-[#52627A]">Step {stepIndex + 1} of {state.steps.length}</span>
+      </header>
+      <main className="mx-auto grid max-w-3xl gap-4 px-4 pb-28 sm:px-6">
+        <ol className="flex gap-2 overflow-x-auto pb-1">
+          {state.steps.map((step, index) => (
+            <li key={step.id} className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-semibold ${step.state === 'current' ? 'bg-[#172554] text-white' : step.state === 'complete' ? 'bg-[#DBEAFE] text-[#1D4ED8]' : 'bg-white text-[#64748B]'}`}>
+              {index + 1}. {step.label}{step.optional ? ' · optional' : ''}
+            </li>
+          ))}
+        </ol>
+        <form onSubmit={submit} className="rounded-2xl border border-[#DCE4F0] bg-white p-5 shadow-[0_12px_40px_rgba(23,37,84,0.06)] sm:p-8">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#2563EB]">{state.invited ? 'Join your team' : 'Set up PlanningPal'}</div>
+          <h1 className="mt-2 font-display text-[28px] font-semibold tracking-[-0.03em]">{current?.label}</h1>
+          {state.step === 'workspace' && (
+            <div className="mt-6 grid gap-4">
+              <p className="text-[13px] leading-relaxed text-[#52627A]">Name the company this workspace belongs to. A logo is optional.</p>
+              <label className={label}>Company name<input required minLength={2} value={companyName} onChange={(event) => setCompanyName(event.target.value)} className={field} /></label>
+              <label className={label}>Logo<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onLogo(event.target.files?.[0])} className={`${field} text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#EFF6FF] file:px-3 file:py-1.5 file:text-[12px] file:font-semibold file:text-[#1D4ED8]`} /></label>
+              {logoUrl && <img src={logoUrl} alt="Workspace logo preview" className="h-16 w-16 rounded-lg border border-[#E2E8F0] object-contain" />}
+            </div>
+          )}
+          {state.step === 'profile' && (
+            <div className="mt-6 grid gap-4">
+              <p className="text-[13px] leading-relaxed text-[#52627A]">{state.invited ? `${state.draft.companyName || 'Your team'} already has a workspace. Add your name and role.` : 'This is how teammates see you in the command centre.'}</p>
+              <label className={label}>Your name<input required value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
+              <label className={label}>Job role<input required value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} placeholder="Estimator, director, bid manager" className={field} /></label>
+            </div>
+          )}
+          {state.step === 'icp' && (
+            <div className="mt-6 grid gap-5">
+              <p className="text-[13px] leading-relaxed text-[#52627A]">Match the feed to your pricing tier. Regional is one region, Multi County is two or three, Nationwide is every UK authority. Focus stays on RIBA stages 0–2.</p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {COVERAGE_TIERS.map((tier) => (
+                  <button key={tier.id} type="button" onClick={() => { setCoverage(tier.id); setRegions(tier.id === 'nationwide' ? UK_AREAS.map((area) => area.region) : []); setCouncils([]) }} className={`rounded-xl border p-3 text-left ${coverage === tier.id ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
+                    <div className="text-[13px] font-semibold">{tier.label}</div>
+                    <div className="mt-1 text-[12px] text-[#52627A]">{tier.monthlyPrice}/mo</div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-[#64748B]">{tier.detail}</div>
+                  </button>
+                ))}
+              </div>
+              {coverage !== 'nationwide' && (
+                <fieldset>
+                  <legend className={label}>Regions</legend>
+                  <div className="mt-2 flex flex-wrap gap-2">{UK_AREAS.map((area) => <Chip key={area.region} active={regions.includes(area.region)} onClick={() => { setRegions((currentRegions) => toggle(currentRegions, area.region)); setCouncils([]) }}>{area.region}</Chip>)}</div>
+                </fieldset>
+              )}
+              {coverage === 'nationwide' && <p className="rounded-lg bg-[#F8FAFC] px-3 py-2 text-[12px] text-[#52627A]">Nationwide includes all 376 planning authorities. Add councils below only if you want them called out.</p>}
+              <fieldset>
+                <legend className={label}>Councils in those regions</legend>
+                <div className="mt-2 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+                  {councilOptions.map((council) => <Chip key={council} active={councils.includes(council)} onClick={() => setCouncils((currentCouncils) => toggle(currentCouncils, council))}>{council}</Chip>)}
+                  {!councilOptions.length && <span className="text-[12px] text-[#64748B]">Choose a region to see its councils.</span>}
+                </div>
+              </fieldset>
+              <fieldset>
+                <legend className={label}>Project types</legend>
+                <div className="mt-2 flex flex-wrap gap-2">{PROJECT_TYPES.map((item) => <Chip key={item} active={projectTypes.includes(item)} onClick={() => setProjectTypes((currentTypes) => toggle(currentTypes, item))}>{item}</Chip>)}</div>
+              </fieldset>
+              <fieldset>
+                <legend className={label}>Value ranges</legend>
+                <div className="mt-2 flex flex-wrap gap-2">{VALUE_RANGES.map((item) => <Chip key={item} active={valueRanges.includes(item)} onClick={() => setValueRanges((currentRanges) => toggle(currentRanges, item))}>{item}</Chip>)}</div>
+              </fieldset>
+              <fieldset>
+                <legend className={label}>RIBA stages 0–2</legend>
+                <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                  {RIBA_STAGES.map((stage) => (
+                    <button key={stage.id} type="button" onClick={() => setRibaStages((currentStages) => toggle(currentStages, stage.id))} className={`rounded-xl border p-3 text-left ${ribaStages.includes(stage.id) ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'}`}>
+                      <div className="text-[13px] font-semibold">{stage.label}</div>
+                      <div className="mt-1 text-[11px] text-[#64748B]">{stage.detail}</div>
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            </div>
+          )}
+          {state.step === 'team' && (
+            <div className="mt-6 grid gap-3">
+              <p className="text-[13px] leading-relaxed text-[#52627A]">Invite colleagues as Admin, Member, or Viewer. Owner stays with you. PlanningPal emails the invite through Resend when it is configured.</p>
+              {invites.map((invite, index) => (
+                <div key={index} className="grid gap-2 sm:grid-cols-[1fr_140px]">
+                  <input type="email" value={invite.email} onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, email: event.target.value } : row))} placeholder="name@company.co.uk" className={field} />
+                  <select value={invite.role} onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, role: event.target.value } : row))} className={field}>
+                    <option value="admin">Admin</option>
+                    <option value="member">Member</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </div>
+              ))}
+              <button type="button" onClick={() => setInvites((rows) => [...rows, { email: '', role: 'member' }])} className="w-fit text-[13px] font-semibold text-[#2563EB]">Add another</button>
+            </div>
+          )}
+          {state.step === 'alerts' && (
+            <div className="mt-6 grid gap-4">
+              <p className="text-[13px] leading-relaxed text-[#52627A]">New planning leads can be emailed to you. Resend sends them when the workspace is connected. You can change this later.</p>
+              <label className="flex items-center gap-3 text-[14px] font-semibold"><input type="checkbox" checked={alertsEnabled} onChange={(event) => setAlertsEnabled(event.target.checked)} className="h-4 w-4" /> Email me new leads</label>
+              <div className="grid gap-2">
+                {ALERT_FREQUENCIES.map((item) => (
+                  <label key={item.id} className={`flex items-center gap-3 rounded-xl border px-3 py-3 text-[13px] font-semibold ${frequency === item.id ? 'border-[#2563EB] bg-[#EFF6FF]' : 'border-[#E2E8F0]'} ${alertsEnabled ? '' : 'opacity-50'}`}>
+                    <input type="radio" name="frequency" value={item.id} checked={frequency === item.id} disabled={!alertsEnabled} onChange={() => setFrequency(item.id)} />
+                    {item.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          {error && <p className="mt-4 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
+          <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+            <button type="button" disabled={busy || stepIndex === 0} onClick={() => void save({ action: 'back' })} className="rounded-lg border border-[#DCE4F0] px-4 py-3 text-[13px] font-semibold text-[#172554] disabled:opacity-40">Back</button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              {current?.optional && <button type="button" disabled={busy} onClick={() => void save({ action: 'skip' })} className="rounded-lg border border-[#DCE4F0] px-4 py-3 text-[13px] font-semibold text-[#52627A]">Skip for now</button>}
+              <button type="submit" disabled={busy} className="rounded-lg bg-[#172554] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] disabled:opacity-50">{state.step === 'alerts' ? 'Finish' : 'Continue'}</button>
+            </div>
+          </div>
+        </form>
+      </main>
+    </div>
+  )
+}

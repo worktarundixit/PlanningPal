@@ -23,6 +23,7 @@ export const PERMISSIONS = [
   'profile.write',
   'ingest.admin',
   'campaign.provider',
+  'onboarding.review',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -138,6 +139,10 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/sending-domains$/, permission: 'campaigns.read' },
   { method: 'POST', pattern: /^\/api\/v1\/sending-domains$/, permission: 'campaigns.write' },
   { method: 'DELETE', pattern: /^\/api\/v1\/sending-domains\/[^/]+$/, permission: 'campaigns.write' },
+
+  { method: 'GET', pattern: /^\/api\/v1\/onboarding\/clients$/, permission: 'onboarding.review' },
+  { method: 'GET', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.read' },
+  { method: 'PUT', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.write' },
 
   { method: 'GET', pattern: /^\/api\/v1\/me$/, permission: 'profile.read' },
   { method: 'PATCH', pattern: /^\/api\/v1\/me$/, permission: 'profile.write' },

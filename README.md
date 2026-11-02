@@ -101,7 +101,9 @@ select vault.create_secret('<same value as Vercel CRON_SECRET>', 'cron_secret', 
 
 Set that same value as `CRON_SECRET` in the Vercel project environment. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots.
 
-Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins of organisations that have signal alerts on, through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
+Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins who turned alerts on, at the frequency they chose (as they arrive, daily, or weekly), through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
+
+The first sign-in after creating an account opens onboarding: workspace, profile, ideal projects, teammate invites, then alert preferences. An invited person skips workspace creation and joins the workspace on the invite. Progress is stored on the user, so a closed tab resumes the same step. Optional steps can be skipped. The command centre then shows a getting-started checklist until it is dismissed. A Super Admin can see each client's step from the command centre.
 
 PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
 

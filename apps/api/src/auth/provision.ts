@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm'
 import { randomBytes } from 'node:crypto'
 import { db } from '../db/client.ts'
-import { invitations, organisations, teamMembers, users } from '../db/schema.ts'
+import { invitations, teamMembers, users } from '../db/schema.ts'
 import { parseOrgRole, type OrgRole } from './permissions.ts'
 
 type CreatedAuthUser = {
@@ -30,9 +30,14 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
         authUserId: created.id,
         email,
         name: created.name || email,
-        jobTitle: invite.role,
+        jobTitle: '',
         orgRole: parseOrgRole(invite.role) ?? 'member',
         apiToken: randomBytes(24).toString('hex'),
+        onboardingStep: 'profile',
+        onboardingSkipped: ['workspace'],
+        checklistDismissed: false,
+        alertsEnabled: true,
+        alertFrequency: 'weekly',
       })
       .returning()
     await db.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invite.id))
@@ -43,33 +48,23 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
     return member?.id
   }
 
-  const [organisation] = await db
-    .insert(organisations)
-    .values({ companyName: `${created.name || 'New'} organisation` })
-    .returning()
-  if (!organisation) return undefined
   const role: OrgRole = 'owner'
   const [member] = await db
     .insert(users)
     .values({
-      organisationId: organisation.id,
+      organisationId: null,
       authUserId: created.id,
       email,
       name: created.name || email,
-      jobTitle: 'Account owner',
+      jobTitle: '',
       orgRole: role,
       apiToken: randomBytes(24).toString('hex'),
+      onboardingStep: 'workspace',
+      onboardingSkipped: [],
+      checklistDismissed: false,
+      alertsEnabled: true,
+      alertFrequency: 'weekly',
     })
     .returning()
-  if (member) {
-    await db.insert(teamMembers).values({
-      organisationId: organisation.id,
-      userId: member.id,
-      name: member.name,
-      email,
-      role,
-      status: 'Active',
-    })
-  }
   return member?.id
 }

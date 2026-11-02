@@ -12,6 +12,9 @@ export async function createActor(input: {
   orgRole: OrgRole
   platformRole?: 'super_admin' | null
   jobTitle?: string
+  onboardingStep?: string
+  onboardingSkipped?: string[]
+  checklistDismissed?: boolean
 }) {
   const email = input.email.toLowerCase()
   const [user] = await db
@@ -25,6 +28,9 @@ export async function createActor(input: {
       platformRole: input.platformRole ?? null,
       jobTitle: input.jobTitle ?? input.orgRole,
       apiToken: randomUUID(),
+      ...(input.onboardingStep ? { onboardingStep: input.onboardingStep } : {}),
+      ...(input.onboardingSkipped ? { onboardingSkipped: input.onboardingSkipped } : {}),
+      ...(input.checklistDismissed === undefined ? {} : { checklistDismissed: input.checklistDismissed }),
     })
     .returning()
   if (!user) throw new Error(`Could not create ${email}`)
