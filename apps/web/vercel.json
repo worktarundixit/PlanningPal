@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }],
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/gateway?__pp_path=/api/:path*" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -22,6 +25,6 @@
   "regions": ["lhr1"],
   "functions": {
     "api/cron/ingest.js": { "maxDuration": 60, "regions": ["lhr1"] },
-    "api/[...path].js": { "maxDuration": 30, "regions": ["lhr1"] }
+    "api/gateway.js": { "maxDuration": 30, "regions": ["lhr1"] }
   }
 }

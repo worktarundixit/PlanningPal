@@ -22010,18 +22010,25 @@ async function ingestAuthorityBatch(options) {
   if (!Number.isFinite(index2) || index2 < 0 || index2 >= authorities.length) index2 = 0;
   const started = Date.now();
   const processed = [];
+  const failed = [];
   while (index2 < authorities.length && Date.now() - started < budgetMs) {
     const authority = authorities[index2];
     if (!authority) break;
-    const run = await startIngestRun({ authority, recentDays: options?.recentDays ?? 3, maxPages: 1 });
-    await run.done;
+    try {
+      const run = await startIngestRun({ authority, recentDays: options?.recentDays ?? 3, maxPages: 1 });
+      await run.done;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Authority scan failed";
+      failed.push({ authority, error: message });
+      break;
+    }
     processed.push(authority);
     index2 += 1;
     const next = index2 >= authorities.length ? "0" : String(index2);
     await db.insert(ingestCursors).values({ source: CURSOR, lastDifferent: next, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: next, updatedAt: /* @__PURE__ */ new Date() } });
   }
   if (index2 >= authorities.length) index2 = 0;
-  return { skipped: false, processed, nextIndex: index2, total: authorities.length };
+  return { ok: failed.length === 0, skipped: false, processed, failed, nextIndex: index2, total: authorities.length };
 }
 
 // server/cron-ingest.ts
@@ -22033,8 +22040,14 @@ async function handler(request, response) {
     response.status(401).json({ error: "Unauthorized" });
     return;
   }
-  const result = await ingestAuthorityBatch({ force: true });
-  response.status(200).json(result);
+  try {
+    const result = await ingestAuthorityBatch({ force: true });
+    response.status(200).json(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Ingest failed";
+    console.error(`PlanIt ingest failed: ${message}`);
+    response.status(200).json({ ok: false, skipped: false, processed: [], failed: [{ authority: "", error: message }] });
+  }
 }
 export {
   handler as default

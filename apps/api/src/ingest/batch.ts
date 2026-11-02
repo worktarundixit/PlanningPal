@@ -24,11 +24,19 @@ export async function ingestAuthorityBatch(options?: { budgetMs?: number; recent
   if (!Number.isFinite(index) || index < 0 || index >= authorities.length) index = 0
   const started = Date.now()
   const processed: string[] = []
+  const failed: { authority: string; error: string }[] = []
   while (index < authorities.length && Date.now() - started < budgetMs) {
     const authority = authorities[index]
     if (!authority) break
-    const run = await startIngestRun({ authority, recentDays: options?.recentDays ?? 3, maxPages: 1 })
-    await run.done
+    try {
+      const run = await startIngestRun({ authority, recentDays: options?.recentDays ?? 3, maxPages: 1 })
+      await run.done
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Authority scan failed'
+      failed.push({ authority, error: message })
+      // Leave the cursor on this authority so the next slot retries it.
+      break
+    }
     processed.push(authority)
     index += 1
     const next = index >= authorities.length ? '0' : String(index)
@@ -38,5 +46,5 @@ export async function ingestAuthorityBatch(options?: { budgetMs?: number; recent
       .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: next, updatedAt: new Date() } })
   }
   if (index >= authorities.length) index = 0
-  return { skipped: false, processed, nextIndex: index, total: authorities.length }
+  return { ok: failed.length === 0, skipped: false, processed, failed, nextIndex: index, total: authorities.length }
 }

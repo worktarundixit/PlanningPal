@@ -17,6 +17,12 @@ export default async function handler(request: CronRequest, response: CronRespon
     response.status(401).json({ error: 'Unauthorized' })
     return
   }
-  const result = await ingestAuthorityBatch({ force: true })
-  response.status(200).json(result)
+  try {
+    const result = await ingestAuthorityBatch({ force: true })
+    response.status(200).json(result)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Ingest failed'
+    console.error(`PlanIt ingest failed: ${message}`)
+    response.status(200).json({ ok: false, skipped: false, processed: [], failed: [{ authority: '', error: message }] })
+  }
 }

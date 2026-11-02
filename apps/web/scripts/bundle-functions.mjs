@@ -24,7 +24,7 @@ const shared = {
 await build({
   ...shared,
   entryPoints: [path.join(root, 'server/catch-all.ts')],
-  outfile: path.join(root, 'api/[...path].js'),
+  outfile: path.join(root, 'api/gateway.js'),
 })
 
 await build({

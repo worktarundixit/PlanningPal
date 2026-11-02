@@ -83111,7 +83111,22 @@ async function app() {
   }
   return ready;
 }
+function restorePath(request) {
+  const raw = request.url || "/";
+  let url2;
+  try {
+    url2 = new URL(raw, "http://localhost");
+  } catch {
+    return;
+  }
+  const original = url2.searchParams.get("__pp_path");
+  if (!original || !original.startsWith("/api/") || original.includes("..")) return;
+  url2.searchParams.delete("__pp_path");
+  const query = url2.searchParams.toString();
+  request.url = query ? `${original}?${query}` : original;
+}
 async function handler(request, response) {
+  restorePath(request);
   const instance = await app();
   instance.server.emit("request", request, response);
 }
