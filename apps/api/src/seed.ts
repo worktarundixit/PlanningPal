@@ -25,7 +25,7 @@ import {
 } from './db/schema.ts'
 
 /** Local demo password for every seeded account. Documented in the README. Not for production. */
-export const LOCAL_DEMO_PASSWORD = 'Classic@123'
+export const LOCAL_DEMO_PASSWORD = 'classic123'
 
 async function createLogin(input: {
   email: string

@@ -28,7 +28,7 @@ Sign-in uses Supabase Auth. With `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` 
 
 These passwords are for the seeded local database only. Do not reuse them anywhere else.
 
-Password for every account below: `Classic@123`
+Password for every account below: `classic123`
 
 | Email | Access |
 | --- | --- |
