@@ -6,6 +6,7 @@ import { exportSchemes, notify } from '../lib/notify'
 import { supabase } from '../lib/auth-client'
 import { api, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
+import { StatusScreen } from '../components/StatusScreen'
 import { WorkspaceView } from './WorkspaceView'
 
 const nav = [
@@ -17,6 +18,7 @@ const nav = [
   { label: 'Reports & delivery', icon: 'chart' as const },
   { label: 'Workspace setup', icon: 'settings' as const },
   { label: 'Ingestion', icon: 'download' as const },
+  { label: 'Campaign provider', icon: 'briefcase' as const },
 ]
 
 const activity = [
@@ -86,10 +88,7 @@ export function CommandCentre() {
       .catch((error: unknown) => {
         if (cancelled) return
         const message = error instanceof Error ? error.message : 'The planning API is unavailable'
-        if (message === 'Unauthorized') {
-          window.location.assign('/sign-in')
-          return
-        }
+        if (message.includes('session has expired')) return
         setLoadError(message)
         setSessionReady(true)
       })
@@ -113,11 +112,26 @@ export function CommandCentre() {
     `${scheme.title} ${scheme.location} ${scheme.type}`.toLowerCase().includes(query.toLowerCase())
   ).slice(0, 6), [filteredData, query])
 
-  const visibleNav = nav.filter((item) => item.label !== 'Ingestion' || can('ingest.admin'))
+  const visibleNav = nav.filter((item) => {
+    if (item.label === 'Ingestion') return can('ingest.admin')
+    if (item.label === 'Campaign provider') return can('campaign.provider')
+    return true
+  })
 
   if (!sessionReady) {
-    return <div className="grid min-h-screen place-items-center bg-[#F4F7FB] text-[13px] text-[#52627A]">Checking your session…</div>
+    return (
+      <div className="min-h-screen bg-[#F4F7FB] p-8">
+        <div className="mx-auto grid max-w-5xl gap-4">
+          <div className="h-8 w-48 animate-pulse rounded-lg bg-[#E2E8F0]" />
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{[0, 1, 2, 3].map((item) => <div key={item} className="h-28 animate-pulse rounded-xl bg-white" />)}</div>
+          <div className="h-80 animate-pulse rounded-xl bg-white" />
+        </div>
+      </div>
+    )
   }
+
+  if (loadError.includes('do not have access')) return <StatusScreen kind="forbidden" />
+  if (loadError.includes('offline')) return <StatusScreen kind="offline" onRetry={() => window.location.reload()} />
 
   return (
     <div className="min-h-screen bg-[#F4F7FB] text-[#172033]">

@@ -7,6 +7,7 @@ export function SavedSchemes({ data, onOpen, onSave, saved, canSave = true }: { 
   return (
     <>
       <PageIntro eyebrow="Shortlist" title="Saved schemes" description="Monitor priority applications and keep the most relevant ECI opportunities close to hand." />
+      {data.length === 0 && <div className="rounded-xl border border-dashed border-[#DCE4F0] bg-white px-5 py-10 text-center text-[12px] text-[#64748B]">No schemes are loaded yet.</div>}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map((scheme) => (
           <article key={scheme.id} className="rounded-xl border border-[#DCE4F0] bg-white p-5 transition hover:-translate-y-0.5 hover:shadow-lg">

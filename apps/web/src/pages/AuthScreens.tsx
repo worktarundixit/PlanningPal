@@ -30,7 +30,18 @@ function missingClient() {
   return 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
 }
 
+function safeRedirect(path: string) {
+  try {
+    const url = new URL(path, window.location.origin)
+    if (url.origin !== window.location.origin) return `${window.location.origin}/app`
+    return url.href
+  } catch {
+    return `${window.location.origin}/app`
+  }
+}
+
 export function SignInPage() {
+  const expired = new URLSearchParams(window.location.search).get('expired') === '1'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -55,7 +66,7 @@ export function SignInPage() {
     setError('')
     const { error: linkError } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/app` },
+      options: { emailRedirectTo: safeRedirect('/app') },
     })
     setBusy(false)
     if (linkError) return setError(linkError.message)
@@ -64,6 +75,7 @@ export function SignInPage() {
 
   return (
     <Shell title="Sign in" lede="Open the command centre for your organisation.">
+      {expired && <p className="mb-4 rounded-lg bg-[#FFF7ED] px-3 py-2 text-[13px] text-[#9A3412]">Your session has expired. Sign in again.</p>}
       <form onSubmit={submit}>
         <label className={label}>Email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
         <label className={label}>Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
@@ -77,7 +89,7 @@ export function SignInPage() {
         className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
         onClick={() => {
           if (!supabase) return setError(missingClient())
-          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/app` } })
+          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: safeRedirect('/app') } })
         }}
       >
         Continue with Google
@@ -106,7 +118,7 @@ export function SignUpPage() {
     const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: `${window.location.origin}/app` },
+      options: { data: { name }, emailRedirectTo: safeRedirect('/app') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)
@@ -140,7 +152,7 @@ export function ForgotPasswordPage() {
     setBusy(true)
     setError('')
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
+      redirectTo: safeRedirect('/reset-password'),
     })
     setBusy(false)
     if (resetError) return setError(resetError.message)
@@ -220,7 +232,7 @@ export function AcceptInvitePage() {
     const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: `${window.location.origin}/app` },
+      options: { data: { name }, emailRedirectTo: safeRedirect('/app') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)

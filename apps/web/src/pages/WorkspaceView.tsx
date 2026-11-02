@@ -1,6 +1,7 @@
 import type { Scheme, UserProfile } from '@planningpal/shared'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { Billing } from './Billing'
+import { CampaignProviderPage } from './CampaignProviderPage'
 import { Campaigns } from './Campaigns'
 import { DeliveryHub } from './DeliveryHub'
 import { Ingestion } from './Ingestion'
@@ -46,6 +47,7 @@ export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread,
       {active === 'Reports & delivery' && (reportsTab === 'reports' ? <Reports /> : <DeliveryHub />)}
       {active === 'Workspace setup' && (setupTab === 'persona' ? <PersonaStudio canWrite={canSettings} /> : setupTab === 'settings' ? <Settings canWrite={canSettings} /> : <TeamManagement canManage={canTeam} actorRole={actorRole} />)}
       {active === 'Ingestion' && <Ingestion />}
+      {active === 'Campaign provider' && <CampaignProviderPage />}
       {active === 'Billing' && <Billing />}
       {active === 'My profile' && <ProfilePage profile={profile} onSave={setProfile} />}
     </div>

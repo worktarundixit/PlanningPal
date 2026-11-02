@@ -223,6 +223,27 @@ export const activities = pgTable('activities', {
   createdAt: timestamps.createdAt,
 })
 
+export const campaignProviderSettings = pgTable('campaign_provider_settings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ciphertext: text('ciphertext').notNull(),
+  hint: text('hint').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const campaignProviderMappings = pgTable('campaign_provider_mappings', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  organisationId: uuid('organisation_id')
+    .notNull()
+    .unique()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  providerWorkspaceId: text('provider_workspace_id').notNull(),
+  status: text('status').notNull().default('mapped'),
+  trackingDomain: text('tracking_domain').notNull().default(''),
+  webhookStatus: text('webhook_status').notNull().default('unknown'),
+  health: text('health').notNull().default('unknown'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const campaigns = pgTable('campaigns', {
   id: uuid('id').primaryKey().defaultRandom(),
   organisationId: uuid('organisation_id')
@@ -238,6 +259,16 @@ export const campaigns = pgTable('campaigns', {
   meetings: integer('meetings').notNull().default(0),
   createdAt: timestamps.createdAt,
   updatedAt: timestamps.updatedAt,
+})
+
+export const campaignEngineLinks = pgTable('campaign_engine_links', {
+  campaignId: uuid('campaign_id')
+    .primaryKey()
+    .references(() => campaigns.id, { onDelete: 'cascade' }),
+  organisationId: uuid('organisation_id')
+    .notNull()
+    .references(() => organisations.id, { onDelete: 'cascade' }),
+  providerCampaignId: text('provider_campaign_id').notNull(),
 })
 
 export const sendingDomains = pgTable('sending_domains', {

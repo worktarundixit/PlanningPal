@@ -17,6 +17,11 @@
     "db:seed": "pnpm --filter @planningpal/api db:seed",
     "setup": "pnpm install && pnpm db:migrate && pnpm db:seed"
   },
+  "pnpm": {
+    "overrides": {
+      "tinypool": "2.2.0"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.28.0",
     "eslint": "^9.28.0",
