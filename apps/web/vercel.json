@@ -18,9 +18,10 @@
       ]
     }
   ],
+  "buildCommand": "pnpm run build",
   "regions": ["lhr1"],
   "functions": {
-    "api/cron/ingest.ts": { "maxDuration": 60 },
-    "api/[...path].ts": { "maxDuration": 30 }
+    "api/cron/ingest.js": { "maxDuration": 60, "regions": ["lhr1"] },
+    "api/[...path].js": { "maxDuration": 30, "regions": ["lhr1"] }
   }
 }

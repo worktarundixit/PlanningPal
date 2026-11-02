@@ -17,7 +17,7 @@ import { workspaceRoutes } from './routes/workspace.ts'
 import './types.ts'
 
 function publicLimit(method: string, path: string) {
-  if (path === '/api/v1/health' || path === '/api/v1/auth/providers') return 120
+  if (path === '/api/health' || path === '/api/v1/health' || path === '/api/v1/auth/providers') return 120
   if (method === 'POST' && path === '/api/v1/demo-requests') return 10
   if (method === 'POST' && path === '/api/v1/telemetry/event') return 60
   if (method === 'POST' && path.startsWith('/api/v1/campaign-events/')) return 120
@@ -115,10 +115,9 @@ export function buildApp(): FastifyInstance {
     return reply.code(statusCode).send({ error: message })
   })
 
-  app.get('/api/v1/health', { config: { public: true } }, async () => ({
-    ok: true,
-    service: 'planningpal-api',
-  }))
+  const health = { ok: true, service: 'planningpal-api' }
+  app.get('/api/health', { config: { public: true } }, async () => health)
+  app.get('/api/v1/health', { config: { public: true } }, async () => health)
 
   app.get('/api/v1/auth/providers', { config: { public: true } }, async () => ({
     email: true,

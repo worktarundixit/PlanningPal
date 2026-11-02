@@ -1,4 +1,4 @@
-import { ingestAuthorityBatch } from '../../../api/src/ingest/batch.ts'
+import { ingestAuthorityBatch } from '../../api/src/ingest/batch.ts'
 
 type CronRequest = { headers?: { authorization?: string | string[] } }
 type CronResponse = { status: (code: number) => { json: (body: unknown) => void } }

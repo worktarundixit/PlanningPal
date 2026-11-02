@@ -95,6 +95,7 @@ type RouteRule = {
  * ship without a permission. Unmatched /api/v1 routes are denied.
  */
 const ROUTE_RULES: RouteRule[] = [
+  { method: 'GET', pattern: /^\/api\/health$/, permission: 'public' },
   { method: 'GET', pattern: /^\/api\/v1\/health$/, permission: 'public' },
   { method: 'GET', pattern: /^\/api\/v1\/auth\/providers$/, permission: 'public' },
   { method: 'POST', pattern: /^\/api\/v1\/demo-requests$/, permission: 'public' },

@@ -11,7 +11,7 @@ async function app() {
   return ready
 }
 
-/** Serves the existing Fastify API as one Vercel Function under /api. */
+/** Serves the Fastify API as one Vercel Function under /api. */
 export default async function handler(request: IncomingMessage, response: ServerResponse) {
   const instance = await app()
   instance.server.emit('request', request, response)

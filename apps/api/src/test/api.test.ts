@@ -225,6 +225,9 @@ describe('planningpal api', () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/health' })
     expect(response.statusCode).toBe(200)
     expect(response.json()).toMatchObject({ ok: true })
+    const alias = await app.inject({ method: 'GET', url: '/api/health' })
+    expect(alias.statusCode).toBe(200)
+    expect(alias.json()).toMatchObject({ ok: true, service: 'planningpal-api' })
   })
 
   it('lists and filters planning leads', async () => {
