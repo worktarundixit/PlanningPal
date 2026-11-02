@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { PUBLIC_EMAIL, PUBLIC_PHONE_DISPLAY, PUBLIC_PHONE_TEL } from '@planningpal/shared'
 import { api } from '../lib/api'
 import { UkCouncilMap } from './UkCouncilMap'
@@ -144,79 +144,217 @@ const previews = [
 
 type PreviewId = (typeof previews)[number]['id']
 
+const SCREEN_WIDTH = 1040
+const SCREEN_HEIGHT = 640
+
+function ScreenBar({ title, action }: { title: string; action?: string }) {
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-[#E4E4E7] bg-white px-5">
+      <h3 className="text-[18px] font-semibold tracking-[-0.02em] text-[#18181B]">{title}</h3>
+      {action ? <span className="rounded-lg bg-[#18181B] px-3 py-2 text-[12px] font-semibold text-white">{action}</span> : null}
+    </header>
+  )
+}
+
 function PreviewScreen({ id }: { id: PreviewId }) {
   if (id === 'search') {
+    const rows = [
+      ['26/1315/F', '2 dwellings', 'Greenwich', '£250k–£450k', 'Submitted'],
+      ['2025/2160', 'Hotel extension', 'Wandsworth', '£1.5m–£2.0m', 'Submitted'],
+      ['2025/1982', '9 flats + commercial', 'Wandsworth', '£1.5m–£2.0m', 'Submitted'],
+      ['2024/04482/PA', '2 semi-detached', 'Birmingham', '£400k–£600k', 'Approved'],
+      ['26/01247/PPP', '2 dwelling plots', 'Moray', '£200k–£300k', 'Submitted'],
+    ]
     return (
-      <div>
-        <div className="text-[13px] font-semibold text-[#18181B]">Planning search</div>
-        <div className="mt-3 rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-2 text-[12px] text-[#71717A]">Search councils, refs, or architects</div>
-        {['26/1315/F · Greenwich · 2 dwellings', '2025/2160 · Wandsworth · Hotel extension', '26/01247/PPP · Moray · 2 plots'].map((row) => (
-          <div key={row} className="mt-2 rounded-lg border border-[#E4E4E7] px-3 py-3 text-[12px] text-[#3F3F46]">{row}</div>
-        ))}
+      <div className="flex h-full flex-col bg-[#F4F7FB]">
+        <ScreenBar title="Planning search" action="Export" />
+        <div className="flex min-h-0 flex-1 flex-col p-4">
+          <div className="flex gap-2">
+            {['All categories', 'All counties', 'All stages', '£100k+'].map((filter) => (
+              <span key={filter} className="rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 text-[12px] text-[#3F3F46]">{filter}</span>
+            ))}
+            <span className="ml-auto rounded-lg border border-[#E4E4E7] bg-white px-3 py-2 text-[12px] text-[#71717A]">Search schemes</span>
+          </div>
+          <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[#E4E4E7] bg-white">
+            <div className="grid grid-cols-[140px_1.4fr_1fr_140px_120px] border-b border-[#E4E4E7] bg-[#FAFAFA] px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#71717A]">
+              <span>Reference</span><span>Project</span><span>Council</span><span>Value</span><span>Stage</span>
+            </div>
+            {rows.map((row) => (
+              <div key={row[0]} className="grid flex-1 grid-cols-[140px_1.4fr_1fr_140px_120px] items-center border-b border-[#F4F4F5] px-4 text-[13px] text-[#3F3F46] last:border-0">
+                {row.map((cell) => <span key={cell}>{cell}</span>)}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-[12px] text-[#71717A]">
+            <span>5 schemes</span><span>Page 1 of 1</span>
+          </div>
+        </div>
       </div>
     )
   }
   if (id === 'saved') {
+    const cards = [
+      ['1A Dunvegan Road', 'Eltham, SE9', '£250k–£450k', 'Submitted', '86%'],
+      ['Pelican Hotel', 'Tooting, SW17', '£1.5m–£2.0m', 'Submitted', '91%'],
+      ['Scenery House', 'Wandsworth', '£1.5m–£2.0m', 'Approved', '78%'],
+    ]
     return (
-      <div>
-        <div className="text-[13px] font-semibold text-[#18181B]">Saved schemes</div>
-        {['1A Dunvegan Road · Est. £250k to £450k', 'Pelican Hotel · Est. £1.5m to £2.0m'].map((row) => (
-          <div key={row} className="mt-2 flex items-center justify-between rounded-lg border border-[#E4E4E7] px-3 py-3 text-[12px] text-[#3F3F46]">
-            <span>{row}</span><span className="font-semibold text-[#18181B]">Saved</span>
-          </div>
-        ))}
+      <div className="flex h-full flex-col bg-[#F4F7FB]">
+        <ScreenBar title="Saved schemes" />
+        <div className="grid min-h-0 flex-1 grid-cols-3 gap-4 p-4">
+          {cards.map(([title, place, value, stage, match]) => (
+            <article key={title} className="flex flex-col rounded-xl border border-[#E4E4E7] bg-white p-4">
+              <div className="text-[15px] font-semibold text-[#18181B]">{title}</div>
+              <div className="mt-1 text-[12px] text-[#71717A]">{place}</div>
+              <div className="mt-4 grid flex-1 grid-cols-3 content-center border-y border-[#E4E4E7] py-3 text-[12px]">
+                <div><b className="block text-[13px]">{value}</b><span className="text-[#A1A1AA]">Value</span></div>
+                <div><b className="block text-[13px]">{stage}</b><span className="text-[#A1A1AA]">Stage</span></div>
+                <div><b className="block text-[13px]">{match}</b><span className="text-[#A1A1AA]">Match</span></div>
+              </div>
+              <div className="mt-4 rounded-lg bg-[#F4F4F5] py-2.5 text-center text-[12px] font-semibold text-[#18181B]">Open dossier</div>
+            </article>
+          ))}
+        </div>
       </div>
     )
   }
   if (id === 'campaigns') {
     return (
-      <div>
-        <div className="text-[13px] font-semibold text-[#18181B]">Campaigns</div>
-        {[['London architects', 'Running'], ['South East developers', 'Draft']].map(([name, status]) => (
-          <div key={name} className="mt-2 flex items-center justify-between rounded-lg border border-[#E4E4E7] px-3 py-3 text-[12px]">
-            <span className="font-medium text-[#18181B]">{name}</span><span className="text-[#52525B]">{status}</span>
+      <div className="flex h-full flex-col bg-[#F4F7FB]">
+        <ScreenBar title="Campaigns" action="New campaign" />
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-4">
+          <div className="grid grid-cols-3 gap-3">
+            {[['2', 'Campaigns'], ['6', 'Inboxes'], ['30', 'Daily limit']].map(([value, label]) => (
+              <div key={label} className="rounded-xl border border-[#E4E4E7] bg-white px-4 py-4">
+                <div className="text-[22px] font-bold text-[#18181B]">{value}</div>
+                <div className="text-[12px] text-[#71717A]">{label}</div>
+              </div>
+            ))}
           </div>
-        ))}
+          <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-[#E4E4E7] bg-white">
+            {[['London architects', 'Running', '1,240 sent'], ['South East developers', 'Draft', 'Not started']].map(([name, status, detail]) => (
+              <div key={name} className="flex flex-1 items-center justify-between border-b border-[#F4F4F5] px-4 last:border-0">
+                <div>
+                  <div className="text-[14px] font-semibold text-[#18181B]">{name}</div>
+                  <div className="text-[12px] text-[#71717A]">{detail}</div>
+                </div>
+                <span className="text-[12px] font-semibold text-[#3F3F46]">{status}</span>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-[#E4E4E7] bg-white px-4 py-3 text-[13px] text-[#3F3F46]">Sending domains · 2 healthy · warmup on</div>
+        </div>
       </div>
     )
   }
   if (id === 'crm') {
+    const columns = [
+      ['New lead queue', 'Dunvegan Road'],
+      ['Active outreach', 'Pelican Hotel'],
+      ['High intent', 'Scenery House'],
+      ['Warm engagement', 'Midland Drive'],
+      ['Tender opportunity', 'West Park House'],
+    ]
     return (
-      <div>
-        <div className="text-[13px] font-semibold text-[#18181B]">CRM</div>
-        {['Opened 4 times · capability deck', 'Replied · discovery call', 'Clicked · case study'].map((row) => (
-          <div key={row} className="mt-2 rounded-lg border border-[#E4E4E7] px-3 py-3 text-[12px] text-[#3F3F46]">{row}</div>
-        ))}
+      <div className="flex h-full flex-col bg-[#F4F7FB]">
+        <ScreenBar title="CRM" />
+        <div className="flex gap-2 border-b border-[#E4E4E7] bg-white px-4 py-2 text-[12px] font-semibold text-[#71717A]">
+          <span className="rounded-lg bg-[#18181B] px-3 py-1.5 text-white">Pipeline</span>
+          <span className="px-3 py-1.5">Intent</span>
+          <span className="px-3 py-1.5">Inbox</span>
+          <span className="px-3 py-1.5">Tasks</span>
+          <span className="px-3 py-1.5">Contacts</span>
+        </div>
+        <div className="grid min-h-0 flex-1 grid-cols-5 gap-3 p-4">
+          {columns.map(([title, card]) => (
+            <div key={title} className="flex flex-col rounded-xl border border-[#E4E4E7] bg-white p-3">
+              <div className="text-[12px] font-semibold text-[#18181B]">{title}</div>
+              <div className="mt-3 flex-1 rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] p-3 text-[12px] text-[#3F3F46]">{card}</div>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
+  const leads = [
+    ['2 dwellings, Eltham', 'Greenwich', '£350k', 'Submitted'],
+    ['Hotel extension', 'Wandsworth', '£1.7m', 'Submitted'],
+  ]
   return (
-    <div>
-      <div className="text-[13px] font-semibold text-[#18181B]">Command centre</div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        {[['4,820', 'Sends'], ['312', 'Repeat opens'], ['19', 'Opportunities'], ['£3.85M', 'Pipeline']].map(([value, label]) => (
-          <div key={label} className="rounded-lg border border-[#E4E4E7] bg-[#FAFAFA] px-3 py-3">
-            <div className="text-[16px] font-bold text-[#18181B]">{value}</div>
-            <div className="text-[11px] text-[#71717A]">{label}</div>
+    <div className="flex h-full flex-col bg-[#F4F7FB]">
+      <ScreenBar title="Command centre" action="Export leads" />
+      <div className="flex min-h-0 flex-1 flex-col p-4">
+        <div className="grid grid-cols-4 gap-3">
+          {[['12', 'Approved schemes'], ['9', 'Agent contacts'], ['4', 'High-intent signals'], ['2', 'Meetings booked']].map(([value, label]) => (
+            <div key={label} className="rounded-xl border border-[#E4E4E7] bg-white px-4 py-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#71717A]">{label}</div>
+              <div className="mt-2 text-[26px] font-bold leading-none text-[#18181B]">{value}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 grid min-h-0 flex-1 grid-cols-[1.4fr_0.8fr] gap-3">
+          <div className="flex flex-col rounded-xl border border-[#E4E4E7] bg-white">
+            <div className="border-b border-[#E4E4E7] px-4 py-3 text-[14px] font-semibold">Priority planning leads</div>
+            {leads.map(([title, council, value, stage]) => (
+              <div key={title} className="flex flex-1 items-center justify-between border-b border-[#F4F4F5] px-4 last:border-0">
+                <div>
+                  <div className="text-[14px] font-semibold text-[#18181B]">{title}</div>
+                  <div className="text-[12px] text-[#71717A]">{council} · {stage}</div>
+                </div>
+                <div className="text-[14px] font-semibold">{value}</div>
+              </div>
+            ))}
+            <div className="border-t border-[#E4E4E7] py-3 text-center text-[12px] font-semibold text-[#3F3F46]">View all applications</div>
           </div>
-        ))}
+          <div className="flex flex-col gap-3">
+            <div className="rounded-xl border border-[#E4E4E7] bg-white p-4">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#71717A]">Pipeline value</div>
+              <div className="mt-1 text-[28px] font-bold text-[#18181B]">£3.85m</div>
+              <div className="mt-3 flex h-16 items-end gap-2">
+                {[40, 55, 48, 70, 86].map((height) => <div key={height} className="flex-1 rounded-t bg-[#D4D4D8]" style={{ height: `${height}%` }} />)}
+              </div>
+            </div>
+            <div className="flex flex-1 flex-col rounded-xl border border-[#E4E4E7] bg-white p-4">
+              <div className="text-[14px] font-semibold">Live intent</div>
+              <div className="mt-3 text-[13px] text-[#3F3F46]">Capability deck opened · 3m</div>
+              <div className="mt-2 text-[13px] text-[#3F3F46]">Discovery reply · 1h</div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div className="mt-3 rounded-lg border border-[#E4E4E7] px-3 py-3 text-[12px] text-[#3F3F46]">Priority lead · Westminster scheme · architect invited a tender conversation</div>
+    </div>
+  )
+}
+
+function ScaledScreen({ children }: { children: ReactNode }) {
+  const frame = useRef<HTMLDivElement>(null)
+  const [scale, setScale] = useState(1)
+  useEffect(() => {
+    const node = frame.current
+    if (!node) return
+    const fit = () => setScale(node.clientWidth / SCREEN_WIDTH)
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  return (
+    <div ref={frame} className="relative w-full overflow-hidden bg-white" style={{ aspectRatio: `${SCREEN_WIDTH} / ${SCREEN_HEIGHT}` }}>
+      <div className="absolute top-0 left-0 origin-top-left bg-[#F4F7FB]" style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT, transform: `scale(${scale})` }}>
+        {children}
+      </div>
     </div>
   )
 }
 
 function CommandPreview() {
   const [active, setActive] = useState<PreviewId>('command')
-  const current = previews.find((item) => item.id === active) ?? previews[0]
   return (
     <div className="mt-10 grid items-start gap-4 lg:grid-cols-[1.35fr_0.85fr]">
-      <div className="rounded-xl border border-[#3F3F46] bg-white p-4 text-[#18181B] sm:p-5">
-        <div className="mb-4 flex items-center justify-between border-b border-[#E4E4E7] pb-3">
-          <span className="text-[12px] font-semibold tracking-[-0.02em]">PlanningPal</span>
-          <span className="text-[11px] font-medium text-[#71717A]">{current.title}</span>
-        </div>
-        <PreviewScreen id={active} />
+      <div className="overflow-hidden rounded-xl border border-[#3F3F46] bg-white">
+        <ScaledScreen>
+          <PreviewScreen id={active} />
+        </ScaledScreen>
       </div>
       <div className="grid gap-2" role="tablist" aria-label="Product screens">
         {previews.map((item) => {
