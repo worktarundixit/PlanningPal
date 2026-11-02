@@ -9,6 +9,7 @@ export { ENGINE_UNAVAILABLE, CampaignEngineError, readProviderEvent }
 export type { CampaignEvent, CampaignProvider, ProviderLead, WebhookHealth } from './types.ts'
 
 export async function loadCampaignEngine(): Promise<{ mode: 'sandbox' | 'live'; provider: CampaignProvider }> {
+  // No saved agency key stays in sandbox. CAMPAIGN_PROVIDER=sandbox stays there even after a key is saved.
   if (process.env.CAMPAIGN_PROVIDER === 'sandbox') return { mode: 'sandbox', provider: createSandboxProvider() }
   const [row] = await db.select().from(campaignProviderSettings).limit(1)
   const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET

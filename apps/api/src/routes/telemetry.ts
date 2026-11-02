@@ -1,10 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { stageById } from '@planningpal/shared'
 import { and, eq, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { isProductionAuth } from '../auth/mode.ts'
 import { db } from '../db/client.ts'
 import { activities, crmLeads, decisionMakers, planningApplications, telemetryEvents } from '../db/schema.ts'
-import { stageById } from '@planningpal/shared'
 
 const payloadSchema = z.object({
   event_id: z.string().min(1),
@@ -32,14 +33,13 @@ function signaturesMatch(secret: string, raw: string, header: string | undefined
 export async function telemetryRoutes(app: FastifyInstance) {
   app.post('/api/v1/telemetry/event', { config: { public: true } }, async (request, reply) => {
     const secret = process.env.TELEMETRY_SECRET
-    const authMode = process.env.AUTH_MODE ?? 'dev'
     if (secret) {
       const header = request.headers['x-aec-signature']
       const signature = Array.isArray(header) ? header[0] : header
       if (!signaturesMatch(secret, request.rawBody ?? '', signature)) {
         return reply.code(401).send({ error: 'Invalid telemetry signature' })
       }
-    } else if (authMode === 'strict') {
+    } else if (isProductionAuth()) {
       return reply.code(401).send({ error: 'Telemetry secret is not configured' })
     }
 

@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../app.ts'
 import { db } from '../db/client.ts'
 import { runMigrations } from '../db/migrate.ts'
-import { organisations, users } from '../db/schema.ts'
+import { campaignProviderSettings, organisations, users } from '../db/schema.ts'
+import { loadCampaignEngine } from '../providers/campaign/index.ts'
 import { inArray } from 'drizzle-orm'
 import { createActor } from './actors.ts'
 
@@ -106,5 +107,15 @@ describe('campaign provider', () => {
     const intent = overview.json().intent as { action: string }[]
     expect(intent.some((event) => event.action === 'replied to your campaign')).toBe(true)
     expect(JSON.stringify(overview.json()).toLowerCase()).not.toContain('instantly')
+  })
+
+  it('stays in sandbox when no agency key is saved', async () => {
+    const previous = process.env.CAMPAIGN_PROVIDER
+    delete process.env.CAMPAIGN_PROVIDER
+    await db.delete(campaignProviderSettings)
+    const engine = await loadCampaignEngine()
+    expect(engine.mode).toBe('sandbox')
+    if (previous === undefined) delete process.env.CAMPAIGN_PROVIDER
+    else process.env.CAMPAIGN_PROVIDER = previous
   })
 })

@@ -20,19 +20,24 @@ export interface Mailer {
 }
 
 async function sendWithResend(message: MailMessage) {
-  const key = process.env.RESEND_API_KEY
+  const key = process.env.RESEND_API_KEY?.trim()
   if (!key) return false
-  const from = process.env.RESEND_FROM || 'PlanningPal <alerts@planningpal.co.uk>'
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text }),
-  })
-  if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(`Resend rejected the message (${response.status}): ${detail.slice(0, 200)}`)
+  try {
+    const from = process.env.RESEND_FROM || 'PlanningPal <alerts@planningpal.co.uk>'
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text }),
+    })
+    if (!response.ok) {
+      console.error(`Resend rejected a ${message.kind} message (${response.status})`)
+      return false
+    }
+    return true
+  } catch (error) {
+    console.error(`Resend could not send a ${message.kind} message`, error instanceof Error ? error.message : 'request failed')
+    return false
   }
-  return true
 }
 
 export function createMailer(): Mailer {
