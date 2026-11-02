@@ -337,7 +337,7 @@ export function Landing() {
         <section id="command" className="pp-reveal bg-[#18181B] text-white">
           <div className="mx-auto max-w-[1100px] px-5 py-20">
             <div className="mx-auto max-w-3xl text-center">
-              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#A1A1AA]">Proprietary client platform & portal</p>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#15803D]">Proprietary client platform & portal</p>
               <h2 className="mt-4 text-[34px] font-bold tracking-[-0.03em] sm:text-[44px]">Your Dedicated Contractor Command Centre & Telemetry Hub</h2>
               <p className="mt-4 text-[15px] font-normal leading-7 text-[#D4D4D8]">Every client receives full access to our custom web application. Track live campaign send volumes, review weekly scraped planning applications, define custom persona filters, and manage warm inbound replies inside your personal Intent CRM.</p>
             </div>
