@@ -366,10 +366,10 @@ function CommandPreview() {
               role="tab"
               aria-selected={selected}
               onClick={() => setActive(item.id)}
-              className={`rounded-lg border px-4 py-3 text-left ${selected ? 'border-[#A1A1AA] bg-[#3F3F46]' : 'border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46]'}`}
+              className={`rounded-lg border px-4 py-3 text-left ${selected ? 'border-[#172554] bg-[#172554]' : 'border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46]'}`}
             >
               <div className="text-[14px] font-semibold text-white">{item.title}</div>
-              <p className="mt-1 text-[12px] font-normal leading-5 text-[#D4D4D8]">{item.copy}</p>
+              <p className={`mt-1 text-[12px] font-normal leading-5 ${selected ? 'text-white' : 'text-[#D4D4D8]'}`}>{item.copy}</p>
             </button>
           )
         })}
@@ -413,7 +413,7 @@ export function Landing() {
             <a href="#packages" className="hidden whitespace-nowrap hover:text-black md:inline">Pricing</a>
             <a href="#team" className="hidden whitespace-nowrap hover:text-black md:inline">Team</a>
             <a href="/sign-in" className="whitespace-nowrap px-2 py-2 font-medium hover:text-black">Sign In</a>
-            <a href="#demo" className="pp-cta shrink-0 whitespace-nowrap bg-[#232326] px-2 py-2 text-[11px] font-semibold text-white hover:bg-black sm:px-3.5 sm:py-2.5 sm:text-[13px]">Schedule Demo</a>
+            <a href="#demo" className="pp-cta shrink-0 whitespace-nowrap bg-[#172554] px-2 py-2 text-[11px] font-semibold text-white hover:bg-[#1E3A8A] sm:px-3.5 sm:py-2.5 sm:text-[13px]">Schedule Demo</a>
           </nav>
         </div>
       </header>
@@ -432,7 +432,7 @@ export function Landing() {
               We monitor all UK planning authorities for high value residential and commercial schemes, identify lead architects and developers, and run hyper personalised trigger outreach on your behalf to secure high value contractor opportunities.
             </p>
             <div className="pp-rise pp-d3 mt-8 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
-              <a href="#demo" className="pp-cta bg-[#232326] px-6 py-3 text-[13px] font-semibold text-white hover:bg-black">Schedule Demo</a>
+              <a href="#demo" className="pp-cta bg-[#172554] px-6 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Schedule Demo</a>
             </div>
           </div>
           <div className="pp-rise pp-d2">
@@ -502,7 +502,7 @@ export function Landing() {
                 <div className="text-[16px] font-semibold">Want to see the platform in action for your postal territory?</div>
                 <p className="mt-1 text-[13px] font-normal text-[#A1A1AA]">Book a 20 minute live demonstration or explore the complete platform tour with all screenshots.</p>
               </div>
-              <a href="#demo" className="pp-cta shrink-0 bg-white px-5 py-3 text-[13px] font-semibold text-[#18181B]">Schedule Demo</a>
+              <a href="#demo" className="pp-cta shrink-0 bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Schedule Demo</a>
             </div>
           </div>
         </section>
@@ -580,7 +580,7 @@ export function Landing() {
                 <ul className="mt-5 flex-1 space-y-2 text-[13px] leading-5 text-[#334155]">
                   {plan.points.map((point) => <li key={point}>✓ {point}</li>)}
                 </ul>
-                <a href="#demo" className={`pp-cta mt-6 block px-4 py-3 text-center text-[13px] font-semibold ${plan.featured ? 'bg-[#232326] text-white hover:bg-black' : 'border border-[#DCE4F0] text-[#232326]'}`}>{plan.cta}</a>
+                <a href="#demo" className={`pp-cta mt-6 block px-4 py-3 text-center text-[13px] font-semibold ${plan.featured ? 'bg-[#172554] text-white hover:bg-[#1E3A8A]' : 'border border-[#172554] bg-white text-[#172554]'}`}>{plan.cta}</a>
               </article>
             ))}
           </div>
@@ -594,8 +594,8 @@ export function Landing() {
               <p className="mt-3 text-[14px] font-normal leading-6 text-[#D4D4D8]">Speak with our pipeline strategists to map out your target boroughs, local planning authorities, and estimated monthly project flow.</p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <a href={`tel:${PUBLIC_PHONE_TEL}`} className="whitespace-nowrap border border-[#3F3F46] bg-[#3F3F46] px-5 py-3 text-[13px] font-semibold">Call: {PUBLIC_PHONE_DISPLAY}</a>
-              <a href={`mailto:${PUBLIC_EMAIL}`} className="whitespace-nowrap bg-white px-5 py-3 text-[13px] font-semibold text-[#232326]">Email: {PUBLIC_EMAIL}</a>
+              <a href={`tel:${PUBLIC_PHONE_TEL}`} className="whitespace-nowrap border border-[#172554] bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Call: {PUBLIC_PHONE_DISPLAY}</a>
+              <a href={`mailto:${PUBLIC_EMAIL}`} className="whitespace-nowrap bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Email: {PUBLIC_EMAIL}</a>
             </div>
           </div>
         </section>
@@ -616,7 +616,7 @@ export function Landing() {
                 <Field label="Trade"><input name="trade" className={fieldClass} /></Field>
                 <Field label="Counties and anything else" wide><textarea name="note" rows={4} className={fieldClass} /></Field>
                 {error ? <p className="text-[13px] text-[#B91C1C] sm:col-span-2">{error}</p> : null}
-                <button disabled={pending} className="pp-cta bg-[#232326] px-4 py-3 text-[13px] font-semibold text-white hover:bg-black sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Schedule Demo'}</button>
+                <button disabled={pending} className="pp-cta bg-[#172554] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Schedule Demo'}</button>
               </form>
             )}
           </div>
@@ -648,16 +648,22 @@ export function Landing() {
               <p className="mt-2 text-[13px] text-[#52627A]">Automated UK Planning Intelligence & Architect Outreach Engine</p>
               <p className="mt-3 text-[13px] text-[#52627A]">{PUBLIC_EMAIL} · {PUBLIC_PHONE_DISPLAY}</p>
             </div>
-            <nav className="flex flex-wrap gap-x-4 gap-y-2 text-[13px] font-semibold text-[#2563EB]" aria-label="Footer">
-              <a href="/">Home</a>
-              <a href="#command">Platform Tour</a>
-              <a href="#demo">Schedule Demo</a>
-              <a href="#team">Team</a>
-              <a href="#packages">Packages</a>
-              <a href="#partner">Partner Programme</a>
-              <a href="#privacy">Privacy Policy</a>
-              <a href="#terms">Terms of Service</a>
-            </nav>
+            <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 sm:gap-16">
+              <nav className="flex flex-col gap-2 text-[13px] font-semibold text-[#2563EB]" aria-label="Product">
+                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Product</div>
+                <a href="/">Home</a>
+                <a href="#command">Platform Tour</a>
+                <a href="#packages">Pricing</a>
+                <a href="#demo">Schedule Demo</a>
+              </nav>
+              <nav className="flex flex-col gap-2 text-[13px] font-semibold text-[#2563EB]" aria-label="Company">
+                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[#64748B]">Company</div>
+                <a href="#team">Team</a>
+                <a href="#partner">Partner Programme</a>
+                <a href="#privacy">Privacy Policy</a>
+                <a href="#terms">Terms of Service</a>
+              </nav>
+            </div>
           </div>
           <div id="privacy" className="mx-auto mt-10 max-w-3xl text-center text-[12px] leading-6 text-[#64748B]">
             <p>PlanningPal is a trading brand owned and operated by Hitcaliber Ltd, a private limited company incorporated in England and Wales under Company Registration Number 16751943.</p>
