@@ -1,7 +1,8 @@
 import { icpCouncils, LEAD_WINDOWS } from '@planningpal/shared'
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { leadFetches, organisations, planningApplications, workspaceLeads } from '../db/schema.ts'
+import { ensureApplicationRowEnriched } from '../ingest/run.ts'
 import { HttpError } from '../lib/http.ts'
 
 const BATCH = 4
@@ -94,6 +95,10 @@ export async function advanceLeadFetch(workspaceId: string, jobId: string) {
     try {
       const ids = await scanner(council, since)
       if (ids.length) {
+        const appRows = await db.select().from(planningApplications).where(inArray(planningApplications.id, ids))
+        await Promise.all(
+          appRows.map((appRow) => ensureApplicationRowEnriched(appRow, { allowNetwork: true, persist: true })),
+        )
         const linked = await db
           .insert(workspaceLeads)
           .values(ids.map((applicationId) => ({ workspaceId, applicationId })))

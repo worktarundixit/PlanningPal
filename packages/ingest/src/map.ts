@@ -1,5 +1,6 @@
 import { MASTER_COLUMNS, type SourceRecord } from '@planningpal/shared'
 import { addressLines, applicationReference, blank, formatPublicationDate, splitPostcode } from './clean.ts'
+import { extractRecordContacts } from './contacts.ts'
 import { lookupAuthority } from './gazetteer.ts'
 import type { CleanedRecord, PlanItRecord } from './types.ts'
 import { classifyScheme, estimateValue } from './value.ts'
@@ -36,11 +37,16 @@ export function mapPlanItRecord(record: PlanItRecord): CleanedRecord | null {
   const description = blank(record.description)
   const classified = classifyScheme(`${description} ${blank(record.app_type)}`, blank(record.app_size))
   const value = estimateValue(description, classified.category, classified.units, classified.floorspace)
-  const applicant = field(record, 'applicant_name')
-  const applicantAddress = field(record, 'applicant_address')
-  const agentName = field(record, 'agent_name')
-  const agentCompany = field(record, 'agent_company') || agentName
-  const agentAddress = field(record, 'agent_address')
+  const extracted = extractRecordContacts(record)
+  const applicant = extracted.applicant
+  const applicantContact = extracted.applicantContact
+  const applicantAddress = extracted.applicantAddress
+  const applicantPhone = extracted.applicantPhone
+  const agentName = extracted.agentName
+  const agentCompany = extracted.agentCompany || agentName
+  const agentAddress = extracted.agentAddress
+  const agentPhone = extracted.agentPhone
+  const agentEmail = extracted.agentEmail
   const agentLocated = splitPostcode(agentAddress)
   const applicantLocated = splitPostcode(applicantAddress)
   const applicantLines = addressLines(applicantAddress, applicantLocated.postcode)
@@ -52,16 +58,16 @@ export function mapPlanItRecord(record: PlanItRecord): CleanedRecord | null {
     '£m Value To': value?.to ?? '',
     Proposal: description,
     'Site Raw Address': rawAddress,
-    'Client Applicant Contact': '',
+    'Client Applicant Contact': applicantContact,
     'Client Applicant': applicant,
     'Client Applicant Raw Address': applicantAddress,
-    'Client Applicant Phone': '',
+    'Client Applicant Phone': applicantPhone,
     'Architect Agent Contact': agentName,
     'Architect Agent': agentCompany,
     'Architect Agent Raw Address': agentAddress,
-    'Architect Agent Phone': '',
-    'Architect Agent Email': '',
-    'Mail Client Contact': '',
+    'Architect Agent Phone': agentPhone,
+    'Architect Agent Email': agentEmail,
+    'Mail Client Contact': applicantContact,
     'Mail Client Name': applicant,
     'Client Applicant Address Line 1': applicantLines.line1,
     'Client Applicant Address Line 2': applicantLines.line2,

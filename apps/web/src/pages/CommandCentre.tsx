@@ -153,7 +153,16 @@ export function CommandCentre() {
         if (stop) return
         setLeadJob(next.job)
         const rows = await api.workspaceLeads()
-        if (!stop) setWorkspaceLeads(rows.data)
+        if (!stop) {
+          setWorkspaceLeads(rows.data)
+          if (rows.data.length > 0) {
+            setData((prev) => {
+              const byId = new Map(prev.map((item) => [item.id, item]))
+              for (const item of rows.data) byId.set(item.id, item)
+              return [...byId.values()]
+            })
+          }
+        }
       } catch {
         if (!stop) setLeadJob((current) => current ? { ...current, status: 'partial', message: 'Some councils could not be scanned.', suggest: 'retry' } : current)
       }
@@ -617,6 +626,11 @@ export function CommandCentre() {
                 <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6F7B78]">Applicant / developer</div>
                 <div className="mt-3 rounded-xl border border-[#DCE4F0] bg-white p-4">
                   <div className="text-[12px] font-semibold text-[#1E293B]">{selected.applicant || 'Applicant not published'}</div>
+                  {selected.raw['Client Applicant Phone'] && (
+                    <a href={`tel:${selected.raw['Client Applicant Phone']}`} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#F0F4FA] px-2.5 py-1.5 text-[9px] text-[#52627A]">
+                      <Icon name="phone" size={11} /> {selected.raw['Client Applicant Phone']}
+                    </a>
+                  )}
                   <div className="mt-2 text-[9px] leading-relaxed text-[#718096]">{selected.applicantAddress || 'Applicant address not published in source record'}</div>
                 </div>
               </section>

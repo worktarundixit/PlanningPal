@@ -8,6 +8,7 @@ import { eq, inArray, sql } from 'drizzle-orm'
 import { notifyNewLeads } from '../auth/mailer.ts'
 import { db } from '../db/client.ts'
 import { councils, decisionMakers, ingestCursors, pipelineRuns, planningApplications, rawPayloads } from '../db/schema.ts'
+import { enrichSourceRecord, enrichSourceRecords } from './enrich.ts'
 
 const dataRoot = process.env.VERCEL
   ? '/tmp/planningpal'
@@ -36,6 +37,14 @@ function statusFor(stage: string) {
   if (/refus/i.test(stage)) return 'Refused'
   if (/withdraw/i.test(stage)) return 'Withdrawn'
   return stage || 'Undecided'
+}
+
+function isoValidationDate(pub: string): string | null {
+  if (!pub) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(pub.trim())) return pub.trim()
+  const parsed = new Date(`${pub.trim()} UTC`)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString().slice(0, 10)
 }
 
 let active: Promise<void> | null = null
@@ -74,10 +83,11 @@ async function executeRun(runId: string, query: FetchQuery) {
       pageNumber += 1
     }
     const transformed = transformRecords(rawRecords, undefined, query.since)
+    const enrichedRows = await enrichSourceRecords(transformed.rows)
     const csvPath = path.join(dataRoot, 'ingest', `${runId}.csv`)
     await mkdir(path.dirname(csvPath), { recursive: true })
-    await writeFile(csvPath, recordsToCsv(transformed.rows))
-    const counts = await upsertRows(transformed.rows)
+    await writeFile(csvPath, recordsToCsv(enrichedRows))
+    const counts = await upsertRows(enrichedRows)
     await notifyNewLeads(counts.inserted, counts.titles)
     if (transformed.cursor) {
       await db.insert(ingestCursors).values({ source: 'planit', lastDifferent: transformed.cursor, updatedAt: new Date() })
@@ -144,12 +154,17 @@ async function upsertRows(rows: SourceRecord[]) {
       primaryCategory: row['Project Category'] ?? '',
       propType: row['Prop Type'] ?? '',
       publicationDate: row['Publication Date'] ?? '',
+      validationDate: isoValidationDate(row['Publication Date'] ?? ''),
       portalUrl: row['URL Link'] ?? '',
+      clientApplicantContact: row['Client Applicant Contact'] ?? '',
       clientApplicant: row['Client Applicant'] ?? '',
       clientApplicantRawAddress: row['Client Applicant Raw Address'] ?? '',
+      clientApplicantPhone: row['Client Applicant Phone'] ?? '',
       architectAgentContact: row['Architect Agent Contact'] ?? '',
       architectAgent: row['Architect Agent'] ?? '',
       architectAgentRawAddress: row['Architect Agent Raw Address'] ?? '',
+      architectAgentPhone: row['Architect Agent Phone'] ?? '',
+      architectAgentEmail: row['Architect Agent Email'] ?? '',
       sourceRecord: row,
       updatedAt: new Date(),
     }
@@ -187,32 +202,84 @@ async function ensureCouncil(row: SourceRecord) {
   return again?.id
 }
 
-async function replaceContacts(applicationId: string, row: SourceRecord) {
+export async function replaceContacts(applicationId: string, row: SourceRecord) {
   await db.delete(decisionMakers).where(eq(decisionMakers.applicationId, applicationId))
   const contacts = []
-  if (row['Architect Agent'] || row['Architect Agent Contact']) {
+  const architectEmail = row['Architect Agent Email'] ?? ''
+  const architectPhone = row['Architect Agent Phone'] ?? ''
+  if (row['Architect Agent'] || row['Architect Agent Contact'] || architectEmail || architectPhone) {
+    const confidence = architectEmail && architectPhone ? 'VERIFIED_DIRECT' : architectEmail || architectPhone ? 'STUDIO_MATCH' : 'MANUAL_REVIEW'
     contacts.push({
       applicationId,
       role: 'ARCHITECT',
       firmName: row['Architect Agent'] ?? '',
       contactName: row['Architect Agent Contact'] ?? '',
+      email: architectEmail,
+      phone: architectPhone,
       rawAddress: row['Architect Agent Raw Address'] ?? '',
       postcode: row['Architect Agent Postcode'] ?? '',
-      confidenceLevel: 'MANUAL_REVIEW',
+      confidenceLevel: confidence,
     })
   }
-  if (row['Client Applicant']) {
+  if (row['Client Applicant'] || row['Client Applicant Contact']) {
+    const clientPhone = row['Client Applicant Phone'] ?? ''
     contacts.push({
       applicationId,
       role: 'APPLICANT',
       firmName: row['Client Applicant'] ?? '',
       contactName: row['Client Applicant Contact'] ?? '',
+      email: '',
+      phone: clientPhone,
       rawAddress: row['Client Applicant Raw Address'] ?? '',
       postcode: row['Client Applicant Postcode'] ?? '',
-      confidenceLevel: 'MANUAL_REVIEW',
+      confidenceLevel: clientPhone ? 'STUDIO_MATCH' : 'MANUAL_REVIEW',
     })
   }
   if (contacts.length) await db.insert(decisionMakers).values(contacts)
+}
+
+export async function ensureApplicationRowEnriched(
+  row: typeof planningApplications.$inferSelect,
+  options?: { allowNetwork?: boolean; persist?: boolean },
+): Promise<typeof planningApplications.$inferSelect> {
+  const src = row.sourceRecord ?? {}
+  if (src['Architect Agent Phone'] && src['Architect Agent Email'] && src['Architect Agent Contact']) {
+    return row
+  }
+  const enriched = await enrichSourceRecord(src, { allowNetwork: options?.allowNetwork ?? false })
+  const updated: typeof planningApplications.$inferSelect = {
+    ...row,
+    clientApplicantContact: enriched['Client Applicant Contact'] ?? row.clientApplicantContact,
+    clientApplicant: enriched['Client Applicant'] ?? row.clientApplicant,
+    clientApplicantRawAddress: enriched['Client Applicant Raw Address'] ?? row.clientApplicantRawAddress,
+    clientApplicantPhone: enriched['Client Applicant Phone'] ?? row.clientApplicantPhone,
+    architectAgentContact: enriched['Architect Agent Contact'] ?? row.architectAgentContact,
+    architectAgent: enriched['Architect Agent'] ?? row.architectAgent,
+    architectAgentRawAddress: enriched['Architect Agent Raw Address'] ?? row.architectAgentRawAddress,
+    architectAgentPhone: enriched['Architect Agent Phone'] ?? row.architectAgentPhone,
+    architectAgentEmail: enriched['Architect Agent Email'] ?? row.architectAgentEmail,
+    sourceRecord: enriched,
+  }
+  if (options?.persist !== false) {
+    void db
+      .update(planningApplications)
+      .set({
+        clientApplicantContact: updated.clientApplicantContact,
+        clientApplicant: updated.clientApplicant,
+        clientApplicantRawAddress: updated.clientApplicantRawAddress,
+        clientApplicantPhone: updated.clientApplicantPhone,
+        architectAgentContact: updated.architectAgentContact,
+        architectAgent: updated.architectAgent,
+        architectAgentRawAddress: updated.architectAgentRawAddress,
+        architectAgentPhone: updated.architectAgentPhone,
+        architectAgentEmail: updated.architectAgentEmail,
+        sourceRecord: enriched,
+        updatedAt: new Date(),
+      })
+      .where(eq(planningApplications.id, row.id))
+      .catch(() => undefined)
+  }
+  return updated
 }
 
 export async function readRunCsv(runId: string) {

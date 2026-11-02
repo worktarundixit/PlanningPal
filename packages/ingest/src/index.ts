@@ -1,4 +1,5 @@
 export { addressLines, applicationReference, blank, formatPublicationDate, splitPostcode } from './clean.ts'
+export { extractEmails, extractRecordContacts, extractUkPhones, formatUkPhone } from './contacts.ts'
 export { DEFAULT_FILTER, rejectionReason } from './filter.ts'
 export { lookupAuthority, planItAuthorityKeys } from './gazetteer.ts'
 export { mapPlanItRecord } from './map.ts'

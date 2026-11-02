@@ -4,6 +4,8 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { activities, decisionMakers, planningApplications, savedSchemes } from '../db/schema.ts'
+import { enrichSourceRecord } from '../ingest/enrich.ts'
+import { ensureApplicationRowEnriched, replaceContacts } from '../ingest/run.ts'
 import { parseBody, requireUser } from '../lib/http.ts'
 
 const leadQuery = z.object({
@@ -117,9 +119,12 @@ export async function planningRoutes(app: FastifyInstance) {
       .from(savedSchemes)
       .where(eq(savedSchemes.userId, user.id))
     const savedIds = new Set(saved.map((item) => item.applicationId))
+    const enrichedRows = await Promise.all(
+      rows.map((row) => ensureApplicationRowEnriched(row, { allowNetwork: false, persist: true })),
+    )
 
     return {
-      data: rows.map((row) => ({ ...schemeFromRow(row), saved: savedIds.has(row.id) })),
+      data: enrichedRows.map((row) => ({ ...schemeFromRow(row), saved: savedIds.has(row.id) })),
       page,
       limit,
       total: totalRow?.total ?? 0,
@@ -137,9 +142,14 @@ export async function planningRoutes(app: FastifyInstance) {
       .limit(1)
     if (!row) return reply.code(404).send({ error: 'Planning lead not found' })
 
-    const contacts = await db.select().from(decisionMakers).where(eq(decisionMakers.applicationId, row.id))
+    const enrichedRow = await ensureApplicationRowEnriched(row, { allowNetwork: true, persist: true })
+    let contacts = await db.select().from(decisionMakers).where(eq(decisionMakers.applicationId, row.id))
+    if (contacts.length === 0 || contacts.every((c) => !c.email && !c.phone)) {
+      await replaceContacts(row.id, enrichedRow.sourceRecord)
+      contacts = await db.select().from(decisionMakers).where(eq(decisionMakers.applicationId, row.id))
+    }
     const history = await db.select().from(activities).where(eq(activities.applicationId, row.id)).orderBy(desc(activities.createdAt))
-    const scheme = schemeFromRow(row)
+    const scheme = schemeFromRow(enrichedRow)
     const populated = Object.values(scheme.raw).filter(Boolean).length
 
     return {
@@ -197,7 +207,10 @@ export async function planningRoutes(app: FastifyInstance) {
     const ordered = params?.ids?.length
       ? params.ids.flatMap((id) => rows.filter((row) => row.applicationRef === id))
       : rows
-    const csv = toCsv(ordered.map((row) => row.sourceRecord))
+    const enrichedExport = await Promise.all(
+      ordered.map((row) => enrichSourceRecord(row.sourceRecord, { allowNetwork: false })),
+    )
+    const csv = toCsv(enrichedExport)
     const stamp = new Date().toISOString().slice(0, 10)
     return reply
       .header('Content-Type', 'text/csv; charset=utf-8')

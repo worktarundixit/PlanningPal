@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { planningApplications, workspaceLeads } from '../db/schema.ts'
+import { ensureApplicationRowEnriched } from '../ingest/run.ts'
 import { advanceLeadFetch, currentLeadFetch, retryLeadFetch, startLeadFetch } from '../leads/fetch.ts'
 import { parseBody, requireUser } from '../lib/http.ts'
 
@@ -55,6 +56,9 @@ export async function leadFetchRoutes(app: FastifyInstance) {
       .where(eq(workspaceLeads.workspaceId, user.organisationId))
       .orderBy(asc(workspaceLeads.createdAt))
       .limit(200)
-    return { data: rows.map((row) => mapRecord(row.application.sourceRecord, row.application.sourceIndex)) }
+    const enriched = await Promise.all(
+      rows.map((row) => ensureApplicationRowEnriched(row.application, { allowNetwork: false, persist: true })),
+    )
+    return { data: enriched.map((appRow) => mapRecord(appRow.sourceRecord, appRow.sourceIndex)) }
   })
 }
