@@ -91,7 +91,15 @@ pnpm ingest -- --recent 3 --max-pages 4
 
 On a long-running API process the pipeline runs at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. The process skips the timer when `VERCEL` is set.
 
-On Vercel the same hours are handled by Cron hitting `/api/cron/ingest`. The schedules in `apps/web/vercel.json` fire at both the GMT and BST hours, and the function runs only when the London clock is on one of those three hours. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots. Production requires `Authorization: Bearer $CRON_SECRET`. Vercel sends that header when `CRON_SECRET` is set. More than one cron run per day needs a Vercel plan that allows it.
+Scheduled fetches run at 06:00, 13:00 and 20:00 UTC. Supabase `pg_cron` and `pg_net` POST to `https://planningpal.vercel.app/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`. The secret is read from the Supabase Vault secret named `cron_secret`. The route rejects any call that does not match `CRON_SECRET`. Vercel Hobby accounts cannot run a cron more than once a day, so `apps/web/vercel.json` does not define these jobs. The website and API stay on Vercel.
+
+Apply `supabase/migrations/20261102120000_schedule_planit_ingest.sql` on the Supabase project, then store the secret:
+
+```sql
+select vault.create_secret('<same value as Vercel CRON_SECRET>', 'cron_secret', 'Bearer token for the Vercel ingest route');
+```
+
+Set that same value as `CRON_SECRET` in the Vercel project environment. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots.
 
 Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins of organisations that have signal alerts on, through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
 
