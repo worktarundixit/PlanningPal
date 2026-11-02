@@ -533,7 +533,7 @@ export function Landing() {
         <section className="pp-reveal bg-white">
           <div className="mx-auto max-w-[1180px] px-5 py-24">
             <div className="mx-auto max-w-3xl text-center">
-              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#2563EB]">Direct portal intelligence</p>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#15803D]">Direct portal intelligence</p>
               <h2 className="mt-4 text-[34px] font-bold tracking-[-0.03em] sm:text-[42px]">Live UK Planning Leads Feed</h2>
               <p className="mt-4 text-[13px] text-[#64748B]">Filtered for £100k+ to £1m+ schemes with named architects and direct contacts. Target sectors: Residential, D&B, New Build, Mixed Use & Conversions.</p>
             </div>
