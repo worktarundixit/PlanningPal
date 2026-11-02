@@ -1,5 +1,5 @@
 import { CRM_STAGES, mapRecord, stageById, stageByIndex, type CrmStageId } from '@planningpal/shared'
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, or } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
@@ -21,6 +21,13 @@ const activityBody = z.object({
   outcome: z.string().optional(),
   dueOn: z.string().optional(),
 })
+
+function visibleTo(user: { id: string; organisationId: string }) {
+  return and(
+    eq(activities.organisationId, user.organisationId),
+    or(eq(activities.shared, true), eq(activities.userId, user.id), eq(activities.type, 'system')),
+  )
+}
 
 async function loadCards(organisationId: string) {
   const rows = await db
@@ -82,7 +89,10 @@ export async function crmRoutes(app: FastifyInstance) {
       .select({ activity: activities, applicationRef: planningApplications.applicationRef })
       .from(activities)
       .leftJoin(planningApplications, eq(activities.applicationId, planningApplications.id))
-      .where(type ? and(eq(activities.organisationId, user.organisationId), eq(activities.type, type)) : eq(activities.organisationId, user.organisationId))
+      .where(and(
+        visibleTo(user),
+        ...(type ? [eq(activities.type, type)] : []),
+      ))
       .orderBy(desc(activities.createdAt))
     return { data: rows.map((row) => ({ ...presentActivity(row.activity), applicationRef: row.applicationRef })) }
   })
@@ -121,6 +131,7 @@ export async function crmRoutes(app: FastifyInstance) {
         crmLeadId: body.crmLeadId,
         applicationId,
         type: body.type,
+        shared: body.type !== 'note' && body.type !== 'task',
         title: body.title || titles[body.type] || 'Activity',
         body: body.body ?? '',
         outcome: body.outcome ?? '',
@@ -139,7 +150,7 @@ export async function crmRoutes(app: FastifyInstance) {
     const [updated] = await db
       .update(activities)
       .set({ completedAt: body.completed ? new Date() : null })
-      .where(and(eq(activities.id, id), eq(activities.organisationId, user.organisationId)))
+      .where(and(eq(activities.id, id), visibleTo(user)))
       .returning()
     if (!updated) return reply.code(404).send({ error: 'Activity not found' })
     return presentActivity(updated)
@@ -169,6 +180,7 @@ export async function crmRoutes(app: FastifyInstance) {
       crmLeadId: id,
       applicationId: existing.applicationId,
       type: 'system',
+      shared: true,
       title: 'Stage updated',
       body: body.notes ?? `Moved to ${stage.label}`,
     })

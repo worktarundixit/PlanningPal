@@ -131,6 +131,8 @@ export function CommandCentre() {
   }
 
   if (loadError.includes('do not have access')) return <StatusScreen kind="forbidden" />
+  const pageGuard: Record<string, string> = { Ingestion: 'ingest.admin', 'Campaign provider': 'campaign.provider', Billing: 'billing.manage' }
+  if (pageGuard[active] && !can(pageGuard[active])) return <StatusScreen kind="forbidden" />
   if (loadError.includes('offline')) return <StatusScreen kind="offline" onRetry={() => window.location.reload()} />
 
   return (

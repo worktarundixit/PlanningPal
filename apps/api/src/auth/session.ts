@@ -1,7 +1,7 @@
-import { asc, eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/client.ts'
-import { organisations, users } from '../db/schema.ts'
+import { auditLog, organisations, users, workspaceMembers } from '../db/schema.ts'
 import type { AuthUser } from '../types.ts'
 import { permissionsFor, type OrgRole, type PlatformRole } from './permissions.ts'
 import { provisionDomainUser } from './provision.ts'
@@ -31,24 +31,52 @@ async function presentUser(request: FastifyRequest, authUserId: string, email: s
 
   let organisationId = row.user.organisationId
   let companyName = row.companyName ?? (row.user.platformRole === 'super_admin' ? 'Hitcaliber Ltd' : '')
-  if (row.user.platformRole === 'super_admin') {
-    const requested = headerValue(request.headers['x-organisation-id'])
-    if (requested) {
-      const [chosen] = await db.select().from(organisations).where(eq(organisations.id, requested)).limit(1)
-      if (chosen) {
-        organisationId = chosen.id
-        companyName = chosen.companyName
-      }
-    } else if (!organisationId) {
-      const [first] = await db.select().from(organisations).orderBy(asc(organisations.createdAt)).limit(1)
-      if (first) {
-        organisationId = first.id
-        companyName = first.companyName
-      }
+  let orgRole = (row.user.orgRole as OrgRole | null) ?? null
+  if (organisationId) {
+    const [membership] = await db
+      .select()
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, organisationId), eq(workspaceMembers.authUserId, authUserId)))
+      .limit(1)
+    if (membership && membership.role !== 'owner' && membership.role !== 'admin' && membership.role !== 'member' && membership.role !== 'viewer') {
+      orgRole = null
+    } else if (membership) {
+      orgRole = membership.role as OrgRole
     }
   }
-
-  const orgRole = (row.user.orgRole as OrgRole | null) ?? null
+  if (row.user.platformRole === 'super_admin') {
+    const requested = headerValue(request.headers['x-workspace-id']) || headerValue(request.headers['x-organisation-id'])
+    if (requested) {
+      const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requested)
+      const [chosen] = uuidLike
+        ? await db.select().from(organisations).where(eq(organisations.id, requested)).limit(1)
+        : [undefined]
+      const [bySlug] = chosen ? [chosen] : await db.select().from(organisations).where(eq(organisations.slug, requested)).limit(1)
+      if (!bySlug) {
+        request.missingWorkspace = true
+        return null
+      }
+      organisationId = bySlug.id
+      companyName = bySlug.companyName
+      const [targetMembership] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, bySlug.id), eq(workspaceMembers.authUserId, authUserId)))
+        .limit(1)
+      orgRole =
+        targetMembership &&
+        (targetMembership.role === 'owner' || targetMembership.role === 'admin' || targetMembership.role === 'member' || targetMembership.role === 'viewer')
+          ? targetMembership.role
+          : null
+      await db.insert(auditLog).values({
+        actorUserId: row.user.id,
+        workspaceId: bySlug.id,
+        action: 'staff.workspace.access',
+        method: request.method,
+        path: request.url.split('?')[0] || request.url,
+      })
+    }
+  }
   const platformRole = row.user.platformRole === 'super_admin' ? ('super_admin' as PlatformRole) : null
   return {
     id: row.user.id,
