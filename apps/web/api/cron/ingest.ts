@@ -4,20 +4,19 @@ type CronRequest = { headers?: { authorization?: string | string[] } }
 type CronResponse = { status: (code: number) => { json: (body: unknown) => void } }
 
 /**
- * Vercel Cron entry. Schedules in vercel.json cover both GMT and BST.
- * The function itself only runs at 06:00, 13:00 and 20:00 Europe/London,
- * and processes as many authorities as fit in the time budget.
+ * Supabase pg_cron POSTs here at 06:00, 13:00 and 20:00 UTC.
+ * Every call must send Authorization: Bearer $CRON_SECRET.
+ * A valid call runs a batch immediately. The London slot check stays on the
+ * long-running API timer, not on this route.
  */
 export default async function handler(request: CronRequest, response: CronResponse) {
   const secret = process.env.CRON_SECRET
   const header = request.headers?.authorization
   const token = Array.isArray(header) ? header[0] : header
-  if (process.env.VERCEL_ENV === 'production' || secret) {
-    if (!secret || token !== `Bearer ${secret}`) {
-      response.status(401).json({ error: 'Unauthorized' })
-      return
-    }
+  if (!secret || token !== `Bearer ${secret}`) {
+    response.status(401).json({ error: 'Unauthorized' })
+    return
   }
-  const result = await ingestAuthorityBatch()
+  const result = await ingestAuthorityBatch({ force: true })
   response.status(200).json(result)
 }
