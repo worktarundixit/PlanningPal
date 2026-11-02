@@ -12,6 +12,7 @@ export function UkCouncilMap() {
   const chipRef = useRef<HTMLDivElement>(null)
   const nameRef = useRef<HTMLSpanElement>(null)
   const countRef = useRef<HTMLSpanElement>(null)
+  const countLabelRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -37,7 +38,8 @@ export function UkCouncilMap() {
         const lpa = lpaByGss(area.code)
         name.textContent = lpa?.name ?? area.name
         const count = 1 + Math.floor(Math.random() * 29)
-        if (countRef.current) countRef.current.textContent = count === 1 ? '1 new application' : `${count} new applications`
+        if (countRef.current) countRef.current.textContent = String(count)
+        if (countLabelRef.current) countLabelRef.current.textContent = count === 1 ? 'new application' : 'new applications'
       }
       index = (index + 1) % paths.length
     }
@@ -71,7 +73,7 @@ export function UkCouncilMap() {
         </svg>
         <div ref={chipRef} className="uk-chip" aria-hidden="true">
           <span ref={nameRef} className="block font-semibold text-[#172554]">United Kingdom</span>
-          <span ref={countRef} className="mt-0.5 block text-[11px] font-medium text-[#52627A]">1 new application</span>
+          <span className="mt-0.5 block text-[11px] font-medium text-[#52627A]"><span ref={countRef} className="font-bold text-[#0EA5E9]">1</span> <span ref={countLabelRef}>new application</span></span>
         </div>
       </div>
       <figcaption className="mx-auto mt-3 max-w-md text-center text-[11px] font-normal leading-5 text-[#64748B]">
