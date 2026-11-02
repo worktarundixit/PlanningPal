@@ -13,3 +13,15 @@ apps/api/data/raw
 apps/api/data/ingest
 .vite
 *.tsbuildinfo
+.vercel
+supabase/.temp
+supabase/.branches
+*.pem
+*.key
+*.p12
+.idea
+.vscode/*
+!.vscode/extensions.json
+npm-debug.log*
+pnpm-debug.log*
+.env*.local
