@@ -526,7 +526,7 @@ export function CommandPreview() {
               role="tab"
               aria-selected={selected}
               onClick={() => setActive(item.id)}
-              className={`rounded-lg border px-4 py-3 text-left ${selected ? 'border-[#172554] bg-[#172554]' : 'border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46]'}`}
+              className={`rounded-lg border px-4 py-3 text-left ${selected ? 'border-[#2563EB] bg-[#2563EB]' : 'border-[#3F3F46] bg-[#27272A] hover:bg-[#3F3F46]'}`}
             >
               <div className="text-[9.8px] font-semibold leading-[1.25] text-white">{item.title}</div>
               <p className={`mt-1 text-[8.4px] font-normal leading-[14px] ${selected ? 'text-white' : 'text-[#D4D4D8]'}`}>{item.copy}</p>

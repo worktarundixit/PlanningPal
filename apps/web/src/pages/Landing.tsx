@@ -120,7 +120,7 @@ export function Landing() {
             <a href="#packages" className="hidden whitespace-nowrap hover:text-black md:inline">Pricing</a>
             <a href="#team" className="hidden whitespace-nowrap hover:text-black md:inline">Team</a>
             <a href={signedIn ? '/app' : '/sign-in'} className="whitespace-nowrap px-2 py-2 font-medium hover:text-black">{signedIn ? 'Dashboard' : 'Sign In'}</a>
-            <a href="#demo" className="pp-cta shrink-0 whitespace-nowrap bg-[#172554] px-2 py-2 text-[11px] font-semibold text-white hover:bg-[#1E3A8A] sm:px-3.5 sm:py-2.5 sm:text-[13px]">Schedule Demo</a>
+            <a href="#demo" className="pp-cta shrink-0 whitespace-nowrap bg-[#2563EB] px-2 py-2 text-[11px] font-semibold text-white hover:bg-[#1D4ED8] sm:px-3.5 sm:py-2.5 sm:text-[13px]">Schedule Demo</a>
           </nav>
         </div>
       </header>
@@ -139,7 +139,7 @@ export function Landing() {
               We monitor all UK planning authorities for high value residential and commercial schemes, identify lead architects and developers, and run hyper personalised trigger outreach on your behalf to secure high value contractor opportunities.
             </p>
             <div className="pp-rise pp-d3 mt-8 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
-              <a href="#demo" className="pp-cta bg-[#172554] px-6 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Schedule Demo</a>
+              <a href="#demo" className="pp-cta bg-[#2563EB] px-6 py-3 text-[13px] font-semibold text-white hover:bg-[#1D4ED8]">Schedule Demo</a>
             </div>
           </div>
           <div className="pp-rise pp-d2">
@@ -160,7 +160,7 @@ export function Landing() {
               <div className="mt-5 grid gap-3 sm:grid-cols-3">
                 {[['1.8M', 'Volume Delivered'], ['74.9%', 'In Inbox Open Rate'], ['£700k+', 'Pipeline Value Unlocked']].map(([value, label]) => (
                   <div key={label} className="rounded-xl bg-[#F4F7FB] px-4 py-4 text-center">
-                    <div className="text-[26px] font-semibold text-[#172554]">{value}</div>
+                    <div className="text-[26px] font-semibold text-[#2563EB]">{value}</div>
                     <div className="mt-1 text-[12px] text-[#64748B]">{label}</div>
                   </div>
                 ))}
@@ -169,7 +169,7 @@ export function Landing() {
             <article className="rounded-2xl border border-[#DCE4F0] bg-white p-6 text-left">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-[15px] font-semibold">Live Positive Architect Reply</h3>
-                <span className="rounded-full bg-[#EFF6FF] px-3 py-1 text-[11px] font-semibold text-[#1D4ED8]">Interested</span>
+                <span className="rounded-full bg-[#EFF6FF] px-3 py-1 text-[11px] font-semibold text-[#2563EB]">Interested</span>
               </div>
               <blockquote className="mt-4 text-[14px] leading-6 text-[#334155]">
                 “I'm always keen to hear from experienced contractors working across London. I'm happy to have a brief introductory call. Please let me know what your director's availability looks like over the coming week or two.”
@@ -209,7 +209,7 @@ export function Landing() {
                 <div className="text-[16px] font-semibold">Want to see the platform in action for your postal territory?</div>
                 <p className="mt-1 text-[13px] font-normal text-[#A1A1AA]">Book a 20 minute live demonstration or explore the complete platform tour with all screenshots.</p>
               </div>
-              <a href="#demo" className="pp-cta shrink-0 bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Schedule Demo</a>
+              <a href="#demo" className="pp-cta shrink-0 bg-[#2563EB] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1D4ED8]">Schedule Demo</a>
             </div>
           </div>
         </section>
@@ -226,12 +226,12 @@ export function Landing() {
               ['02', 'The Timing Advantage: Stage 0 to 1', 'Our automated scraper identifies planning applications the exact week they are submitted or approved. We reach out to the specified architect and planning consultant right as design begins, positioning you as their trusted delivery partner.', 'Warm Introductions & Relationship Moat', true],
               ['03', 'The Compounding Network Effect', 'Unlike paid ads which vanish when you stop paying, an architect relationship built today yields referrals on their next 3 to 5 schemes over the next 24 months. One intro creates multiple recurring project pipelines.', 'Long Term Lifetime Value', false],
             ].map(([num, title, copy, foot, sweet]) => (
-              <article key={String(num)} className={`pp-card rounded-2xl border p-6 ${sweet ? 'border-[#15803D] bg-[#15803D] text-white' : 'border-[#DCE4F0] bg-white'}`}>
-                {sweet ? <div className="mb-3 inline-block rounded-lg border border-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-white">Our sweet spot</div> : null}
-                <div className={`text-[13px] font-bold ${sweet ? 'text-white' : 'text-[#2563EB]'}`}>{num}</div>
-                <h3 className={`mt-3 text-[18px] font-semibold ${sweet ? 'text-white' : ''}`}>{title}</h3>
-                <p className={`mt-3 text-[14px] leading-6 ${sweet ? 'text-white' : 'text-[#52627A]'}`}>{copy}</p>
-                <p className={`mt-5 border-t pt-4 text-[13px] font-semibold ${sweet ? 'border-white/40 text-white' : 'border-[#EEF2F7] text-[#64748B]'}`}>{foot}</p>
+              <article key={String(num)} className={`pp-card rounded-2xl border p-6 ${sweet ? 'border-[#93C5FD] bg-[#EFF6FF]' : 'border-[#DCE4F0] bg-white'}`}>
+                {sweet ? <div className="mb-3 inline-block rounded-lg bg-[#232326] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#15803D]">Our sweet spot</div> : null}
+                <div className="text-[13px] font-bold text-[#2563EB]">{num}</div>
+                <h3 className="mt-3 text-[18px] font-semibold">{title}</h3>
+                <p className="mt-3 text-[14px] leading-6 text-[#52627A]">{copy}</p>
+                <p className={`mt-5 border-t pt-4 text-[13px] font-semibold ${sweet ? 'border-[#BFDBFE] text-[#2563EB]' : 'border-[#EEF2F7] text-[#64748B]'}`}>{foot}</p>
               </article>
             ))}
           </div>
@@ -245,14 +245,14 @@ export function Landing() {
           <div className="mt-10 grid gap-4 lg:grid-cols-3">
             {plans.map((plan) => (
               <article key={plan.name} className={`pp-card flex flex-col rounded-2xl border bg-white p-6 ${plan.featured ? 'border-[#2563EB] shadow-[0_16px_40px_rgba(37,99,235,0.12)]' : 'border-[#DCE4F0]'}`}>
-                {plan.featured ? <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#2563EB]">Most popular data tier</div> : <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#64748B]">{plan.kicker}</div>}
+                {plan.featured ? <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#2563EB]">Most popular tier</div> : <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.14em] text-[#64748B]">{plan.kicker}</div>}
                 <h3 className="text-[22px] font-semibold">{plan.name}</h3>
                 <p className="mt-2 text-[13px] leading-6 text-[#64748B]">{plan.who}</p>
-                <div className="mt-5 text-[40px] font-semibold tracking-[-0.04em] text-[#172554]">{plan.price}<span className="ml-1 text-[14px] font-medium text-[#94A3B8]">/ month</span></div>
+                <div className="mt-5 text-[40px] font-semibold tracking-[-0.04em] text-[#2563EB]">{plan.price}<span className="ml-1 text-[14px] font-medium text-[#94A3B8]">/ month</span></div>
                 <ul className="mt-5 flex-1 space-y-2 text-[13px] leading-5 text-[#334155]">
                   {plan.points.map((point) => <li key={point}>✓ {point}</li>)}
                 </ul>
-                <a href="#demo" className={`pp-cta mt-6 block px-4 py-3 text-center text-[13px] font-semibold ${plan.featured ? 'bg-[#172554] text-white hover:bg-[#1E3A8A]' : 'border border-[#172554] bg-white text-[#172554]'}`}>{plan.cta}</a>
+                <a href="#demo" className="pp-cta mt-6 block bg-[#2563EB] px-4 py-3 text-center text-[13px] font-semibold text-white hover:bg-[#1D4ED8]">{plan.cta}</a>
               </article>
             ))}
           </div>
@@ -266,8 +266,8 @@ export function Landing() {
               <p className="mt-3 text-[14px] font-normal leading-6 text-[#D4D4D8]">Speak with our pipeline strategists to map out your target boroughs, local planning authorities, and estimated monthly project flow.</p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <a href={`tel:${PUBLIC_PHONE_TEL}`} className="whitespace-nowrap border border-[#172554] bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Call: {PUBLIC_PHONE_DISPLAY}</a>
-              <a href={`mailto:${PUBLIC_EMAIL}`} className="whitespace-nowrap bg-[#172554] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A]">Email: {PUBLIC_EMAIL}</a>
+              <a href={`tel:${PUBLIC_PHONE_TEL}`} className="whitespace-nowrap bg-[#2563EB] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1D4ED8]">Call: {PUBLIC_PHONE_DISPLAY}</a>
+              <a href={`mailto:${PUBLIC_EMAIL}`} className="whitespace-nowrap bg-[#2563EB] px-5 py-3 text-[13px] font-semibold text-white hover:bg-[#1D4ED8]">Email: {PUBLIC_EMAIL}</a>
             </div>
           </div>
         </section>
@@ -288,7 +288,7 @@ export function Landing() {
                 <Field label="Trade"><input name="trade" className={fieldClass} /></Field>
                 <Field label="Counties and anything else" wide><textarea name="note" rows={4} className={fieldClass} /></Field>
                 {error ? <p className="text-[13px] text-[#B91C1C] sm:col-span-2">{error}</p> : null}
-                <button disabled={pending} className="pp-cta bg-[#172554] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Schedule Demo'}</button>
+                <button disabled={pending} className="pp-cta bg-[#2563EB] px-4 py-3 text-[13px] font-semibold text-white hover:bg-[#1D4ED8] sm:col-span-2 disabled:opacity-60">{pending ? 'Sending…' : 'Schedule Demo'}</button>
               </form>
             )}
           </div>
@@ -317,7 +317,7 @@ export function Landing() {
           <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <img src="/brand/logo-horizontal.svg" alt="PlanningPal" className="h-7 w-auto" />
-              <p className="mt-2 text-[13px] text-[#52627A]">Automated UK Planning Intelligence & Architect Outreach Engine</p>
+              <p className="mt-2 max-w-[34ch] text-left text-[13px] text-[#52627A]">Automated UK Planning Intelligence & Architect Outreach Engine</p>
               <p className="mt-3 text-[13px] text-[#52627A]">{PUBLIC_EMAIL} · {PUBLIC_PHONE_DISPLAY}</p>
             </div>
             <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 sm:gap-16">
@@ -338,8 +338,7 @@ export function Landing() {
             </div>
           </div>
           <div id="privacy" className="mx-auto mt-10 max-w-3xl text-center text-[12px] leading-6 text-[#64748B]">
-            <p>PlanningPal is a trading brand owned and operated by Hitcaliber Ltd, a private limited company incorporated in England and Wales under Company Registration Number 16751943.</p>
-            <p className="mt-2">Registered Office: PO Box 4385, 16751943, Companies House Default Address, Cardiff, CF14 8LH, United Kingdom.</p>
+            <p>Registered Office: PO Box 4385, 16751943, Companies House Default Address, Cardiff, CF14 8LH, United Kingdom.</p>
             <p id="terms" className="mt-4">© 2026 Hitcaliber Ltd. All rights reserved.</p>
           </div>
         </div>

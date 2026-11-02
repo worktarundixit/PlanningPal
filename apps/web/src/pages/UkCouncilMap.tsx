@@ -72,8 +72,8 @@ export function UkCouncilMap() {
           ))}
         </svg>
         <div ref={chipRef} className="uk-chip" aria-hidden="true">
-          <span ref={nameRef} className="block font-semibold text-[#172554]">United Kingdom</span>
-          <span className="mt-0.5 block text-[11px] font-medium text-[#52627A]"><span ref={countRef} className="font-bold text-[#0EA5E9]">1</span> <span ref={countLabelRef}>new application</span></span>
+          <span ref={nameRef} className="block font-semibold text-[#2563EB]">United Kingdom</span>
+          <span className="mt-0.5 block text-[11px] font-medium text-[#52627A]"><span ref={countRef} className="font-bold text-[#2563EB]">1</span> <span ref={countLabelRef}>new application</span></span>
         </div>
       </div>
       <figcaption className="mx-auto mt-3 max-w-md text-center text-[11px] font-normal leading-5 text-[#64748B]">

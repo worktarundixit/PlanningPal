@@ -99,7 +99,7 @@
 .pp-d4 { animation-delay: 460ms; }
 
 .uk-area {
-  fill: #172554;
+  fill: #2563eb;
   fill-opacity: 0.16;
   stroke: #f4f7fb;
   stroke-width: 0.45;
@@ -107,14 +107,14 @@
 }
 
 .uk-area.is-recent {
-  fill: #7dd3fc;
+  fill: #2563eb;
   fill-opacity: 0.72;
 }
 
 .uk-area.is-on {
-  fill: #38bdf8;
+  fill: #2563eb;
   fill-opacity: 1;
-  stroke: #e0f2fe;
+  stroke: #2563eb;
   filter: url(#uk-glow);
 }
 
