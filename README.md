@@ -93,9 +93,17 @@ On a long-running API process the pipeline runs at 06:00, 13:00 and 20:00 Europe
 
 Ingestion targets come from the UK LPA master list (380 active authorities, 43 abolished with a successor). Shared services collapse to one PlanIt area, and Cumberland is read through Allerdale, Carlisle, and Copeland. Ebbsfleet, Middlesbrough, and Hartlepool development corporations have no PlanIt source and stay marked coverage unavailable. Super Admin → Ingestion flags a feed when its latest application is older than `FEED_STALE_DAYS` (default 92).
 
-On Vercel the same hours are handled by Cron hitting `/api/cron/ingest`. Functions run in `lhr1`. The schedules in `apps/web/vercel.json` fire at both the GMT and BST hours, and the function runs only when the London clock is on one of those three hours. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots. Production requires `Authorization: Bearer $CRON_SECRET`. Vercel sends that header when `CRON_SECRET` is set. More than one cron run per day needs a Vercel plan that allows it.
+Scheduled fetches run at 06:00, 13:00 and 20:00 UTC. Supabase `pg_cron` and `pg_net` POST to `https://planningpal.vercel.app/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`. The secret is read from the Supabase Vault secret named `cron_secret`. The route rejects any call that does not match `CRON_SECRET`. Vercel Hobby accounts cannot run a cron more than once a day, so `apps/web/vercel.json` does not define these jobs. Vercel functions stay in `lhr1`. The website and API stay on Vercel.
 
-A new workspace starts with no leads. Command Centre offers **Get recent applications**, then **Last 3 days** or **Last 7 days** (further windows can be added in `LEAD_WINDOWS`). The server walks that workspace's ICP councils in batches. The page polls `/api/v1/lead-fetches/:id/advance`, so cards and KPIs fill while the scan continues. A refresh resumes a running job. An empty window suggests 7 days or a broader ICP. A partial scan keeps what loaded and can retry the failed councils. The scheduled PlanIt runs at 06:00, 13:00 and 20:00 Europe/London keep the shared catalogue current after that first fetch.
+Apply `supabase/migrations/20261102120000_schedule_planit_ingest.sql` on the Supabase project, then store the secret:
+
+```sql
+select vault.create_secret('<same value as Vercel CRON_SECRET>', 'cron_secret', 'Bearer token for the Vercel ingest route');
+```
+
+Set that same value as `CRON_SECRET` in the Vercel project environment. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots.
+
+A new workspace starts with no leads. Command Centre offers **Get recent applications**, then **Last 3 days** or **Last 7 days** (further windows can be added in `LEAD_WINDOWS`). The server walks that workspace's ICP councils in batches. The page polls `/api/v1/lead-fetches/:id/advance`, so cards and KPIs fill while the scan continues. A refresh resumes a running job. An empty window suggests 7 days or a broader ICP. A partial scan keeps what loaded and can retry the failed councils. The scheduled PlanIt runs at 06:00, 13:00 and 20:00 UTC keep the shared catalogue current after that first fetch.
 
 Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins who turned alerts on, at the frequency they chose (as they arrive, daily, or weekly), through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
 
