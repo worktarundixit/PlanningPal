@@ -227,6 +227,7 @@ export function Landing() {
               ['03', 'The Compounding Network Effect', 'Unlike paid ads which vanish when you stop paying, an architect relationship built today yields referrals on their next 3 to 5 schemes over the next 24 months. One intro creates multiple recurring project pipelines.', 'Long Term Lifetime Value', false],
             ].map(([num, title, copy, foot, sweet]) => (
               <article key={String(num)} className={`pp-card rounded-2xl border p-6 ${sweet ? 'border-[#93C5FD] bg-[#EFF6FF]' : 'border-[#DCE4F0] bg-white'}`}>
+                {sweet ? <div className="mb-3 inline-block bg-transparent text-[10px] font-bold uppercase tracking-wider text-[#15803D]">Our sweet spot</div> : null}
                 <div className="text-[13px] font-bold text-[#2563EB]">{num}</div>
                 <h3 className="mt-3 text-[18px] font-semibold">{title}</h3>
                 <p className="mt-3 text-[14px] leading-6 text-[#52627A]">{copy}</p>
