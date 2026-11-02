@@ -14,10 +14,17 @@ export function createSandboxProvider(): CampaignProvider {
     async listWorkspaces() {
       return workspaces
     },
+    async currentWorkspace() {
+      return workspaces[0] ?? null
+    },
     async createCampaign(_workspaceId, name) {
       const id = `sandbox-${randomUUID()}`
       campaigns.set(id, { id, name, status: 'draft', leads: 0 })
       return { id }
+    },
+    async updateCampaign(_workspaceId, campaignId, options) {
+      const campaign = campaigns.get(campaignId)
+      if (campaign && options.name) campaign.name = options.name
     },
     async listCampaigns() {
       return [...campaigns.values()].map(({ id, name, status }) => ({ id, name, status }))
@@ -28,7 +35,7 @@ export function createSandboxProvider(): CampaignProvider {
     },
     async resumeCampaign(_workspaceId, campaignId) {
       const campaign = campaigns.get(campaignId)
-      if (campaign && campaign.status !== 'draft') campaign.status = 'live'
+      if (campaign) campaign.status = 'live'
     },
     async addLeads(_workspaceId, campaignId, leads: ProviderLead[]) {
       const campaign = campaigns.get(campaignId)

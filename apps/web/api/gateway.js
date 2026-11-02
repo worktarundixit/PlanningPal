@@ -68460,6 +68460,45 @@ var CampaignEngineError = class extends Error {
 // ../api/src/providers/campaign/instantly.ts
 var BASE = "https://api.instantly.ai/api/v2";
 var LEAD_BATCH = 1e3;
+var UK_TIMEZONE = "Europe/Isle_of_Man";
+var MAX_PAGES = 20;
+function readCampaignStatus(value) {
+  const code = typeof value === "string" ? { active: 1, paused: 2, draft: 0, completed: 3 }[value.toLowerCase()] : value;
+  if (code === 1 || code === 4) return "live";
+  if (code === 0 || code === void 0 || code === null) return "draft";
+  return "paused";
+}
+function formatEmailBodyHtml(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (/<br\s*\/?>/i.test(trimmed)) return trimmed;
+  return trimmed.replace(/\r?\n/g, "<br/>");
+}
+function buildCampaignOptionFields(options) {
+  if (!options) return {};
+  const extra = {};
+  const subject = options.subject?.trim() ?? "";
+  const body = formatEmailBodyHtml(options.body ?? "");
+  if (subject || body) {
+    const delay = typeof options.delayDays === "number" && Number.isFinite(options.delayDays) ? Math.max(0, Math.min(365, Math.round(options.delayDays))) : 2;
+    extra.sequences = [
+      {
+        steps: [
+          {
+            type: "email",
+            delay,
+            delay_unit: "days",
+            variants: [{ subject: subject || "Approved scheme outreach", body: body || subject }]
+          }
+        ]
+      }
+    ];
+  }
+  if (typeof options.dailyLimit === "number" && Number.isFinite(options.dailyLimit)) extra.daily_limit = options.dailyLimit;
+  if (typeof options.stopOnReply === "boolean") extra.stop_on_reply = options.stopOnReply;
+  if (Array.isArray(options.emailList) && options.emailList.length > 0) extra.email_list = options.emailList;
+  return extra;
+}
 function asRecord(value) {
   return value && typeof value === "object" ? value : {};
 }
@@ -68467,14 +68506,16 @@ function text2(value) {
   return typeof value === "string" ? value : "";
 }
 function readProviderEvent(body) {
-  const record2 = asRecord(body);
-  const eventType = text2(record2.event_type || record2.eventType || record2.type).toLowerCase();
+  const root = asRecord(body);
+  const data = asRecord(root.data);
+  const record2 = Object.keys(data).length > 0 && !root.event_type && !root.eventType && !root.type ? data : root;
+  const eventType = text2(record2.event_type || record2.eventType || record2.type || data.event_type).toLowerCase();
   const kind = eventType.includes("reply") ? "reply" : eventType.includes("bounce") ? "bounce" : eventType.includes("click") ? "click" : eventType.includes("open") ? "open" : null;
   if (!kind) return null;
-  const lead = asRecord(record2.lead);
-  const email3 = text2(record2.lead_email || record2.email || lead.email).toLowerCase();
-  const workspaceId = text2(record2.workspace || record2.workspace_id || record2.organization_id);
-  const campaignId = text2(record2.campaign_id || record2.campaign || asRecord(record2.campaign_object).id);
+  const lead = asRecord(record2.lead || data.lead);
+  const email3 = text2(record2.lead_email || record2.email || lead.email || data.lead_email || data.email).toLowerCase();
+  const workspaceId = text2(record2.workspace || record2.workspace_id || record2.organization_id || data.workspace || data.workspace_id);
+  const campaignId = text2(record2.campaign_id || record2.campaign || asRecord(record2.campaign_object).id || data.campaign_id);
   if (!email3 || !workspaceId) return null;
   return { workspaceId, campaignId, email: email3, kind };
 }
@@ -68486,8 +68527,11 @@ function createInstantlyProvider(apiKey, fetchImpl = fetch) {
     headers.set("Content-Type", "application/json");
     if (workspaceId) headers.set("x-as-workspace", workspaceId);
     const response = await fetchImpl(`${BASE}${path2}`, { ...init, headers });
-    if (response.status === 429 && attempt < 3) {
-      await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
+    const retryable = response.status === 429 || response.status >= 500 && (init?.method ?? "GET") === "GET";
+    if (retryable && attempt < 3) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : 1e3 * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
       return call(workspaceId, path2, init, attempt + 1);
     }
     const payload = await response.json().catch(() => ({}));
@@ -68497,26 +68541,51 @@ function createInstantlyProvider(apiKey, fetchImpl = fetch) {
   }
   return {
     mode: "live",
+    async currentWorkspace() {
+      const body = asRecord(await call(null, "/workspaces/current"));
+      const id = text2(body.id);
+      if (!id) return null;
+      return { id, name: text2(body.name) || id, status: "accepted" };
+    },
     async listWorkspaces() {
       const found = [];
+      const seen = /* @__PURE__ */ new Set();
+      let groupFailed = false;
       let startingAfter = "";
-      for (let page = 0; page < 10; page += 1) {
-        const query = new URLSearchParams({ limit: "100" });
-        if (startingAfter) query.set("starting_after", startingAfter);
-        const body = asRecord(await call(null, `/workspace-group-members?${query}`));
-        const items = Array.isArray(body.items) ? body.items : [];
-        for (const item of items) {
-          const row = asRecord(item);
-          const id = text2(row.sub_workspace_id);
-          if (!id) continue;
-          found.push({ id, name: text2(row.sub_workspace_name) || id, status: text2(row.status) || "pending" });
+      try {
+        for (let page = 0; page < 10; page += 1) {
+          const query = new URLSearchParams({ limit: "100" });
+          if (startingAfter) query.set("starting_after", startingAfter);
+          const body = asRecord(await call(null, `/workspace-group-members?${query}`));
+          const items = Array.isArray(body.items) ? body.items : [];
+          for (const item of items) {
+            const row = asRecord(item);
+            const id = text2(row.sub_workspace_id);
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            found.push({ id, name: text2(row.sub_workspace_name) || id, status: text2(row.status) || "pending" });
+          }
+          startingAfter = text2(body.next_starting_after);
+          if (!startingAfter) break;
         }
-        startingAfter = text2(body.next_starting_after);
-        if (!startingAfter) break;
+      } catch {
+        groupFailed = true;
+      }
+      if (found.length === 0) {
+        try {
+          const current = asRecord(await call(null, "/workspaces/current"));
+          const id = text2(current.id);
+          if (id && !seen.has(id)) {
+            seen.add(id);
+            found.push({ id, name: text2(current.name) || id, status: "accepted" });
+          }
+        } catch {
+          if (groupFailed) throw new CampaignEngineError("request");
+        }
       }
       return found;
     },
-    async createCampaign(workspaceId, name) {
+    async createCampaign(workspaceId, name, options) {
       const body = asRecord(
         await call(workspaceId, "/campaigns", {
           method: "POST",
@@ -68527,11 +68596,12 @@ function createInstantlyProvider(apiKey, fetchImpl = fetch) {
                 {
                   name: "Weekdays",
                   timing: { from: "09:00", to: "17:00" },
-                  days: { 1: true, 2: true, 3: true, 4: true, 5: true },
-                  timezone: "Europe/London"
+                  days: { "0": false, "1": true, "2": true, "3": true, "4": true, "5": true, "6": false },
+                  timezone: UK_TIMEZONE
                 }
               ]
-            }
+            },
+            ...buildCampaignOptionFields(options)
           })
         })
       );
@@ -68539,15 +68609,33 @@ function createInstantlyProvider(apiKey, fetchImpl = fetch) {
       if (!id) throw new CampaignEngineError("request");
       return { id };
     },
-    async listCampaigns(workspaceId) {
-      const body = asRecord(await call(workspaceId, "/campaigns?limit=100"));
-      const items = Array.isArray(body.items) ? body.items : [];
-      return items.map((item) => {
-        const row = asRecord(item);
-        const statusValue = row.status;
-        const status = statusValue === 1 || statusValue === "active" ? "live" : statusValue === 2 || statusValue === "paused" ? "paused" : "draft";
-        return { id: text2(row.id), name: text2(row.name), status };
+    async updateCampaign(workspaceId, campaignId, options) {
+      const patch = {
+        ...options.name ? { name: options.name } : {},
+        ...buildCampaignOptionFields(options)
+      };
+      if (Object.keys(patch).length === 0) return;
+      await call(workspaceId, `/campaigns/${campaignId}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch)
       });
+    },
+    async listCampaigns(workspaceId) {
+      const found = [];
+      let startingAfter = "";
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const query = new URLSearchParams({ limit: "100" });
+        if (startingAfter) query.set("starting_after", startingAfter);
+        const body = asRecord(await call(workspaceId, `/campaigns?${query}`));
+        const items = Array.isArray(body.items) ? body.items : [];
+        for (const item of items) {
+          const row = asRecord(item);
+          found.push({ id: text2(row.id), name: text2(row.name), status: readCampaignStatus(row.status) });
+        }
+        startingAfter = text2(body.next_starting_after);
+        if (!startingAfter || items.length === 0) break;
+      }
+      return found;
     },
     async pauseCampaign(workspaceId, campaignId) {
       await call(workspaceId, `/campaigns/${campaignId}/pause`, { method: "POST" });
@@ -68581,10 +68669,12 @@ function createInstantlyProvider(apiKey, fetchImpl = fetch) {
       return { added };
     },
     async analytics(workspaceId, campaignId) {
-      const body = asRecord(await call(workspaceId, `/campaigns/analytics?id=${encodeURIComponent(campaignId)}`));
-      const row = Array.isArray(body.items) ? asRecord(body.items[0]) : body;
-      const sent = Number(row.emails_sent_count ?? row.sent ?? 0);
-      const opens = Number(row.open_count_unique ?? row.unique_open_count ?? row.open_count ?? 0);
+      const query = new URLSearchParams({ id: campaignId, exclude_total_leads_count: "true" });
+      const payload = await call(workspaceId, `/campaigns/analytics?${query}`);
+      const list = Array.isArray(payload) ? payload : Array.isArray(asRecord(payload).items) ? asRecord(payload).items : [payload];
+      const row = asRecord(list.find((item) => text2(asRecord(item).campaign_id) === campaignId) ?? list[0]);
+      const sent = Number(row.emails_sent_count ?? 0);
+      const opens = Number(row.open_count_unique ?? row.open_count ?? 0);
       const replies = Number(row.reply_count_unique ?? row.reply_count ?? 0);
       const rate = (part) => sent > 0 && Number.isFinite(part) ? `${(part / sent * 100).toFixed(1)}%` : "\u2014";
       return { sent: Number.isFinite(sent) ? sent : 0, openRate: rate(opens), replyRate: rate(replies) };
@@ -68622,10 +68712,17 @@ function createSandboxProvider() {
     async listWorkspaces() {
       return workspaces;
     },
+    async currentWorkspace() {
+      return workspaces[0] ?? null;
+    },
     async createCampaign(_workspaceId, name) {
       const id = `sandbox-${randomUUID()}`;
       campaigns2.set(id, { id, name, status: "draft", leads: 0 });
       return { id };
+    },
+    async updateCampaign(_workspaceId, campaignId, options) {
+      const campaign = campaigns2.get(campaignId);
+      if (campaign && options.name) campaign.name = options.name;
     },
     async listCampaigns() {
       return [...campaigns2.values()].map(({ id, name, status }) => ({ id, name, status }));
@@ -68636,7 +68733,7 @@ function createSandboxProvider() {
     },
     async resumeCampaign(_workspaceId, campaignId) {
       const campaign = campaigns2.get(campaignId);
-      if (campaign && campaign.status !== "draft") campaign.status = "live";
+      if (campaign) campaign.status = "live";
     },
     async addLeads(_workspaceId, campaignId, leads) {
       const campaign = campaigns2.get(campaignId);
@@ -68654,13 +68751,29 @@ function createSandboxProvider() {
 }
 
 // ../api/src/providers/campaign/index.ts
-async function loadCampaignEngine() {
+var CLIENT_KEY_PREFIX = "client:";
+function formatClientKeyHint(organisationId, maskedHint) {
+  return `${CLIENT_KEY_PREFIX}${organisationId}:${maskedHint}`;
+}
+function parseClientKeyHint(rawHint) {
+  if (!rawHint.startsWith(CLIENT_KEY_PREFIX)) return null;
+  const rest = rawHint.slice(CLIENT_KEY_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) return null;
+  return { organisationId: rest.slice(0, sep), hint: rest.slice(sep + 1) };
+}
+async function loadCampaignEngine(organisationId, overrideApiKey) {
   if (process.env.CAMPAIGN_PROVIDER === "sandbox") return { mode: "sandbox", provider: createSandboxProvider() };
-  const [row] = await db.select().from(campaignProviderSettings).limit(1);
+  if (overrideApiKey?.trim()) return { mode: "live", provider: createInstantlyProvider(overrideApiKey.trim()) };
+  const rows = await db.select().from(campaignProviderSettings);
   const secret = process.env.CAMPAIGN_KEY_ENCRYPTION_SECRET;
-  if (!row || !secret) return { mode: "sandbox", provider: createSandboxProvider() };
+  if (!rows.length || !secret) return { mode: "sandbox", provider: createSandboxProvider() };
+  const clientRow = organisationId ? rows.find((item) => parseClientKeyHint(item.hint)?.organisationId === organisationId) : void 0;
+  const agencyRow = rows.find((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX));
+  const target = clientRow ?? agencyRow;
+  if (!target) return { mode: "sandbox", provider: createSandboxProvider() };
   try {
-    const apiKey = openSecret(row.ciphertext, secret);
+    const apiKey = openSecret(target.ciphertext, secret);
     if (!apiKey) return { mode: "sandbox", provider: createSandboxProvider() };
     return { mode: "live", provider: createInstantlyProvider(apiKey) };
   } catch {
@@ -68672,7 +68785,11 @@ async function loadCampaignEngine() {
 var campaignBody = external_exports.object({
   name: external_exports.string().min(1),
   region: external_exports.string().min(1).default("London"),
-  status: external_exports.enum(["draft", "live", "paused"]).optional()
+  status: external_exports.enum(["draft", "live", "paused"]).optional(),
+  subject: external_exports.string().optional(),
+  body: external_exports.string().optional(),
+  delayDays: external_exports.number().int().min(0).max(365).optional(),
+  stopOnReply: external_exports.boolean().optional()
 });
 function presentCampaign(row) {
   return {
@@ -68713,8 +68830,15 @@ async function campaignRoutes(app2) {
     const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1);
     if (mapping) {
       try {
-        const engine = await loadCampaignEngine();
-        const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, body.name);
+        const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1);
+        const engine = await loadCampaignEngine(user.organisationId);
+        const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, body.name, {
+          subject: body.subject,
+          body: body.body,
+          delayDays: body.delayDays,
+          stopOnReply: body.stopOnReply ?? true,
+          dailyLimit: client?.dailySendLimit ?? 30
+        });
         await db.insert(campaignEngineLinks).values({
           campaignId: created.id,
           organisationId: user.organisationId,
@@ -68732,8 +68856,30 @@ async function campaignRoutes(app2) {
     const { id } = request.params;
     const body = parseBody(campaignBody.partial(), request.body, reply);
     if (!body) return;
-    const [updated] = await db.update(campaigns).set({ ...body, updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId))).returning();
+    const dbPatch = {
+      ...body.name !== void 0 ? { name: body.name } : {},
+      ...body.region !== void 0 ? { region: body.region } : {},
+      ...body.status !== void 0 ? { status: body.status } : {},
+      updatedAt: /* @__PURE__ */ new Date()
+    };
+    const [updated] = await db.update(campaigns).set(dbPatch).where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId))).returning();
     if (!updated) return reply.code(404).send({ error: "Campaign not found" });
+    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1);
+    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1);
+    if (mapping && link && (body.name || body.subject || body.body || body.delayDays !== void 0 || body.stopOnReply !== void 0)) {
+      try {
+        const engine = await loadCampaignEngine(user.organisationId);
+        await engine.provider.updateCampaign?.(mapping.providerWorkspaceId, link.providerCampaignId, {
+          name: body.name,
+          subject: body.subject,
+          body: body.body,
+          delayDays: body.delayDays,
+          stopOnReply: body.stopOnReply
+        });
+      } catch {
+        throw new HttpError(502, ENGINE_UNAVAILABLE);
+      }
+    }
     return presentCampaign(updated);
   });
   app2.post("/api/v1/campaigns/:id/pause", async (request, reply) => setStatus(request, reply, "paused"));
@@ -68763,7 +68909,7 @@ async function campaignRoutes(app2) {
     const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1);
     if (!mapping || !link) return reply.code(409).send({ error: "This workspace is not connected to the campaign engine yet." });
     try {
-      const engine = await loadCampaignEngine();
+      const engine = await loadCampaignEngine(user.organisationId);
       const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, body.leads);
       await db.update(campaigns).set({ contacts: existing.contacts + result.added, updatedAt: /* @__PURE__ */ new Date() }).where(eq(campaigns.id, id));
       return { added: result.added };
@@ -68842,7 +68988,7 @@ async function refreshAnalytics(organisationId) {
   const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1);
   if (!mapping) return;
   try {
-    const engine = await loadCampaignEngine();
+    const engine = await loadCampaignEngine(organisationId);
     for (const link of links) {
       const stats = await engine.provider.analytics(mapping.providerWorkspaceId, link.providerCampaignId);
       await db.update(campaigns).set({ sent: stats.sent, openRate: stats.openRate, replyRate: stats.replyRate, updatedAt: /* @__PURE__ */ new Date() }).where(eq(campaigns.id, link.campaignId));
@@ -68856,18 +69002,16 @@ async function setStatus(request, reply, status) {
   const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
   if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: "Campaign not found" });
   if (existing.status === "draft" && status === "paused") return reply.code(400).send({ error: "Draft campaigns cannot be paused" });
-  const next = status === "live" && existing.status === "draft" ? "draft" : status;
-  if (next !== "draft") {
-    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1);
-    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1);
-    if (mapping && link) {
-      try {
-        const engine = await loadCampaignEngine();
-        if (next === "paused") await engine.provider.pauseCampaign(mapping.providerWorkspaceId, link.providerCampaignId);
-        if (next === "live") await engine.provider.resumeCampaign(mapping.providerWorkspaceId, link.providerCampaignId);
-      } catch {
-        throw new HttpError(502, ENGINE_UNAVAILABLE);
-      }
+  const next = status;
+  const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1);
+  const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1);
+  if (mapping && link) {
+    try {
+      const engine = await loadCampaignEngine(user.organisationId);
+      if (next === "paused") await engine.provider.pauseCampaign(mapping.providerWorkspaceId, link.providerCampaignId);
+      if (next === "live") await engine.provider.resumeCampaign(mapping.providerWorkspaceId, link.providerCampaignId);
+    } catch {
+      throw new HttpError(502, ENGINE_UNAVAILABLE);
     }
   }
   const [updated] = await db.update(campaigns).set({ status: next, updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId))).returning();
@@ -68901,11 +69045,13 @@ var actions = {
 async function campaignProviderRoutes(app2) {
   app2.get("/api/v1/campaign-provider", async (request) => {
     requireUser(request);
-    const [row] = await db.select().from(campaignProviderSettings).limit(1);
+    const rows = await db.select().from(campaignProviderSettings);
+    const row = rows.find((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX)) ?? rows[0];
     const engine = await loadCampaignEngine();
+    const parsedHint = row ? parseClientKeyHint(row.hint) : null;
     return {
       configured: Boolean(row),
-      hint: row?.hint ?? "",
+      hint: parsedHint ? parsedHint.hint : row?.hint ?? "",
       mode: engine.mode
     };
   });
@@ -68914,7 +69060,9 @@ async function campaignProviderRoutes(app2) {
     const body = parseBody(external_exports.object({ apiKey: external_exports.string() }), request.body, reply);
     if (!body) return;
     const apiKey = body.apiKey.trim();
-    await db.delete(campaignProviderSettings);
+    const existing = await db.select().from(campaignProviderSettings);
+    const agencyIds = existing.filter((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX)).map((item) => item.id);
+    if (agencyIds.length) await db.delete(campaignProviderSettings).where(inArray(campaignProviderSettings.id, agencyIds));
     if (!apiKey) return { configured: false, hint: "", mode: "sandbox" };
     const secret = encryptionSecret();
     const [saved] = await db.insert(campaignProviderSettings).values({ ciphertext: sealSecret(apiKey, secret), hint: maskSecret(apiKey), updatedAt: /* @__PURE__ */ new Date() }).returning();
@@ -68936,10 +69084,17 @@ async function campaignProviderRoutes(app2) {
     requireUser(request);
     const clients = await db.select().from(organisations).orderBy(asc(organisations.companyName));
     const mappings = await db.select().from(campaignProviderMappings);
+    const settingsRows = await db.select().from(campaignProviderSettings);
     const byOrg = new Map(mappings.map((mapping) => [mapping.organisationId, mapping]));
+    const keyHintByOrg = /* @__PURE__ */ new Map();
+    for (const row of settingsRows) {
+      const parsed = parseClientKeyHint(row.hint);
+      if (parsed) keyHintByOrg.set(parsed.organisationId, parsed.hint);
+    }
     return {
       data: clients.map((client) => {
         const mapping = byOrg.get(client.id);
+        const keyHint = keyHintByOrg.get(client.id) ?? "";
         return {
           organisationId: client.id,
           organisationName: client.companyName,
@@ -68947,7 +69102,8 @@ async function campaignProviderRoutes(app2) {
           trackingDomain: mapping?.trackingDomain ?? "",
           status: mapping?.status ?? "unmapped",
           webhookStatus: mapping?.webhookStatus ?? "unknown",
-          health: mapping?.health ?? "unknown"
+          health: mapping?.health ?? "unknown",
+          keyHint
         };
       })
     };
@@ -68957,8 +69113,9 @@ async function campaignProviderRoutes(app2) {
     const body = parseBody(
       external_exports.object({
         organisationId: external_exports.string().uuid(),
-        providerWorkspaceId: external_exports.string().min(1),
-        trackingDomain: external_exports.string().default("")
+        providerWorkspaceId: external_exports.string().default(""),
+        trackingDomain: external_exports.string().default(""),
+        workspaceApiKey: external_exports.string().optional()
       }),
       request.body,
       reply
@@ -68966,13 +69123,44 @@ async function campaignProviderRoutes(app2) {
     if (!body) return;
     const [client] = await db.select().from(organisations).where(eq(organisations.id, body.organisationId)).limit(1);
     if (!client) return reply.code(404).send({ error: "Client not found" });
+    const workspaceKey = body.workspaceApiKey?.trim();
+    let keyHint = "";
+    if (workspaceKey !== void 0) {
+      const existing = await db.select().from(campaignProviderSettings);
+      const clientIds = existing.filter((item) => parseClientKeyHint(item.hint)?.organisationId === body.organisationId).map((item) => item.id);
+      if (clientIds.length) await db.delete(campaignProviderSettings).where(inArray(campaignProviderSettings.id, clientIds));
+      if (workspaceKey) {
+        const secret = encryptionSecret();
+        const masked = maskSecret(workspaceKey);
+        const [savedKey] = await db.insert(campaignProviderSettings).values({
+          ciphertext: sealSecret(workspaceKey, secret),
+          hint: formatClientKeyHint(body.organisationId, masked),
+          updatedAt: /* @__PURE__ */ new Date()
+        }).returning();
+        if (savedKey && openSecret(savedKey.ciphertext, secret) !== workspaceKey) throw new HttpError(500, "Campaign key storage failed");
+        keyHint = masked;
+      }
+    } else {
+      const existing = await db.select().from(campaignProviderSettings);
+      const current = existing.find((item) => parseClientKeyHint(item.hint)?.organisationId === body.organisationId);
+      if (current) keyHint = parseClientKeyHint(current.hint)?.hint ?? "";
+    }
+    const engine = await loadCampaignEngine(body.organisationId);
+    let resolvedWorkspaceId = body.providerWorkspaceId.trim();
+    if (!resolvedWorkspaceId && engine.provider.currentWorkspace) {
+      try {
+        const detected = await engine.provider.currentWorkspace();
+        if (detected?.id) resolvedWorkspaceId = detected.id;
+      } catch {
+      }
+    }
+    if (!resolvedWorkspaceId) return reply.code(400).send({ error: "Enter a provider workspace id or provide a workspace API key" });
     const domain2 = (body.trackingDomain ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     let webhookStatus = process.env.CAMPAIGN_WEBHOOK_SECRET ? "unknown" : "not_configured";
     let health = "attention";
     try {
-      const engine = await loadCampaignEngine();
       const target = webhookTarget();
-      webhookStatus = target ? await engine.provider.registerWebhook(body.providerWorkspaceId, target) : "not_configured";
+      webhookStatus = target ? await engine.provider.registerWebhook(resolvedWorkspaceId, target) : "not_configured";
       health = webhookStatus === "registered" || webhookStatus === "sandbox" ? "ok" : "attention";
     } catch {
       webhookStatus = "error";
@@ -68980,7 +69168,7 @@ async function campaignProviderRoutes(app2) {
     }
     const values2 = {
       organisationId: body.organisationId,
-      providerWorkspaceId: body.providerWorkspaceId.trim(),
+      providerWorkspaceId: resolvedWorkspaceId,
       trackingDomain: domain2,
       status: "mapped",
       webhookStatus,
@@ -68998,13 +69186,17 @@ async function campaignProviderRoutes(app2) {
         updatedAt: values2.updatedAt
       }
     }).returning();
+    if (domain2) {
+      await db.update(organisations).set({ trackingDomain: domain2 }).where(eq(organisations.id, body.organisationId));
+    }
     return {
       organisationId: saved?.organisationId,
       providerWorkspaceId: saved?.providerWorkspaceId,
       trackingDomain: saved?.trackingDomain,
       status: saved?.status,
       webhookStatus: saved?.webhookStatus,
-      health: saved?.health
+      health: saved?.health,
+      keyHint
     };
   });
   app2.post("/api/v1/campaign-events/:token", { config: { public: true } }, async (request, reply) => {

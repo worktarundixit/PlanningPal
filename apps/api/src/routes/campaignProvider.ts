@@ -1,12 +1,12 @@
 import { timingSafeEqual } from 'node:crypto'
-import { asc, eq } from 'drizzle-orm'
+import { asc, eq, inArray } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { campaignProviderMappings, campaignProviderSettings, crmLeads, intentEvents, organisations, planningApplications } from '../db/schema.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 import { maskSecret, openSecret, sealSecret } from '../providers/campaign/crypto.ts'
-import { loadCampaignEngine, readProviderEvent } from '../providers/campaign/index.ts'
+import { CLIENT_KEY_PREFIX, formatClientKeyHint, loadCampaignEngine, parseClientKeyHint, readProviderEvent } from '../providers/campaign/index.ts'
 import { ENGINE_UNAVAILABLE } from '../providers/campaign/types.ts'
 
 function encryptionSecret() {
@@ -38,11 +38,13 @@ const actions = {
 export async function campaignProviderRoutes(app: FastifyInstance) {
   app.get('/api/v1/campaign-provider', async (request) => {
     requireUser(request)
-    const [row] = await db.select().from(campaignProviderSettings).limit(1)
+    const rows = await db.select().from(campaignProviderSettings)
+    const row = rows.find((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX)) ?? rows[0]
     const engine = await loadCampaignEngine()
+    const parsedHint = row ? parseClientKeyHint(row.hint) : null
     return {
       configured: Boolean(row),
-      hint: row?.hint ?? '',
+      hint: parsedHint ? parsedHint.hint : (row?.hint ?? ''),
       mode: engine.mode,
     }
   })
@@ -52,7 +54,9 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
     const body = parseBody(z.object({ apiKey: z.string() }), request.body, reply)
     if (!body) return
     const apiKey = body.apiKey.trim()
-    await db.delete(campaignProviderSettings)
+    const existing = await db.select().from(campaignProviderSettings)
+    const agencyIds = existing.filter((item) => !item.hint.startsWith(CLIENT_KEY_PREFIX)).map((item) => item.id)
+    if (agencyIds.length) await db.delete(campaignProviderSettings).where(inArray(campaignProviderSettings.id, agencyIds))
     if (!apiKey) return { configured: false, hint: '', mode: 'sandbox' as const }
     const secret = encryptionSecret()
     const [saved] = await db
@@ -79,10 +83,17 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
     requireUser(request)
     const clients = await db.select().from(organisations).orderBy(asc(organisations.companyName))
     const mappings = await db.select().from(campaignProviderMappings)
+    const settingsRows = await db.select().from(campaignProviderSettings)
     const byOrg = new Map(mappings.map((mapping) => [mapping.organisationId, mapping]))
+    const keyHintByOrg = new Map<string, string>()
+    for (const row of settingsRows) {
+      const parsed = parseClientKeyHint(row.hint)
+      if (parsed) keyHintByOrg.set(parsed.organisationId, parsed.hint)
+    }
     return {
       data: clients.map((client) => {
         const mapping = byOrg.get(client.id)
+        const keyHint = keyHintByOrg.get(client.id) ?? ''
         return {
           organisationId: client.id,
           organisationName: client.companyName,
@@ -91,6 +102,7 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
           status: mapping?.status ?? 'unmapped',
           webhookStatus: mapping?.webhookStatus ?? 'unknown',
           health: mapping?.health ?? 'unknown',
+          keyHint,
         }
       }),
     }
@@ -101,8 +113,9 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
     const body = parseBody(
       z.object({
         organisationId: z.string().uuid(),
-        providerWorkspaceId: z.string().min(1),
+        providerWorkspaceId: z.string().default(''),
         trackingDomain: z.string().default(''),
+        workspaceApiKey: z.string().optional(),
       }),
       request.body,
       reply,
@@ -110,13 +123,50 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
     if (!body) return
     const [client] = await db.select().from(organisations).where(eq(organisations.id, body.organisationId)).limit(1)
     if (!client) return reply.code(404).send({ error: 'Client not found' })
+    const workspaceKey = body.workspaceApiKey?.trim()
+    let keyHint = ''
+    if (workspaceKey !== undefined) {
+      const existing = await db.select().from(campaignProviderSettings)
+      const clientIds = existing.filter((item) => parseClientKeyHint(item.hint)?.organisationId === body.organisationId).map((item) => item.id)
+      if (clientIds.length) await db.delete(campaignProviderSettings).where(inArray(campaignProviderSettings.id, clientIds))
+      if (workspaceKey) {
+        const secret = encryptionSecret()
+        const masked = maskSecret(workspaceKey)
+        const [savedKey] = await db
+          .insert(campaignProviderSettings)
+          .values({
+            ciphertext: sealSecret(workspaceKey, secret),
+            hint: formatClientKeyHint(body.organisationId, masked),
+            updatedAt: new Date(),
+          })
+          .returning()
+        if (savedKey && openSecret(savedKey.ciphertext, secret) !== workspaceKey) throw new HttpError(500, 'Campaign key storage failed')
+        keyHint = masked
+      }
+    } else {
+      const existing = await db.select().from(campaignProviderSettings)
+      const current = existing.find((item) => parseClientKeyHint(item.hint)?.organisationId === body.organisationId)
+      if (current) keyHint = parseClientKeyHint(current.hint)?.hint ?? ''
+    }
+
+    const engine = await loadCampaignEngine(body.organisationId)
+    let resolvedWorkspaceId = body.providerWorkspaceId.trim()
+    if (!resolvedWorkspaceId && engine.provider.currentWorkspace) {
+      try {
+        const detected = await engine.provider.currentWorkspace()
+        if (detected?.id) resolvedWorkspaceId = detected.id
+      } catch {
+        // Leave empty so validation below reports the missing workspace ID.
+      }
+    }
+    if (!resolvedWorkspaceId) return reply.code(400).send({ error: 'Enter a provider workspace id or provide a workspace API key' })
+
     const domain = (body.trackingDomain ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
     let webhookStatus = process.env.CAMPAIGN_WEBHOOK_SECRET ? 'unknown' : 'not_configured'
     let health = 'attention'
     try {
-      const engine = await loadCampaignEngine()
       const target = webhookTarget()
-      webhookStatus = target ? await engine.provider.registerWebhook(body.providerWorkspaceId, target) : 'not_configured'
+      webhookStatus = target ? await engine.provider.registerWebhook(resolvedWorkspaceId, target) : 'not_configured'
       health = webhookStatus === 'registered' || webhookStatus === 'sandbox' ? 'ok' : 'attention'
     } catch {
       webhookStatus = 'error'
@@ -124,7 +174,7 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
     }
     const values = {
       organisationId: body.organisationId,
-      providerWorkspaceId: body.providerWorkspaceId.trim(),
+      providerWorkspaceId: resolvedWorkspaceId,
       trackingDomain: domain,
       status: 'mapped',
       webhookStatus,
@@ -146,6 +196,9 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
         },
       })
       .returning()
+    if (domain) {
+      await db.update(organisations).set({ trackingDomain: domain }).where(eq(organisations.id, body.organisationId))
+    }
     return {
       organisationId: saved?.organisationId,
       providerWorkspaceId: saved?.providerWorkspaceId,
@@ -153,6 +206,7 @@ export async function campaignProviderRoutes(app: FastifyInstance) {
       status: saved?.status,
       webhookStatus: saved?.webhookStatus,
       health: saved?.health,
+      keyHint,
     }
   })
 

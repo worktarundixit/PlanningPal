@@ -11,6 +11,10 @@ const campaignBody = z.object({
   name: z.string().min(1),
   region: z.string().min(1).default('London'),
   status: z.enum(['draft', 'live', 'paused']).optional(),
+  subject: z.string().optional(),
+  body: z.string().optional(),
+  delayDays: z.number().int().min(0).max(365).optional(),
+  stopOnReply: z.boolean().optional(),
 })
 
 function presentCampaign(row: typeof campaigns.$inferSelect) {
@@ -57,8 +61,15 @@ export async function campaignRoutes(app: FastifyInstance) {
     const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1)
     if (mapping) {
       try {
-        const engine = await loadCampaignEngine()
-        const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, body.name)
+        const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
+        const engine = await loadCampaignEngine(user.organisationId)
+        const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, body.name, {
+          subject: body.subject,
+          body: body.body,
+          delayDays: body.delayDays,
+          stopOnReply: body.stopOnReply ?? true,
+          dailyLimit: client?.dailySendLimit ?? 30,
+        })
         await db.insert(campaignEngineLinks).values({
           campaignId: created.id,
           organisationId: user.organisationId,
@@ -77,12 +88,34 @@ export async function campaignRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string }
     const body = parseBody(campaignBody.partial(), request.body, reply)
     if (!body) return
+    const dbPatch: Partial<typeof campaigns.$inferInsert> = {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.region !== undefined ? { region: body.region } : {}),
+      ...(body.status !== undefined ? { status: body.status } : {}),
+      updatedAt: new Date(),
+    }
     const [updated] = await db
       .update(campaigns)
-      .set({ ...body, updatedAt: new Date() })
+      .set(dbPatch)
       .where(and(eq(campaigns.id, id), eq(campaigns.organisationId, user.organisationId)))
       .returning()
     if (!updated) return reply.code(404).send({ error: 'Campaign not found' })
+    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1)
+    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1)
+    if (mapping && link && (body.name || body.subject || body.body || body.delayDays !== undefined || body.stopOnReply !== undefined)) {
+      try {
+        const engine = await loadCampaignEngine(user.organisationId)
+        await engine.provider.updateCampaign?.(mapping.providerWorkspaceId, link.providerCampaignId, {
+          name: body.name,
+          subject: body.subject,
+          body: body.body,
+          delayDays: body.delayDays,
+          stopOnReply: body.stopOnReply,
+        })
+      } catch {
+        throw new HttpError(502, ENGINE_UNAVAILABLE)
+      }
+    }
     return presentCampaign(updated)
   })
 
@@ -117,7 +150,7 @@ export async function campaignRoutes(app: FastifyInstance) {
     const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1)
     if (!mapping || !link) return reply.code(409).send({ error: 'This workspace is not connected to the campaign engine yet.' })
     try {
-      const engine = await loadCampaignEngine()
+      const engine = await loadCampaignEngine(user.organisationId)
       const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, body.leads)
       await db.update(campaigns).set({ contacts: existing.contacts + result.added, updatedAt: new Date() }).where(eq(campaigns.id, id))
       return { added: result.added }
@@ -213,7 +246,7 @@ async function refreshAnalytics(organisationId: string) {
   const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1)
   if (!mapping) return
   try {
-    const engine = await loadCampaignEngine()
+    const engine = await loadCampaignEngine(organisationId)
     for (const link of links) {
       const stats = await engine.provider.analytics(mapping.providerWorkspaceId, link.providerCampaignId)
       await db.update(campaigns).set({ sent: stats.sent, openRate: stats.openRate, replyRate: stats.replyRate, updatedAt: new Date() }).where(eq(campaigns.id, link.campaignId))
@@ -229,18 +262,16 @@ async function setStatus(request: FastifyRequest, reply: FastifyReply, status: '
   const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1)
   if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Campaign not found' })
   if (existing.status === 'draft' && status === 'paused') return reply.code(400).send({ error: 'Draft campaigns cannot be paused' })
-  const next = status === 'live' && existing.status === 'draft' ? 'draft' : status
-  if (next !== 'draft') {
-    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1)
-    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1)
-    if (mapping && link) {
-      try {
-        const engine = await loadCampaignEngine()
-        if (next === 'paused') await engine.provider.pauseCampaign(mapping.providerWorkspaceId, link.providerCampaignId)
-        if (next === 'live') await engine.provider.resumeCampaign(mapping.providerWorkspaceId, link.providerCampaignId)
-      } catch {
-        throw new HttpError(502, ENGINE_UNAVAILABLE)
-      }
+  const next = status
+  const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1)
+  const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1)
+  if (mapping && link) {
+    try {
+      const engine = await loadCampaignEngine(user.organisationId)
+      if (next === 'paused') await engine.provider.pauseCampaign(mapping.providerWorkspaceId, link.providerCampaignId)
+      if (next === 'live') await engine.provider.resumeCampaign(mapping.providerWorkspaceId, link.providerCampaignId)
+    } catch {
+      throw new HttpError(502, ENGINE_UNAVAILABLE)
     }
   }
   const [updated] = await db

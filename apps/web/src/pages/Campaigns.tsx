@@ -12,11 +12,45 @@ function presentStatus(status: string) {
   return status
 }
 
+const DEFAULT_SUBJECT = 'Approved planning scheme — {{companyName}}'
+const DEFAULT_BODY =
+  'Hi {{firstName}},\n\nNoticed your recently approved scheme and wanted to share how we support RIBA Stage 3–4 packages across {{companyName}}.\n\nWould a brief 10-minute call this week be useful?'
+const MERGE_TAGS = ['{{firstName}}', '{{lastName}}', '{{companyName}}', '{{jobTitle}}'] as const
+
+function parseLeadLines(raw: string) {
+  const results: { email: string; firstName?: string; lastName?: string; company?: string; title?: string }[] = []
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const columns = line.split(/\t|,/).map((part) => part.trim()).filter(Boolean)
+    if (columns.length >= 2 && columns[0]?.includes('@') && !columns[1]?.includes('@')) {
+      const [email, firstName, lastName, company, title] = columns
+      results.push({
+        email: email!,
+        ...(firstName ? { firstName } : {}),
+        ...(lastName ? { lastName } : {}),
+        ...(company ? { company } : {}),
+        ...(title ? { title } : {}),
+      })
+      continue
+    }
+    for (const token of line.split(/[\s,;]+/)) {
+      const email = token.trim()
+      if (email.includes('@')) results.push({ email })
+    }
+  }
+  return results
+}
+
 export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrite = true }: { settingsOpen: boolean; setSettingsOpen: (open: boolean) => void; createSignal: number; canWrite?: boolean }) {
   const [campaigns, setCampaigns] = useState<(Campaign & { status: string })[]>([])
   const [editor, setEditor] = useState<number | null>(null)
   const [campaignName, setCampaignName] = useState('')
   const [campaignRegion, setCampaignRegion] = useState('London')
+  const [emailSubject, setEmailSubject] = useState(DEFAULT_SUBJECT)
+  const [emailBody, setEmailBody] = useState(DEFAULT_BODY)
+  const [delayDays, setDelayDays] = useState(2)
+  const [stopOnReply, setStopOnReply] = useState(true)
   const [domainMode, setDomainMode] = useState<'add' | 'buy' | null>(null)
   const [ownedDomain, setOwnedDomain] = useState('')
   const [dailyLimit, setDailyLimit] = useState(30)
@@ -40,19 +74,33 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
   const openEditor = (index: number) => {
     setEditor(index)
     setCampaignName(index >= 0 ? campaigns[index].name : '')
-    setCampaignRegion(index >= 0 && campaigns[index].name.includes('Surrey') ? 'South East' : 'London')
+    setCampaignRegion(index >= 0 && (campaigns[index].region || campaigns[index].name.includes('Surrey')) ? (campaigns[index].region || 'South East') : 'London')
+    if (index === -1) {
+      setEmailSubject(DEFAULT_SUBJECT)
+      setEmailBody(DEFAULT_BODY)
+      setDelayDays(2)
+      setStopOnReply(true)
+    }
   }
   const saveCampaign = () => {
     if (!canWrite || !campaignName.trim()) return
+    const payload = {
+      name: campaignName.trim(),
+      region: campaignRegion,
+      ...(emailSubject.trim() ? { subject: emailSubject.trim() } : {}),
+      ...(emailBody.trim() ? { body: emailBody.trim() } : {}),
+      delayDays,
+      stopOnReply,
+    }
     const persist = editor === -1
-      ? api.createCampaign({ name: campaignName, region: campaignRegion })
-      : editor !== null ? api.updateCampaign(campaigns[editor].id, { name: campaignName, region: campaignRegion }) : Promise.resolve(null)
+      ? api.createCampaign(payload)
+      : editor !== null ? api.updateCampaign(campaigns[editor].id, payload) : Promise.resolve(null)
     void persist.then((saved) => {
       if (!saved) return
       const next = { ...saved, status: presentStatus(saved.status) }
       if (editor === -1) setCampaigns((items) => [...items, next])
       else setCampaigns((items) => items.map((item, index) => index === editor ? next : item))
-      notify(editor === -1 ? 'Campaign created as a draft' : 'Campaign configuration saved')
+      notify(editor === -1 ? 'Campaign created with sequence' : 'Campaign configuration saved')
       setEditor(null)
     }).catch(() => notify('Could not save the campaign'))
   }
@@ -103,10 +151,21 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
         <div className="grid grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(80px,.5fr))_140px] bg-[#F8FAFD] px-5 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]"><span>Campaign</span><span>Contacts</span><span>Sent</span><span>Open rate</span><span>Reply rate</span><span>Meetings</span><span>Actions</span></div>
         {campaigns.map((campaign, campaignIndex) => {
           const isPaused = campaign.status === 'Paused'
-          return <div key={campaign.name} className="grid grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(80px,.5fr))_140px] items-center border-t border-[#EEF2F7] px-5 py-5 text-[10px]">
+          const isDraft = campaign.status === 'Draft'
+          return <div key={campaign.id || campaign.name} className="grid grid-cols-[minmax(250px,1.5fr)_repeat(5,minmax(80px,.5fr))_140px] items-center border-t border-[#EEF2F7] px-5 py-5 text-[10px]">
             <div><div className="font-display text-[12px] font-semibold">{campaign.name}</div><div className={`mt-1.5 inline-flex items-center gap-1.5 text-[8px] font-bold ${campaign.status === 'Live' && !isPaused ? 'text-[#36805A]' : 'text-[#94A3B8]'}`}><i className={`h-1.5 w-1.5 rounded-full ${campaign.status === 'Live' && !isPaused ? 'bg-[#4ADE80]' : 'bg-[#CBD5E1]'}`} />{isPaused ? 'Paused' : campaign.status}</div></div>
             <span>{campaign.contacts.toLocaleString()}</span><span>{campaign.sent}</span><span className="font-semibold">{campaign.open}</span><span>{campaign.reply}</span><span className="font-semibold text-[#2563EB]">{campaign.meetings}</span>
-            <div className="flex gap-1.5"><button onClick={() => openEditor(campaignIndex)} className="rounded-md border border-[#DCE4F0] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">Manage</button>{campaign.status !== 'Draft' && <button disabled={!canWrite} onClick={() => { if (!canWrite) return; const action = isPaused ? api.resumeCampaign(campaign.id) : api.pauseCampaign(campaign.id); void action.then((saved) => setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...saved, status: presentStatus(saved.status) } : item))).catch(() => notify('Could not update the campaign')) }} className="rounded-md bg-[#F1F5F9] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">{isPaused ? 'Resume' : 'Pause'}</button>}</div>
+            <div className="flex gap-1.5">
+              <button onClick={() => openEditor(campaignIndex)} className="rounded-md border border-[#DCE4F0] px-2 py-1.5 text-[8px] font-semibold text-[#64748B]">Manage</button>
+              <button disabled={!canWrite} onClick={() => {
+                if (!canWrite) return
+                const action = isPaused || isDraft ? api.resumeCampaign(campaign.id) : api.pauseCampaign(campaign.id)
+                void action.then((saved) => {
+                  setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...saved, status: presentStatus(saved.status) } : item))
+                  notify(isDraft ? 'Campaign launched' : isPaused ? 'Campaign resumed' : 'Campaign paused')
+                }).catch(() => notify('Could not update the campaign'))
+              }} className={`rounded-md px-2 py-1.5 text-[8px] font-semibold ${isDraft ? 'bg-[#ECFDF5] text-[#15803D]' : 'bg-[#F1F5F9] text-[#64748B]'}`}>{isDraft ? 'Launch' : isPaused ? 'Resume' : 'Pause'}</button>
+            </div>
           </div>
         })}
       </div>}
@@ -117,20 +176,40 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{domains.length === 0 && <div className="sm:col-span-2 lg:col-span-4"><EmptyState icon="mail" title="No sending domains yet." action={{ label: 'Add a domain', onClick: () => setDomainMode('add') }} /></div>}{domains.map((domain) => <div key={domain.name} className="rounded-lg border border-[#E2E8F0] p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-[9px] font-semibold">{domain.name}</div><div className={`mt-1 text-[7px] font-semibold ${domain.status === 'Healthy' ? 'text-[#15803D]' : 'text-[#C2410C]'}`}>{domain.status}</div></div><i className={`mt-1 h-2 w-2 shrink-0 rounded-full ${domain.status === 'Healthy' ? 'bg-[#4ADE80]' : 'bg-[#FB923C]'}`} /></div><div className="mt-3 flex items-center justify-between border-t border-[#EEF2F7] pt-2"><span className="text-[8px] text-[#94A3B8]">{domain.inboxes} inboxes · {domain.health}</span><button onClick={() => { void api.removeDomain(domain.id).then(() => { setDomains((items) => items.filter((item) => item.id !== domain.id)); notify(`${domain.name} removed`) }).catch(() => notify('Could not remove that domain')) }} className="text-[7px] font-semibold text-[#B91C1C]">Remove</button></div></div>)}</div>
       </div>
       </>}
-      {editor !== null && <div className="fixed inset-0 z-[70] grid place-items-center bg-[#0F172A]/55 p-4" onMouseDown={() => setEditor(null)}>
-        <form onSubmit={(event) => { event.preventDefault(); saveCampaign() }} onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+      {editor !== null && <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-[#0F172A]/55 p-4" onMouseDown={() => setEditor(null)}>
+        <form onSubmit={(event) => { event.preventDefault(); saveCampaign() }} onMouseDown={(event) => event.stopPropagation()} className="my-auto w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
           <div className="flex items-start justify-between"><div><div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">{editor === -1 ? 'New outbound campaign' : 'Campaign settings'}</div><h3 className="mt-2 font-display text-xl font-semibold">{editor === -1 ? 'Create campaign' : 'Configure campaign'}</h3></div><button type="button" onClick={() => setEditor(null)} className="grid h-8 w-8 place-items-center rounded-full bg-[#F1F5F9] text-[#64748B]"><Icon name="close" size={14} /></button></div>
-          <label className="mt-6 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Campaign name<input autoFocus value={campaignName} onChange={(event) => setCampaignName(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-3 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]" placeholder="e.g. London approved schemes" /></label>
-          <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Target region<select value={campaignRegion} onChange={(event) => setCampaignRegion(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-3 text-[10px] font-normal normal-case tracking-normal outline-none"><option>London</option><option>South East</option></select></label>
-          <div className="mt-4 rounded-lg bg-[#F8FAFD] p-3 text-[9px] leading-relaxed text-[#64748B]">Matching approved schemes and verified contacts will be added after the campaign is saved.</div>
-          {editor !== null && editor >= 0 && <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Add contacts<textarea value={leadText} onChange={(event) => setLeadText(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[10px] font-normal normal-case tracking-normal outline-none" placeholder="one email per line" /></label>}
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <label className="block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Campaign name<input autoFocus value={campaignName} onChange={(event) => setCampaignName(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-2.5 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]" placeholder="e.g. London approved schemes" /></label>
+            <label className="block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Target region<select value={campaignRegion} onChange={(event) => setCampaignRegion(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2.5 text-[10px] font-normal normal-case tracking-normal outline-none"><option>London</option><option>South East</option></select></label>
+          </div>
+          <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Email subject<input value={emailSubject} onChange={(event) => setEmailSubject(event.target.value)} className="mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-2.5 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]" placeholder="Approved planning scheme — {{companyName}}" /></label>
+          <div className="mt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Sequence email copy</span>
+              <div className="flex flex-wrap gap-1">
+                {MERGE_TAGS.map((tag) => <button key={tag} type="button" onClick={() => setEmailBody((prev) => `${prev}${prev.endsWith(' ') || !prev ? '' : ' '}${tag}`)} className="rounded bg-[#EFF6FF] px-1.5 py-0.5 text-[8px] font-semibold text-[#1D4ED8]">{tag}</button>)}
+              </div>
+            </div>
+            <textarea value={emailBody} onChange={(event) => setEmailBody(event.target.value)} rows={4} className="mt-2 w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]" placeholder="Write your outreach email. Line breaks are formatted automatically." />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <label className="rounded-lg bg-[#F8FAFD] p-2.5 text-[8px] font-bold uppercase tracking-wider text-[#64748B]">Follow-up delay (days)<input type="number" min={0} max={30} value={delayDays} onChange={(event) => setDelayDays(Math.max(0, Number(event.target.value) || 0))} className="mt-1.5 w-full rounded border border-[#DCE4F0] bg-white px-2.5 py-1.5 text-[10px] font-normal normal-case tracking-normal outline-none" /></label>
+            <button type="button" onClick={() => setStopOnReply((enabled) => !enabled)} className={`flex items-center justify-between rounded-lg p-2.5 text-left ${stopOnReply ? 'bg-[#ECFDF5] text-[#047857]' : 'bg-[#F1F5F9] text-[#64748B]'}`}><div><div className="text-[8px] font-bold uppercase tracking-wider">Stop on reply</div><div className="mt-1 text-[8px] opacity-75">Pause sequence when prospect replies</div></div><span className="text-[8px] font-bold">{stopOnReply ? 'ON' : 'OFF'}</span></button>
+          </div>
+          <div className="mt-3 rounded-lg bg-[#F8FAFD] px-3 py-2 text-[8px] text-[#64748B]">Schedule: Weekdays 09:00–17:00 UK time · {dailyLimit}/day per inbox · Open & link tracking enabled</div>
+          {editor !== null && editor >= 0 && <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Add contacts (email or CSV: email, firstName, lastName, company, title)<textarea value={leadText} onChange={(event) => setLeadText(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[10px] font-normal normal-case tracking-normal outline-none" placeholder="maya@studio.co.uk, Maya, Patel, Northbank Studio, Project Architect" /></label>}
           {editor !== null && editor >= 0 && <button type="button" onClick={() => {
-            const leads = leadText.split(/[\s,;]+/).map((email) => email.trim()).filter((email) => email.includes('@')).map((email) => ({ email }))
+            const leads = parseLeadLines(leadText)
             const campaign = campaigns[editor]
             if (!campaign || !leads.length) return
-            void api.addCampaignLeads(campaign.id, leads).then((result) => { notify(`${result.added} contacts added`); setLeadText('') }).catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not add contacts'))
-          }} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-2.5 text-[9px] font-semibold text-[#172554]">Add contacts to this campaign</button>}
-          <div className="mt-6 flex gap-3"><button type="button" onClick={() => setEditor(null)} className="flex-1 rounded-lg border border-[#DCE4F0] py-3 text-[9px] font-semibold text-[#64748B]">Cancel</button><button type="submit" className="flex-1 rounded-lg bg-[#172554] py-3 text-[9px] font-semibold text-white">{editor === -1 ? 'Create draft' : 'Save changes'}</button></div>
+            void api.addCampaignLeads(campaign.id, leads).then((result) => {
+              setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...item, contacts: item.contacts + result.added } : item))
+              notify(`${result.added} contact${result.added === 1 ? '' : 's'} added`)
+              setLeadText('')
+            }).catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not add contacts'))
+          }} className="mt-2.5 w-full rounded-lg border border-[#DCE4F0] py-2.5 text-[9px] font-semibold text-[#172554]">Add contacts to this campaign</button>}
+          <div className="mt-5 flex gap-3"><button type="button" onClick={() => setEditor(null)} className="flex-1 rounded-lg border border-[#DCE4F0] py-3 text-[9px] font-semibold text-[#64748B]">Cancel</button><button type="submit" className="flex-1 rounded-lg bg-[#172554] py-3 text-[9px] font-semibold text-white">{editor === -1 ? 'Create campaign' : 'Save changes'}</button></div>
         </form>
       </div>}
     </>

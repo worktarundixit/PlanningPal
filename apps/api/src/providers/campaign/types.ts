@@ -10,6 +10,15 @@ export type ProviderLead = {
 
 export type ProviderCampaign = { id: string; name: string; status: 'draft' | 'live' | 'paused' }
 
+export type CampaignCreateOptions = {
+  subject?: string
+  body?: string
+  delayDays?: number
+  dailyLimit?: number
+  stopOnReply?: boolean
+  emailList?: string[]
+}
+
 export type ProviderAnalytics = { sent: number; openRate: string; replyRate: string }
 
 export type WebhookHealth = 'registered' | 'unavailable' | 'not_configured' | 'error' | 'sandbox'
@@ -26,7 +35,9 @@ export type CampaignEvent = {
 export interface CampaignProvider {
   readonly mode: 'sandbox' | 'live'
   listWorkspaces(): Promise<ProviderWorkspace[]>
-  createCampaign(workspaceId: string, name: string): Promise<{ id: string }>
+  currentWorkspace?(): Promise<ProviderWorkspace | null>
+  createCampaign(workspaceId: string, name: string, options?: CampaignCreateOptions): Promise<{ id: string }>
+  updateCampaign?(workspaceId: string, campaignId: string, options: { name?: string } & CampaignCreateOptions): Promise<void>
   listCampaigns(workspaceId: string): Promise<ProviderCampaign[]>
   pauseCampaign(workspaceId: string, campaignId: string): Promise<void>
   resumeCampaign(workspaceId: string, campaignId: string): Promise<void>

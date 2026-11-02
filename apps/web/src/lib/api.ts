@@ -132,8 +132,10 @@ export const api = {
   markAllRead: () => request('/api/v1/inbox/read-all', { method: 'POST' }),
   reply: (id: string, body: string) => request<Conversation['messages'][number]>(`/api/v1/inbox/conversations/${id}/reply`, { method: 'POST', body: JSON.stringify({ body }) }),
   campaigns: () => request<{ data: Campaign[] }>('/api/v1/campaigns'),
-  createCampaign: (body: { name: string; region: string }) => request<Campaign>('/api/v1/campaigns', { method: 'POST', body: JSON.stringify(body) }),
-  updateCampaign: (id: string, body: { name?: string; region?: string }) => request<Campaign>(`/api/v1/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  createCampaign: (body: { name: string; region: string; subject?: string; body?: string; delayDays?: number; stopOnReply?: boolean }) =>
+    request<Campaign>('/api/v1/campaigns', { method: 'POST', body: JSON.stringify(body) }),
+  updateCampaign: (id: string, body: { name?: string; region?: string; subject?: string; body?: string; delayDays?: number; stopOnReply?: boolean }) =>
+    request<Campaign>(`/api/v1/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   pauseCampaign: (id: string) => request<Campaign>(`/api/v1/campaigns/${id}/pause`, { method: 'POST' }),
   resumeCampaign: (id: string) => request<Campaign>(`/api/v1/campaigns/${id}/resume`, { method: 'POST' }),
   campaignSettings: () => request<{ dailyLimit: number; warmup: boolean; trackingDomain: string }>('/api/v1/campaign-settings'),
@@ -161,7 +163,7 @@ export const api = {
   saveCampaignProvider: (apiKey: string) => request<{ configured: boolean; hint: string; mode: 'sandbox' | 'live' }>('/api/v1/campaign-provider', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
   providerWorkspaces: () => request<{ data: ProviderWorkspace[]; canCreate: boolean }>('/api/v1/campaign-provider/workspaces'),
   campaignMappings: () => request<{ data: CampaignMapping[] }>('/api/v1/campaign-provider/mappings'),
-  saveCampaignMapping: (body: { organisationId: string; providerWorkspaceId: string; trackingDomain: string }) =>
+  saveCampaignMapping: (body: { organisationId: string; providerWorkspaceId: string; trackingDomain: string; workspaceApiKey?: string }) =>
     request<CampaignMapping>('/api/v1/campaign-provider/mappings', { method: 'PUT', body: JSON.stringify(body) }),
   addCampaignLeads: (id: string, leads: { email: string; firstName?: string; lastName?: string; company?: string; title?: string }[]) =>
     request<{ added: number }>(`/api/v1/campaigns/${id}/leads`, { method: 'POST', body: JSON.stringify({ leads }) }),
@@ -243,6 +245,7 @@ export type CampaignMapping = {
   status: string
   webhookStatus: string
   health: string
+  keyHint?: string
 }
 
 export type IngestRun = {
