@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { authClient } from '../lib/auth-client'
-import { api } from '../lib/api'
+import { supabase } from '../lib/auth-client'
 
 function Shell({ title, lede, children }: { title: string; lede: string; children: ReactNode }) {
   return (
@@ -27,8 +26,8 @@ const field = 'mt-2 w-full rounded-lg border border-[#DCE4F0] px-3 py-3 text-sm 
 const label = 'mt-4 block text-[11px] font-semibold uppercase tracking-[0.12em] text-[#64748B]'
 const primary = 'mt-6 w-full rounded-lg bg-[#172554] py-3 text-[13px] font-semibold text-white hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-50'
 
-function messageOf(error: { message?: string } | null | undefined, fallback: string) {
-  return error?.message || fallback
+function missingClient() {
+  return 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
 }
 
 export function SignInPage() {
@@ -37,40 +36,30 @@ export function SignInPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const [providers, setProviders] = useState({ google: false, microsoft: false })
-
-  useEffect(() => {
-    void api.providers().then((next) => setProviders(next)).catch(() => undefined)
-  }, [])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const result = await authClient.signIn.email({ email, password, callbackURL: '/app' })
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
     setBusy(false)
-    if (result.error) {
-      setError(messageOf(result.error, 'Check the email and password, and confirm the address if you just signed up.'))
-      return
-    }
+    if (signInError) return setError(signInError.message)
     window.location.assign('/app')
   }
 
   const sendLink = async () => {
-    if (!email) {
-      setError('Enter your email and we will send a sign-in link.')
-      return
-    }
+    if (!supabase) return setError(missingClient())
+    if (!email) return setError('Enter your email and we will send a sign-in link.')
     setBusy(true)
     setError('')
-    const result = await authClient.signIn.magicLink({ email, callbackURL: '/app' })
+    const { error: linkError } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: `${window.location.origin}/app` },
+    })
     setBusy(false)
-    if (result.error) setError(messageOf(result.error, 'Could not send the sign-in link.'))
-    else setNotice('If that account can sign in, a link is on its way. In local development the link is written to the API log.')
-  }
-
-  const social = async (provider: 'google' | 'microsoft') => {
-    await authClient.signIn.social({ provider, callbackURL: '/app' })
+    if (linkError) return setError(linkError.message)
+    setNotice('Check your email for a sign-in link. Supabase sends that message.')
   }
 
   return (
@@ -82,15 +71,17 @@ export function SignInPage() {
         {notice && <p className="mt-3 text-[13px] leading-relaxed text-[#166534]">{notice}</p>}
         <button type="submit" disabled={busy} className={primary}>Sign in</button>
       </form>
-      <button type="button" disabled={busy} onClick={() => void sendLink()} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold text-[#172554]">
-        Email me a sign-in link
+      <button type="button" disabled={busy} onClick={() => void sendLink()} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold text-[#172554]">Email me a sign-in link</button>
+      <button
+        type="button"
+        className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
+        onClick={() => {
+          if (!supabase) return setError(missingClient())
+          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/app` } })
+        }}
+      >
+        Continue with Google
       </button>
-      {(providers.google || providers.microsoft) && (
-        <div className="mt-3 grid gap-2">
-          {providers.google && <button type="button" onClick={() => void social('google')} className="rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold">Continue with Google</button>}
-          {providers.microsoft && <button type="button" onClick={() => void social('microsoft')} className="rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold">Continue with Microsoft</button>}
-        </div>
-      )}
       <div className="mt-5 flex justify-between text-[13px]">
         <a href="/forgot-password" className="font-semibold text-[#2563EB]">Forgot password</a>
         <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
@@ -109,15 +100,17 @@ export function SignUpPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const result = await authClient.signUp.email({ name, email, password, callbackURL: '/app' })
+    const { error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name }, emailRedirectTo: `${window.location.origin}/app` },
+    })
     setBusy(false)
-    if (result.error) {
-      setError(messageOf(result.error, 'Could not create that account.'))
-      return
-    }
-    setNotice('Check your email to confirm the address. In local development the confirmation link is written to the API log.')
+    if (signUpError) return setError(signUpError.message)
+    setNotice('Check your email to confirm the address. Supabase sends that message.')
   }
 
   return (
@@ -143,16 +136,19 @@ export function ForgotPasswordPage() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const result = await authClient.requestPasswordReset({ email, redirectTo: `${window.location.origin}/reset-password` })
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    })
     setBusy(false)
-    if (result.error) setError(messageOf(result.error, 'Could not start a password reset.'))
-    else setNotice('If an account uses that email, a reset link is on its way. In local development the link is written to the API log.')
+    if (resetError) return setError(resetError.message)
+    setNotice('If an account uses that email, Supabase will send a reset link.')
   }
 
   return (
-    <Shell title="Reset password" lede="We will email a link to choose a new password.">
+    <Shell title="Reset password" lede="Supabase emails a link to choose a new password.">
       <form onSubmit={submit}>
         <label className={label}>Email<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
@@ -165,30 +161,27 @@ export function ForgotPasswordPage() {
 }
 
 export function ResetPasswordPage() {
-  const token = new URLSearchParams(window.location.search).get('token') || ''
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const result = await authClient.resetPassword({ newPassword: password, token })
+    const { error: updateError } = await supabase.auth.updateUser({ password })
     setBusy(false)
-    if (result.error) {
-      setError(messageOf(result.error, 'That reset link is invalid or has expired.'))
-      return
-    }
-    window.location.assign('/sign-in')
+    if (updateError) return setError(updateError.message)
+    window.location.assign('/app')
   }
 
   return (
-    <Shell title="Choose a new password" lede="Use at least 8 characters.">
+    <Shell title="Choose a new password" lede="Use at least 8 characters. Open this page from the Supabase reset link.">
       <form onSubmit={submit}>
         <label className={label}>New password<input required type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
-        <button type="submit" disabled={busy || !token} className={primary}>Update password</button>
+        <button type="submit" disabled={busy} className={primary}>Update password</button>
       </form>
     </Shell>
   )
@@ -206,31 +199,32 @@ export function AcceptInvitePage() {
 
   useEffect(() => {
     if (!token) return
-    void api.invitation(token).then((invite) => {
+    let cancelled = false
+    void import('../lib/api').then(({ api }) => api.invitation(token)).then((invite) => {
+      if (cancelled) return
       setEmail(invite.email)
       setOrganisation(invite.organisation)
       setRole(invite.role)
       if (invite.expired) setError('This invitation has expired. Ask an admin to send a new one.')
-    }).catch(() => setError('This invitation link is not valid.'))
+    }).catch(() => {
+      if (!cancelled) setError('This invitation link is not valid.')
+    })
+    return () => { cancelled = true }
   }, [token])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
-    const created = await authClient.signUp.email({ name, email, password, callbackURL: '/app' })
-    if (created.error) {
-      setBusy(false)
-      setError(messageOf(created.error, 'Could not accept the invitation.'))
-      return
-    }
-    const signedIn = await authClient.signIn.email({ email, password, callbackURL: '/app' })
+    const { error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name }, emailRedirectTo: `${window.location.origin}/app` },
+    })
     setBusy(false)
-    if (signedIn.error) {
-      setError(messageOf(signedIn.error, 'Account created. Sign in once your email is confirmed.'))
-      return
-    }
-    window.location.assign('/app')
+    if (signUpError) return setError(signUpError.message)
+    window.location.assign('/sign-in')
   }
 
   return (

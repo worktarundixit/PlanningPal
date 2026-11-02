@@ -5,10 +5,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { eq, inArray, sql } from 'drizzle-orm'
+import { notifyNewLeads } from '../auth/mailer.ts'
 import { db } from '../db/client.ts'
 import { councils, decisionMakers, ingestCursors, pipelineRuns, planningApplications, rawPayloads } from '../db/schema.ts'
 
-const dataRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data')
+const dataRoot = process.env.VERCEL
+  ? '/tmp/planningpal'
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data')
 
 export type RunOptions = FetchQuery & { since?: string }
 
@@ -75,6 +78,7 @@ async function executeRun(runId: string, query: FetchQuery) {
     await mkdir(path.dirname(csvPath), { recursive: true })
     await writeFile(csvPath, recordsToCsv(transformed.rows))
     const counts = await upsertRows(transformed.rows)
+    await notifyNewLeads(counts.inserted, counts.titles)
     if (transformed.cursor) {
       await db.insert(ingestCursors).values({ source: 'planit', lastDifferent: transformed.cursor, updatedAt: new Date() })
         .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: new Date() } })
@@ -101,7 +105,7 @@ async function executeRun(runId: string, query: FetchQuery) {
 }
 
 async function upsertRows(rows: SourceRecord[]) {
-  if (!rows.length) return { inserted: 0, updated: 0 }
+  if (!rows.length) return { inserted: 0, updated: 0, titles: [] as string[] }
   const hashes = rows.map((row) => hashFor(row['Local Authority'] ?? '', row['Application Reference'] ?? ''))
   const existing = await db.select({ hash: planningApplications.compositeHash }).from(planningApplications).where(inArray(planningApplications.compositeHash, hashes))
   const known = new Set(existing.map((row) => row.hash))
@@ -109,6 +113,7 @@ async function upsertRows(rows: SourceRecord[]) {
   let nextIndex = (maxRow?.max ?? -1) + 1
   let inserted = 0
   let updated = 0
+  const titles: string[] = []
   for (const row of rows) {
     const authority = row['Local Authority'] ?? ''
     const reference = row['Application Reference'] ?? ''
@@ -157,10 +162,11 @@ async function upsertRows(rows: SourceRecord[]) {
       nextIndex += 1
       if (saved) await replaceContacts(saved.id, row)
       inserted += 1
+      titles.push(row.Heading || reference)
       known.add(hash)
     }
   }
-  return { inserted, updated }
+  return { inserted, updated, titles }
 }
 
 async function ensureCouncil(row: SourceRecord) {

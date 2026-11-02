@@ -34,7 +34,6 @@ beforeAll(async () => {
       inbox_messages, inbox_conversations, sending_domains, campaigns, activities,
       crm_leads, saved_schemes, decision_makers, planning_applications, councils,
       custom_roles, team_members, users,
-      auth_session, auth_account, auth_verification, auth_user,
       organisations
     RESTART IDENTITY CASCADE
   `)

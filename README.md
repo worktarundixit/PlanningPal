@@ -22,6 +22,8 @@ pnpm dev
 
 `pnpm db:seed` loads `apps/api/data/master-approved-residential.csv` (550 applications, 44 columns) and one demo organisation.
 
+Sign-in uses Supabase Auth. With `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` set, the seed creates those users in Supabase (email already confirmed) and stores the same ids on the organisation profiles. Without those keys the seed still writes the organisation rows, and the browser cannot sign in until a Supabase project is connected.
+
 ### Local demo accounts
 
 These passwords are for the seeded local database only. Do not reuse them anywhere else.
@@ -44,27 +46,34 @@ pnpm typecheck
 pnpm lint
 ```
 
-## Neon
+## Supabase
 
-Production Postgres is Neon. Local docker-compose is unchanged.
+Production Postgres and sign-in both use one Supabase project. Local development can keep docker-compose Postgres, or use the Supabase CLI (`supabase start`) for Postgres and Auth together.
 
-Set both URLs in the host environment. Both need `sslmode=require`.
+### What to create
 
-- `DATABASE_URL` is the **pooled** connection (hostname contains `-pooler`). The API uses it. Prepared statements are turned off for the pooler, because Neon’s PgBouncer is in transaction mode.
-- `DIRECT_DATABASE_URL` is the **direct** connection (no `-pooler`). Migrations use it. Session locks and multi-statement migrations are not reliable through the pooler.
+1. Create a project in the Supabase dashboard.
+2. Authentication → Providers: enable Email (password), Magic Link, and Google. Add the Google client id and secret in that screen. Supabase sends the sign-up, magic-link, and password-reset emails. PlanningPal does not send those.
+3. Authentication → URL configuration: set the site URL to the Vercel origin (and `http://127.0.0.1:5173` for local). Add redirect URLs for `/app` and `/reset-password` on both origins.
+4. Project Settings → API: copy the project URL, the `anon` key, and the `service_role` key.
+5. Project Settings → Database: copy the transaction pooler URI (port 6543) into `DATABASE_URL`, and the direct or session URI (port 5432) into `DIRECT_DATABASE_URL`. Both need `sslmode=require`.
+6. Create a Resend API key and a verified from-address for new-lead alerts and team invites. That is separate from Supabase auth email.
+7. In the Vercel project (root directory `apps/web`, and include files outside that directory so `apps/api` is bundled): set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL`, `DIRECT_DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `CRON_SECRET`, `WEB_ORIGIN`, and the `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` pair (same public URL and anon key). The `service_role` key and `DATABASE_URL` stay server-side.
 
-If `DIRECT_DATABASE_URL` is omitted, migrations use `DATABASE_URL`. That is the right default for docker-compose, where there is no pooler.
+Never commit those values. `.env.example` lists the names only.
 
-Against a Neon database:
+Then:
 
 ```bash
-export DATABASE_URL='postgresql://USER:PASSWORD@ep-example-pooler.region.aws.neon.tech/neondb?sslmode=require'
-export DIRECT_DATABASE_URL='postgresql://USER:PASSWORD@ep-example.region.aws.neon.tech/neondb?sslmode=require'
 pnpm db:migrate
 pnpm db:seed
 ```
 
-`sslmode=require` encrypts the connection without verifying the certificate authority, which matches Neon’s Node guidance. A `channel_binding` parameter copied from the Neon dashboard is stripped before connect. `DATABASE_POOL_MAX` caps the API pool (default 10). Migrations always use a single connection.
+`DATABASE_URL` is the transaction pooler. Prepared statements are turned off for it. `DIRECT_DATABASE_URL` is the session connection migrations use. If `DIRECT_DATABASE_URL` is omitted, migrations use `DATABASE_URL`, which is correct for docker-compose. `DATABASE_POOL_MAX` caps the API pool (default 10). Migrations always use a single connection.
+
+The API checks every request against the organisation role (Owner, Admin, Member, Viewer) and the platform Super Admin role. Row Level Security policies on the same tables enforce that split for the Supabase Data API (`authenticated`). The table owner used by `DATABASE_URL` bypasses RLS, so the API permission checks stay in force for Vercel Functions. `mail_log`, demo requests, telemetry, and inbox message bodies have RLS enabled with no client policy.
+
+Roles per organisation: Owner, Admin, Member, Viewer. Hitcaliber staff use `platform_role = super_admin`.
 
 ## Brand
 
@@ -80,10 +89,22 @@ pnpm ingest -- --authority Camden --recent 7
 pnpm ingest -- --recent 3 --max-pages 4
 ```
 
-The API process also runs the pipeline at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. On Railway or Fly, run `pnpm ingest` from a cron service instead of keeping a second scheduler. Each run stores the raw JSON under `apps/api/data/raw`, writes a 44-column CSV under `apps/api/data/ingest`, and upserts schemes so they show in Planning search. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
+On a long-running API process the pipeline runs at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. The process skips the timer when `VERCEL` is set.
+
+Scheduled fetches run at 06:00, 13:00 and 20:00 UTC. Supabase `pg_cron` and `pg_net` POST to `https://planningpal.vercel.app/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`. The secret is read from the Supabase Vault secret named `cron_secret`. The route rejects any call that does not match `CRON_SECRET`. Vercel Hobby accounts cannot run a cron more than once a day, so `apps/web/vercel.json` does not define these jobs. The website and API stay on Vercel.
+
+Apply `supabase/migrations/20261102120000_schedule_planit_ingest.sql` on the Supabase project, then store the secret:
+
+```sql
+select vault.create_secret('<same value as Vercel CRON_SECRET>', 'cron_secret', 'Bearer token for the Vercel ingest route');
+```
+
+Set that same value as `CRON_SECRET` in the Vercel project environment. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots.
+
+Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins of organisations that have signal alerts on, through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
 
 PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
 
 ## What is stubbed
 
-No scraping fleet, no enrichment providers, no real email. Inbox replies and queued CRM emails are stored and marked `stubbed`. Account email (verification, password reset, magic link, and team invite) goes through a mailer interface that logs the message in development and stores it in `mail_log`. Google and Microsoft sign-in are registered only when their client id and secret are set.
+No scraping fleet and no enrichment providers. Inbox replies and queued CRM emails are stored and marked `stubbed`. Team invites and new-lead alerts go through the mailer in `apps/api/src/auth/mailer.ts`: Resend when `RESEND_API_KEY` is set, otherwise a log line and a `mail_log` row. Sign-up, magic link, and password reset are Supabase Auth emails. Google sign-in is enabled in the Supabase dashboard.

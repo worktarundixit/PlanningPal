@@ -40,7 +40,6 @@ beforeAll(async () => {
       inbox_messages, inbox_conversations, sending_domains, campaigns, activities,
       crm_leads, saved_schemes, decision_makers, planning_applications, councils,
       custom_roles, team_members, users,
-      auth_session, auth_account, auth_verification, auth_user,
       organisations
     RESTART IDENTITY CASCADE
   `)
@@ -227,36 +226,33 @@ describe('organisation isolation', () => {
   })
 })
 
-describe('account email', () => {
-  it('logs a verification message when someone signs up', async () => {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/auth/sign-up/email',
-      headers: { origin: 'http://127.0.0.1:3001', 'content-type': 'application/json' },
-      payload: { name: 'New Owner', email: 'new-owner@example.com', password: 'test-password-1' },
-    })
-    expect(response.statusCode).toBe(200)
-    const rows = await db.select().from(mailLog).where(eq(mailLog.recipient, 'new-owner@example.com'))
-    expect(rows.some((row) => row.kind === 'verify-email' && row.body.includes('http'))).toBe(true)
-  })
-
-  it('logs a magic-link message', async () => {
-    const response = await app.inject({
-      method: 'POST',
-      url: '/api/auth/sign-in/magic-link',
-      headers: { origin: 'http://127.0.0.1:3001', 'content-type': 'application/json' },
-      payload: { email: 'owner@orga.example', callbackURL: '/app' },
-    })
-    expect(response.statusCode).toBe(200)
+describe('lead alerts', () => {
+  it('logs a new-lead message when Resend is not configured', async () => {
+    const { mailer } = await import('../auth/mailer.ts')
+    await mailer.send({ kind: 'lead-alert', to: 'owner@orga.example', subject: '3 new planning leads', text: 'Dwelling' })
     const rows = await db.select().from(mailLog).where(eq(mailLog.recipient, 'owner@orga.example'))
-    expect(rows.some((row) => row.kind === 'magic-link')).toBe(true)
+    expect(rows.some((row) => row.kind === 'lead-alert')).toBe(true)
   })
 })
 
 describe('auth providers', () => {
-  it('leaves Google and Microsoft disabled until keys are set', async () => {
+  it('offers email, magic link and Google through Supabase', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/auth/providers' })
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ email: true, magicLink: true, google: false, microsoft: false })
+    expect(response.json()).toMatchObject({ email: true, magicLink: true, google: true })
+  })
+})
+
+describe('row level security', () => {
+  it('restricts organisation rows to the signed-in organisation and super admins', async () => {
+    const rows = await sqlClient<{ relrowsecurity: boolean; policy: string | null }[]>`
+      SELECT c.relrowsecurity,
+        (SELECT pol.polname FROM pg_policy pol WHERE pol.polrelid = c.oid AND pol.polname = 'organisations_tenant') AS policy
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'organisations'
+    `
+    expect(rows[0]?.relrowsecurity).toBe(true)
+    expect(rows[0]?.policy).toBe('organisations_tenant')
   })
 })

@@ -1,6 +1,6 @@
 export { addressLines, applicationReference, blank, formatPublicationDate, splitPostcode } from './clean.ts'
 export { DEFAULT_FILTER, rejectionReason } from './filter.ts'
-export { lookupAuthority } from './gazetteer.ts'
+export { lookupAuthority, planItAuthorityKeys } from './gazetteer.ts'
 export { mapPlanItRecord } from './map.ts'
 export { PLANIT_USER_AGENT, createPlanItSource, planItUrl } from './planit.ts'
 export { recordsToCsv, transformRecords } from './transform.ts'

@@ -6,7 +6,7 @@ export type ConnectionRole = 'pooled' | 'direct'
 
 export type ConnectionPlan = {
   role: ConnectionRole
-  /** True when the client must talk to a transaction-mode pooler (Neon PgBouncer). */
+  /** True when the client must talk to a transaction-mode pooler (Supabase port 6543 or PgBouncer). */
   pooled: boolean
   connectionString: string
   options: {
@@ -30,7 +30,12 @@ function sslMode(url: URL) {
 
 export function isPoolerUrl(connectionString: string) {
   const url = new URL(connectionString)
-  return url.hostname.includes('-pooler') || url.searchParams.get('pgbouncer') === 'true'
+  return (
+    url.hostname.includes('-pooler') ||
+    url.hostname.includes('pooler.supabase.com') ||
+    url.port === '6543' ||
+    url.searchParams.get('pgbouncer') === 'true'
+  )
 }
 
 function sslOption(url: URL): ConnectionPlan['options']['ssl'] {
@@ -38,16 +43,22 @@ function sslOption(url: URL): ConnectionPlan['options']['ssl'] {
   if (mode === 'verify-full' || mode === 'verify-ca') return 'verify-full'
   if (mode === 'require' || mode === 'prefer' || mode === 'allow') return 'require'
   if (mode === 'disable') return false
-  // Neon always requires TLS. Accept dashboard strings that forgot sslmode.
-  if (url.hostname.endsWith('.neon.tech') || url.hostname.includes('-pooler')) return 'require'
+  // Neon and Supabase always require TLS, including their pooler hostnames.
+  if (
+    url.hostname.endsWith('.neon.tech') ||
+    url.hostname.endsWith('.supabase.co') ||
+    url.hostname.includes('-pooler') ||
+    url.hostname.includes('pooler.supabase.com')
+  ) {
+    return 'require'
+  }
   return false
 }
 
 /**
- * Build postgres.js settings for either the Neon pooler or a direct session.
- * Prepared statements are disabled for the pooler: Neon’s PgBouncer runs in
- * transaction mode and rejects named prepares. sslmode=require encrypts
- * without verifying the CA, matching libpq and Neon’s node guidance.
+ * Build postgres.js settings for the Supabase transaction pooler or a direct session.
+ * Prepared statements are disabled for the pooler: transaction mode rejects named prepares.
+ * sslmode=require encrypts without verifying the CA.
  */
 export function planConnection(connectionString: string, role: ConnectionRole, env: NodeJS.ProcessEnv = process.env): ConnectionPlan {
   let url: URL
@@ -60,7 +71,7 @@ export function planConnection(connectionString: string, role: ConnectionRole, e
   // Node drivers do not implement channel binding. Neon’s dashboard sometimes appends it.
   url.searchParams.delete('channel_binding')
 
-  const hostIsPooler = url.hostname.includes('-pooler') || url.searchParams.get('pgbouncer') === 'true'
+  const hostIsPooler = isPoolerUrl(url.toString())
   const urlsDiffer = Boolean(env.DIRECT_DATABASE_URL?.trim()) && env.DIRECT_DATABASE_URL?.trim() !== env.DATABASE_URL?.trim()
   const pooled = role === 'pooled' ? hostIsPooler || urlsDiffer : hostIsPooler
   const requestedMax = Number(env.DATABASE_POOL_MAX || 10)

@@ -1,5 +1,4 @@
 import Fastify, { type FastifyInstance } from 'fastify'
-import { getAuth, oauthProviders } from './auth/auth.ts'
 import { permissionFor } from './auth/permissions.ts'
 import { loadSession } from './auth/session.ts'
 import { HttpError } from './lib/http.ts'
@@ -16,37 +15,12 @@ function trustedOrigin(origin: string | undefined) {
   if (!origin) return null
   const allowed = [
     process.env.WEB_ORIGIN,
-    process.env.BETTER_AUTH_URL,
     'http://127.0.0.1:5173',
     'http://localhost:5173',
     'http://127.0.0.1:3001',
     'http://localhost:3001',
   ].filter((value): value is string => Boolean(value))
   return allowed.some((value) => origin === value.replace(/\/$/, '')) ? origin : null
-}
-
-async function forwardAuth(request: import('fastify').FastifyRequest, reply: import('fastify').FastifyReply) {
-  const base = process.env.BETTER_AUTH_URL || 'http://127.0.0.1:3001'
-  const url = new URL(request.url, base)
-  const headers = new Headers()
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (value === undefined) continue
-    if (Array.isArray(value)) value.forEach((entry) => headers.append(key, entry))
-    else headers.set(key, value)
-  }
-  const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
-  const body = hasBody ? (request.rawBody ?? (request.body ? JSON.stringify(request.body) : undefined)) : undefined
-  const response = await getAuth().handler(new Request(url, { method: request.method, headers, body }))
-  reply.hijack()
-  reply.raw.statusCode = response.status
-  response.headers.forEach((value, key) => {
-    if (key.toLowerCase() === 'set-cookie') return
-    reply.raw.setHeader(key, value)
-  })
-  const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : []
-  if (cookies.length) reply.raw.setHeader('set-cookie', cookies)
-  const payload = Buffer.from(await response.arrayBuffer())
-  reply.raw.end(payload)
 }
 
 export function buildApp(): FastifyInstance {
@@ -81,7 +55,6 @@ export function buildApp(): FastifyInstance {
 
   app.addHook('preHandler', async (request, reply) => {
     const path = request.url.split('?')[0] || request.url
-    if (path.startsWith('/api/auth')) return
     if (request.routeOptions.config.public) return
     const permission = permissionFor(request.method, path)
     if (permission === 'public') return
@@ -104,13 +77,6 @@ export function buildApp(): FastifyInstance {
     return reply.code(statusCode).send({ error: message })
   })
 
-  app.route({
-    method: ['GET', 'POST'],
-    url: '/api/auth/*',
-    config: { public: true },
-    handler: forwardAuth,
-  })
-
   app.get('/api/v1/health', { config: { public: true } }, async () => ({
     ok: true,
     service: 'planningpal-api',
@@ -119,8 +85,7 @@ export function buildApp(): FastifyInstance {
   app.get('/api/v1/auth/providers', { config: { public: true } }, async () => ({
     email: true,
     magicLink: true,
-    google: oauthProviders.google,
-    microsoft: oauthProviders.microsoft,
+    google: true,
   }))
 
   app.register(planningRoutes)

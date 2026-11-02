@@ -3,7 +3,7 @@ import type { Scheme, UserProfile } from '@planningpal/shared'
 import { Icon } from '../components/Icon'
 import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
-import { authClient } from '../lib/auth-client'
+import { supabase } from '../lib/auth-client'
 import { api, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { WorkspaceView } from './WorkspaceView'
@@ -171,7 +171,7 @@ export function CommandCentre() {
                 <div className="border-b border-white/10 px-3 py-2.5"><div className="text-[10px] font-semibold text-white">{profile.company}</div><div className="mt-1 text-[8px] text-white/40">Team Plan</div></div>
                 <button onClick={() => { setActive('My profile'); setAccountOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-white/65 hover:bg-white/10 hover:text-white"><Icon name="users" size={13} /> My profile</button>
                 {can('billing.manage') && <button onClick={() => { setActive('Billing'); setAccountOpen(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-white/65 hover:bg-white/10 hover:text-white"><Icon name="briefcase" size={13} /> Billing</button>}
-                <button onClick={() => { void authClient.signOut().finally(() => { window.location.assign('/') }) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-[#FCA5A5] hover:bg-white/10"><Icon name="arrow" size={13} /> Sign out</button>
+                <button onClick={() => { void supabase?.auth.signOut().finally(() => { window.location.assign('/') }) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-[#FCA5A5] hover:bg-white/10"><Icon name="arrow" size={13} /> Sign out</button>
               </div>}
               <button onClick={() => setAccountOpen((open) => !open)} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-white/5" aria-expanded={accountOpen}>
                 <div className="grid h-9 w-9 place-items-center rounded-full bg-[#BDD8FF] text-[11px] font-bold text-[#152328]">{profile.name.split(' ').map((name) => name[0]).join('').slice(0, 2)}</div>

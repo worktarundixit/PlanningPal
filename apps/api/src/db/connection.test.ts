@@ -57,4 +57,18 @@ describe('database connection plan', () => {
     expect(plan.options.ssl).toBe('require')
     expect(plan.options.prepare).toBe(true)
   })
+
+  it('treats the Supabase transaction pooler as pooled and the session host as direct', () => {
+    const pooled = 'postgresql://postgres.project:secret@aws-0-eu-west-2.pooler.supabase.com:6543/postgres?sslmode=require'
+    const direct = 'postgresql://postgres:secret@db.project.supabase.co:5432/postgres?sslmode=require'
+    const runtime = planConnection(pooled, 'pooled', { DATABASE_URL: pooled, DIRECT_DATABASE_URL: direct })
+    const migration = planConnection(direct, 'direct', { DATABASE_URL: pooled, DIRECT_DATABASE_URL: direct })
+    expect(isPoolerUrl(pooled)).toBe(true)
+    expect(isPoolerUrl(direct)).toBe(false)
+    expect(runtime.options.prepare).toBe(false)
+    expect(runtime.options.ssl).toBe('require')
+    expect(migration.options.prepare).toBe(true)
+    expect(migration.options.max).toBe(1)
+    expect(migration.options.ssl).toBe('require')
+  })
 })
