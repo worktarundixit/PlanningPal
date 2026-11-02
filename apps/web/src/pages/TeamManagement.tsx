@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { api } from '../lib/api'
@@ -8,12 +9,14 @@ export type TeamMember = { id: string; name: string; email: string; role: string
 
 export function TeamManagement({ canManage = true }: { canManage?: boolean; actorRole?: string | null }) {
   const [members, setMembers] = useState<TeamMember[]>([])
+  const [teamStatus, setTeamStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [inviteUrl, setInviteUrl] = useState('')
   useEffect(() => {
     void api.team().then((team) => {
       setMembers(team.members.map((member) => ({ ...member, status: member.status === 'Pending' ? 'Pending' : 'Active' })))
       setCustomRoles(team.customRoles.map((role) => ({ name: role.name, permissions: role.permissions })))
-    }).catch(() => notify('Could not load the team'))
+      setTeamStatus('ready')
+    }).catch(() => setTeamStatus('error'))
   }, [])
   const [inviteOpen, setInviteOpen] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
@@ -75,6 +78,9 @@ export function TeamManagement({ canManage = true }: { canManage?: boolean; acto
       <PageIntro eyebrow="Workspace administration" title="Team management" description="Invite teammates, manage workspace access and review paid seat adjustments for Micraft Design Ltd." action={<button disabled={!canManage} onClick={() => setInviteOpen(true)} className="flex items-center gap-2 rounded-lg bg-[#172554] px-4 py-2.5 text-[9px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><span className="text-sm leading-none">+</span> Invite member</button>} />
       <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
         <div className="space-y-5">
+          {teamStatus === 'loading' && <LoadingBlock label="Loading the team" />}
+          {teamStatus === 'error' && <EmptyState kind="error" title="The team could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} />}
+          {teamStatus === 'ready' && members.length <= 1 && <EmptyState icon="users" title="You are the only person in this workspace." action={canManage ? { label: 'Invite your team', onClick: () => setInviteOpen(true) } : undefined} />}
           <section className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
             <div className="flex items-center justify-between border-b border-[#EEF2F7] px-5 py-4"><div><h3 className="font-display text-[14px] font-semibold">Workspace members</h3><p className="mt-1 text-[8px] text-[#94A3B8]">Three seats are included in Team Plan.</p></div><span className="rounded-full bg-[#EFF6FF] px-2.5 py-1 text-[8px] font-bold text-[#1D4ED8]">{members.length} members</span></div>
             {members.map((member) => <div key={member.id} className="grid items-center gap-3 border-t border-[#EEF2F7] px-5 py-4 first:border-0 sm:grid-cols-[1fr_140px_90px_auto]">

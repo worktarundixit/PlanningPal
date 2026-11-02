@@ -14,6 +14,7 @@ PlanningPal keeps tenant data, agency credentials, and provider names off client
 - **Abuse.** Public and auth-adjacent routes are rate limited per IP. State-changing requests that send an `Origin` outside the allow-list are rejected. Auth redirects must stay on the PlanningPal origin.
 - **Secrets.** Only `VITE_` values are available to the browser. The service-role key, database URL, Resend key, encryption secret, and webhook secret stay on the server. `.env` files are gitignored. CI fails the web build if it contains the provider name, `aecpipeline`, or those secret names. Dependabot opens update pull requests.
 - **Errors.** Users see branded pages for a missing route, a crash, offline use, a 403, and an expired session. API 500s return a generic sentence. Logs redact email addresses and do not return stack traces.
+- **Empty states.** Every screen distinguishes loading, error, no data yet, and no filter matches. The checklist is in `docs/QUALITY.md`. Sample figures are labelled and are not treated as live workspace data.
 
 ## What you turn on in GitHub
 

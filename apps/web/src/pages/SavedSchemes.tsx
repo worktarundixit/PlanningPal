@@ -1,13 +1,14 @@
 import type { Scheme } from '@planningpal/shared'
+import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 
-export function SavedSchemes({ data, onOpen, onSave, saved, canSave = true }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean }) {
-  const items = saved.length ? data.filter((scheme) => saved.includes(scheme.id)) : data.slice(0, 6)
+export function SavedSchemes({ data, onOpen, onSave, saved, canSave = true, onNavigate }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; onNavigate?: (screen: string) => void }) {
+  const items = data.filter((scheme) => saved.includes(scheme.id))
   return (
     <>
       <PageIntro eyebrow="Shortlist" title="Saved schemes" description="Monitor priority applications and keep the most relevant ECI opportunities close to hand." />
-      {data.length === 0 && <div className="rounded-xl border border-dashed border-[#DCE4F0] bg-white px-5 py-10 text-center text-[12px] text-[#64748B]">No schemes are loaded yet.</div>}
+      {items.length === 0 && <EmptyState icon="building" title={data.length === 0 ? 'No planning leads to save yet.' : 'You have not saved a scheme yet.'} action={{ label: 'Run your first planning search', onClick: () => onNavigate?.('Planning search') }} />}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {items.map((scheme) => (
           <article key={scheme.id} className="rounded-xl border border-[#DCE4F0] bg-white p-5 transition hover:-translate-y-0.5 hover:shadow-lg">

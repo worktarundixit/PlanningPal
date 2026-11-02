@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Scheme, UserProfile } from '@planningpal/shared'
+import { EmptyState, LoadingBlock, SampleBars } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
@@ -20,13 +21,6 @@ const nav = [
   { label: 'Workspace setup', icon: 'settings' as const },
   { label: 'Ingestion', icon: 'download' as const },
   { label: 'Campaign provider', icon: 'briefcase' as const },
-]
-
-const activity = [
-  { initials: 'ME', name: 'Maya Evans', action: 'opened your case study', detail: 'Guildford Innovation District', time: '3m', hot: true },
-  { initials: 'DK', name: 'Daniel Kaur', action: 'clicked portfolio link', detail: 'Harrowgate Living Quarter', time: '18m', hot: true },
-  { initials: 'AM', name: 'Alice Morgan', action: 'opened introduction', detail: 'Marlow Health Hub', time: '1h', hot: false },
-  { initials: 'TR', name: 'Tom Ridley', action: 'replied to campaign', detail: 'Egham Logistics Campus', time: '2h', hot: false },
 ]
 
 export function CommandCentre() {
@@ -190,10 +184,10 @@ export function CommandCentre() {
             <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.045] p-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[9px] font-semibold text-[#38BDF8]"><Icon name="spark" size={11} /> PIPELINE HEALTH</div>
-                <div className="font-display text-[16px] font-semibold">92%</div>
+                <div className="font-display text-[16px] font-semibold">{overview?.metrics.pipelineHealth ? `${overview.metrics.pipelineHealth}%` : '—'}</div>
               </div>
-              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[92%] rounded-full bg-[#38BDF8]" /></div>
-              <div className="mt-2 flex justify-between text-[8px] text-white/40"><span>12 inboxes healthy</span><span>98.4% delivery</span></div>
+              <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-[#38BDF8]" style={{ width: `${overview?.metrics.pipelineHealth ?? 0}%` }} /></div>
+              <div className="mt-2 flex justify-between text-[8px] text-white/40"><span>{overview?.metrics.inboxesHealthy ?? 'No inboxes yet'}</span><span>{overview?.metrics.deliveryRate ?? 'No sends yet'}</span></div>
             </div>
             <div ref={accountMenuRef} className="relative mt-2 border-t border-white/8 pt-3">
               {accountOpen && <div className="absolute bottom-[58px] left-0 right-0 overflow-hidden rounded-xl border border-white/10 bg-[#203363] p-1.5 shadow-2xl">
@@ -203,7 +197,7 @@ export function CommandCentre() {
                 <button onClick={() => { void supabase?.auth.signOut().finally(() => { window.location.assign('/') }) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-[10px] text-[#FCA5A5] hover:bg-white/10"><Icon name="arrow" size={13} /> Sign out</button>
               </div>}
               <button onClick={() => setAccountOpen((open) => !open)} className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-white/5" aria-expanded={accountOpen}>
-                <div className="grid h-9 w-9 place-items-center rounded-full bg-[#BDD8FF] text-[11px] font-bold text-[#152328]">{profile.name.split(' ').map((name) => name[0]).join('').slice(0, 2)}</div>
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-[#BDD8FF] text-[11px] font-bold text-[#152328]">{(profile.name || '?').split(' ').map((name) => name[0]).join('').slice(0, 2)}</div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-xs font-medium">{profile.name}</div>
                   <div className="truncate text-[10px] text-white/35">{profile.role}</div>
@@ -283,17 +277,15 @@ export function CommandCentre() {
           </div>
         </header>
 
-        {loadError && <div className="mx-auto max-w-[1600px] px-4 pt-4 text-[11px] font-semibold text-[#B91C1C] sm:px-7 lg:px-9">{loadError}</div>}
-        {loading && <div className="mx-auto max-w-[1600px] px-4 py-16 text-[12px] text-[#64748B] sm:px-7 lg:px-9">Loading schemes from the planning register…</div>}
-        {loading ? null : active === 'Overview' ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
+        {loading ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><LoadingBlock label="Loading the command centre" /></div> : loadError ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><EmptyState kind="error" title="The command centre could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} /></div> : active === 'Overview' ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
           {clients && <ClientOnboardingList clients={clients} />}
           {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
           <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {[
-              { label: 'Approved schemes', value: filteredData.length.toLocaleString(), meta: region === 'All regions' ? 'All regions' : region, note: 'active region', icon: 'building' as const },
-              { label: 'Agent contacts found', value: filteredData.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: `${Math.round(filteredData.filter((scheme) => scheme.email || scheme.phone).length / (filteredData.length || 1) * 100)}%`, note: 'contact coverage', icon: 'users' as const },
-              { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? '38', meta: overview?.metrics.highIntentNew ?? '8 new', note: 'need attention', icon: 'signal' as const },
-              { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '12', meta: overview?.metrics.meetingsTarget ?? '75%', note: 'of monthly target', icon: 'calendar' as const },
+              { label: 'Approved schemes', value: filteredData.length.toLocaleString(), meta: data.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: data.length ? 'active region' : 'no leads yet', icon: 'building' as const },
+              { label: 'Agent contacts found', value: filteredData.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: filteredData.length ? `${Math.round(filteredData.filter((scheme) => scheme.email || scheme.phone).length / filteredData.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
+              { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? String(overview?.intent.length ?? 0), meta: overview?.metrics.highIntentNew ?? (overview?.intent.length ? 'live' : '—'), note: overview?.intent.length ? 'need attention' : 'none yet', icon: 'signal' as const },
+              { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '0', meta: overview?.metrics.meetingsTarget ?? '—', note: 'of monthly target', icon: 'calendar' as const },
             ].map((stat) => (
               <div key={stat.label} className="rounded-xl border border-[#DCE4F0] bg-white p-4 shadow-[0_1px_2px_rgba(30,58,138,0.04)] sm:p-5">
                 <div className="flex items-start justify-between">
@@ -326,7 +318,7 @@ export function CommandCentre() {
               </div>
 
               <div>
-                {visibleSchemes.map((scheme) => (
+                {data.length === 0 ? <div className="p-5"><EmptyState icon="search" title="No planning leads in this workspace yet." action={{ label: 'Run your first planning search', onClick: () => setActive('Planning search') }} /></div> : visibleSchemes.length === 0 ? <div className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match this search." action={{ label: 'Clear search', onClick: () => setQuery('') }} /></div> : visibleSchemes.map((scheme) => (
                   <article key={scheme.id} className="group grid cursor-pointer gap-4 border-b border-[#ECEEEA] p-4 transition last:border-0 hover:bg-[#FAFBF8] sm:grid-cols-[42px_minmax(0,1fr)_auto] sm:p-5" onClick={() => setSelected(scheme)}>
                     <div className={`grid h-10 w-10 place-items-center rounded-lg ${scheme.colour} text-[10px] font-bold text-[#172224]`}>{scheme.initials}</div>
                     <div className="min-w-0">
@@ -354,23 +346,23 @@ export function CommandCentre() {
                   </article>
                 ))}
               </div>
-              <button onClick={() => setActive('Planning search')} className="flex w-full items-center justify-center gap-2 border-t border-[#E6E9E3] py-4 text-[10px] font-semibold text-[#4F5C5A] hover:bg-[#FAFBF8]">
+              {visibleSchemes.length > 0 && <button onClick={() => setActive('Planning search')} className="flex w-full items-center justify-center gap-2 border-t border-[#E6E9E3] py-4 text-[10px] font-semibold text-[#4F5C5A] hover:bg-[#FAFBF8]">
                 View all {filteredData.length} applications <Icon name="arrow" size={13} />
-              </button>
+              </button>}
             </div>
 
             <div className="space-y-5">
-              <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
+              {overview?.metrics.pipelineValue ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
                 <div className="p-5">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
-                      <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{overview?.metrics.pipelineValue ?? '£62.4m'}</div>
+                      <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{overview.metrics.pipelineValue}</div>
                     </div>
-                    <span className="rounded-full bg-[#38BDF8]/15 px-2.5 py-1.5 text-[9px] font-bold text-[#38BDF8]">{overview?.metrics.pipelineDelta ?? '+16.8%'}</span>
+                    {overview.metrics.pipelineDelta && <span className="rounded-full bg-[#38BDF8]/15 px-2.5 py-1.5 text-[9px] font-bold text-[#38BDF8]">{overview.metrics.pipelineDelta}</span>}
                   </div>
                   <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
-                    {(overview?.metrics.pipelineChart ?? [34, 45, 38, 57, 49, 68, 61, 79, 71, 88, 82, 100]).map((height, index, chart) => (
+                    {(overview.metrics.pipelineChart ?? []).map((height, index, chart) => (
                       <div key={index} className="group flex h-full flex-1 items-end">
                         <div className={`w-full rounded-t-sm transition-all group-hover:bg-[#38BDF8] ${index === chart.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/15'}`} style={{ height: `${height}%` }} />
                       </div>
@@ -379,14 +371,14 @@ export function CommandCentre() {
                   <div className="mt-2 flex justify-between text-[8px] uppercase tracking-wider text-white/30"><span>Jan</span><span>Jun</span><span>Dec</span></div>
                 </div>
                 <div className="grid grid-cols-3 border-t border-white/8 bg-white/[0.025]">
-                  {[[overview?.metrics.prospects ?? '24', 'Prospects'], [overview?.metrics.qualified ?? '9', 'Qualified'], [overview?.metrics.negotiating ?? '4', 'Negotiating']].map(([value, label]) => (
+                  {[[overview.metrics.prospects ?? '0', 'Prospects'], [overview.metrics.qualified ?? '0', 'Qualified'], [overview.metrics.negotiating ?? '0', 'Negotiating']].map(([value, label]) => (
                     <div key={label} className="border-r border-white/8 px-4 py-3.5 last:border-0">
                       <div className="font-display text-[16px] font-semibold">{value}</div>
                       <div className="mt-1 text-[8px] uppercase tracking-wider text-white/35">{label}</div>
                     </div>
                   ))}
                 </div>
-              </div>
+              </div> : <EmptyState icon="chart" title="Pipeline value appears after the first qualified lead." action={{ label: 'Set up your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('persona') } }} sample={<SampleBars />} />}
 
               <div className="rounded-xl border border-[#DCE4F0] bg-white p-5">
                 <div className="flex items-center justify-between">
@@ -394,10 +386,10 @@ export function CommandCentre() {
                     <h2 className="font-display text-[16px] font-semibold">Live intent</h2>
                     <p className="mt-1 text-[9px] text-[#8A9492]">Decision-maker activity</p>
                   </div>
-                  <span className="flex items-center gap-1.5 text-[9px] font-semibold text-[#4D615C]"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#70A777]" /> LIVE</span>
+                  {Boolean(overview?.intent.length) && <span className="flex items-center gap-1.5 text-[9px] font-semibold text-[#4D615C]"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#70A777]" /> LIVE</span>}
                 </div>
                 <div className="mt-4 space-y-1">
-                  {(overview?.intent.length ? overview.intent : activity).map((item) => (
+                  {overview?.intent.length ? overview.intent.map((item) => (
                     <button key={item.name + item.detail} onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="flex w-full items-start gap-3 rounded-lg p-2 text-left transition hover:bg-[#F5F7F2]">
                       <div className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#EDF0EA] text-[9px] font-bold text-[#53605E]">
                         {item.initials}{item.hot && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#E96345]" />}
@@ -408,9 +400,9 @@ export function CommandCentre() {
                       </div>
                       <span className="pt-0.5 text-[8px] text-[#A3ABA9]">{item.time}</span>
                     </button>
-                  ))}
+                  )) : <EmptyState icon="signal" title="Intent shows up when someone opens a campaign." action={{ label: 'Create a campaign', onClick: () => setActive('Campaigns') }} sample={<p className="text-[12px] text-[#334155]"><b>Maya Evans</b> opened a case study · 3m</p>} />}
                 </div>
-                <button onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>
+                {Boolean(overview?.intent.length) && <button onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>}
               </div>
             </div>
           </section>
@@ -438,6 +430,7 @@ export function CommandCentre() {
             canSettings={can('settings.write')}
             canTeam={can('team.manage')}
             actorRole={orgRole}
+            onNavigate={setActive}
           />
         )}
       </main>

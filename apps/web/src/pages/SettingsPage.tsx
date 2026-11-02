@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 import { api } from '../lib/api'
@@ -6,15 +7,17 @@ import { notify } from '../lib/notify'
 
 export function Settings({ canWrite = true }: { canWrite?: boolean }) {
   const [alerts, setAlerts] = useState(true)
-  const [territories, setTerritories] = useState(['Surrey', 'Berkshire', 'Greater London'])
-  const [trades, setTrades] = useState(['Groundworks', 'RC Frame', 'Civil Engineering', 'Drainage'])
+  const [settingsStatus, setSettingsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [territories, setTerritories] = useState<string[]>([])
+  const [trades, setTrades] = useState<string[]>([])
   useEffect(() => {
     void api.workspace().then((workspace) => {
       setTerritories(workspace.territories)
       setTrades(workspace.trades)
       setRadius(workspace.radius)
       setAlerts(workspace.signalAlerts)
-    }).catch(() => undefined)
+      setSettingsStatus('ready')
+    }).catch(() => setSettingsStatus('error'))
   }, [])
   const [territoryPicker, setTerritoryPicker] = useState(false)
   const [radius, setRadius] = useState(25)
@@ -46,6 +49,8 @@ export function Settings({ canWrite = true }: { canWrite?: boolean }) {
               <div><h3 className="font-display text-[14px] font-semibold">Target territories</h3><p className="mt-1 text-[9px] text-[#94A3B8]">Team Plan includes three active territories.</p></div>
               <span className={`rounded-full px-2.5 py-1 text-[8px] font-bold ${territories.length <= 3 ? 'bg-[#ECFDF5] text-[#15803D]' : 'bg-[#EFF6FF] text-[#1D4ED8]'}`}>{territories.length} selected</span>
             </div>
+            {settingsStatus === 'error' && <div className="mt-4"><EmptyState kind="error" title="Workspace settings could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} /></div>}
+            {settingsStatus === 'ready' && territories.length === 0 && <div className="mt-4"><EmptyState icon="map" title="No target regions are selected yet." action={{ label: 'Set up your ICP', onClick: () => setTerritoryPicker(true) }} /></div>}
             <div className="mt-4 flex flex-wrap gap-2">
               {territories.map((territory, index) => <button key={territory} onClick={() => toggleTerritory(territory)} className={`flex items-center gap-1.5 rounded-full px-3 py-2 text-[9px] font-semibold ${index < 3 ? 'bg-[#EFF6FF] text-[#1D4ED8]' : 'bg-[#EDE9FE] text-[#6D28D9]'}`}>{territory}<span className="text-current/50">×</span></button>)}
               <button onClick={() => setTerritoryPicker((open) => !open)} className="rounded-full border border-dashed border-[#93C5FD] px-3 py-2 text-[9px] font-semibold text-[#2563EB]">+ Add territory</button>

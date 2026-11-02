@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { PageIntro } from '../components/PageIntro'
 import { api, type CampaignMapping, type ProviderWorkspace } from '../lib/api'
 import { notify } from '../lib/notify'
@@ -26,6 +27,7 @@ export function CampaignProviderPage() {
   const [workspaces, setWorkspaces] = useState<ProviderWorkspace[]>([])
   const [mappings, setMappings] = useState<CampaignMapping[]>([])
   const [drafts, setDrafts] = useState<Record<string, { providerWorkspaceId: string; trackingDomain: string }>>({})
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   const load = () =>
     Promise.all([api.campaignProvider(), api.providerWorkspaces(), api.campaignMappings()])
@@ -36,8 +38,9 @@ export function CampaignProviderPage() {
         setWorkspaces(workspaceList.data)
         setMappings(mappingList.data)
         setDrafts(Object.fromEntries(mappingList.data.map((item) => [item.organisationId, { providerWorkspaceId: item.providerWorkspaceId, trackingDomain: item.trackingDomain }])))
+        setStatus('ready')
       })
-      .catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not load campaign provider settings'))
+      .catch(() => setStatus('error'))
 
   useEffect(() => { void load() }, [])
 
@@ -91,6 +94,9 @@ export function CampaignProviderPage() {
           <p className="mt-1 text-[9px] text-[#94A3B8]">Map each PlanningPal client to a provider workspace and store the tracking domain.</p>
         </div>
         <div className="divide-y divide-[#EEF2F7]">
+          {status === 'loading' && <div className="p-4"><LoadingBlock label="Loading client mappings" /></div>}
+          {status === 'error' && <div className="p-4"><EmptyState kind="error" title="Client mappings could not be loaded." action={{ label: 'Try again', onClick: () => void load() }} /></div>}
+          {status === 'ready' && mappings.length === 0 && <div className="p-4"><EmptyState icon="briefcase" title="No client workspaces to map yet." /></div>}
           {mappings.map((mapping) => {
             const draft = drafts[mapping.organisationId] ?? { providerWorkspaceId: '', trackingDomain: '' }
             return (
