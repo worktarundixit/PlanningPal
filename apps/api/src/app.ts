@@ -36,12 +36,18 @@ function trustedOrigin(origin: string | undefined) {
   if (!origin) return null
   const allowed = [
     process.env.WEB_ORIGIN,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+    'https://planningpal.vercel.app',
+    'https://planningpal.co.uk',
+    'https://www.planningpal.co.uk',
     'http://127.0.0.1:5173',
     'http://localhost:5173',
     'http://127.0.0.1:3001',
     'http://localhost:3001',
   ].filter((value): value is string => Boolean(value))
-  return allowed.some((value) => origin === value.replace(/\/$/, '')) ? origin : null
+  const cleanOrigin = origin.replace(/\/$/, '')
+  return allowed.some((value) => cleanOrigin === value.replace(/\/$/, '')) ? cleanOrigin : null
 }
 
 export function buildApp(): FastifyInstance {
@@ -79,8 +85,16 @@ export function buildApp(): FastifyInstance {
     }
     const limit = publicLimit(request.method, path)
     if (limit) {
+      const cfIp = request.headers['cf-connecting-ip']
+      const vercelIp = request.headers['x-vercel-forwarded-for']
+      const realIp = request.headers['x-real-ip']
       const forwarded = request.headers['x-forwarded-for']
-      const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim() || request.ip || 'local'
+      const trustedHeader = cfIp || vercelIp || realIp
+      const ip =
+        (Array.isArray(trustedHeader) ? trustedHeader[0] : trustedHeader)?.split(',')[0]?.trim() ||
+        (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim() ||
+        request.ip ||
+        'local'
       if (!allowRequest(`${ip}:${path}`, limit, 60_000)) return reply.code(429).send({ error: 'Too many requests. Try again shortly.' })
     }
   })

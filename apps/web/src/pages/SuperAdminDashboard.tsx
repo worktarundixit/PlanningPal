@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { Scheme } from '@planningpal/shared'
+import { LoadingBlock } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
+import { StatusScreen } from '../components/StatusScreen'
 import { Ingestion } from './Ingestion'
 import { CampaignProviderPage } from './CampaignProviderPage'
 import { PlanningExplorer } from './PlanningExplorer'
@@ -9,6 +11,7 @@ import { api, type ClientOnboarding, setActiveWorkspaceId } from '../lib/api'
 import { notify } from '../lib/notify'
 
 export function SuperAdminDashboard() {
+  const [authStatus, setAuthStatus] = useState<'checking' | 'authorized' | 'forbidden'>('checking')
   const [tab, setTab] = useState<'clients' | 'ingestion' | 'provider' | 'leads'>('clients')
   const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['clients']))
   const [clients, setClients] = useState<ClientOnboarding[]>([])
@@ -43,10 +46,25 @@ export function SuperAdminDashboard() {
   }
 
   useEffect(() => {
-    loadClients()
-    api.leads()
-      .then((res) => setLeads(res.data))
-      .catch(() => undefined)
+    let cancelled = false
+    api.me()
+      .then((me) => {
+        if (cancelled) return
+        if (me.platformRole !== 'super_admin') {
+          setAuthStatus('forbidden')
+          window.location.assign('/app')
+        } else {
+          setAuthStatus('authorized')
+          loadClients()
+          api.leads().then((res) => { if (!cancelled) setLeads(res.data) }).catch(() => undefined)
+        }
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAuthStatus('forbidden')
+        window.location.assign('/sign-in')
+      })
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -117,6 +135,18 @@ export function SuperAdminDashboard() {
     void navigator.clipboard.writeText(url).then(() => {
       notify('Invite link copied to clipboard')
     })
+  }
+
+  if (authStatus === 'checking') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#F4F7FB] p-8">
+        <LoadingBlock label="Verifying superadmin authorization" />
+      </div>
+    )
+  }
+
+  if (authStatus === 'forbidden') {
+    return <StatusScreen kind="forbidden" />
   }
 
   return (
