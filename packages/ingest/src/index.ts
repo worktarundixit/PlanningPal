@@ -3,6 +3,7 @@ export { extractEmails, extractRecordContacts, extractUkPhones, formatUkPhone } 
 export { DEFAULT_FILTER, rejectionReason } from './filter.ts'
 export { lookupAuthority, planItAuthorityKeys } from './gazetteer.ts'
 export { mapPlanItRecord } from './map.ts'
+export { extractTextFromPdfBuffer, parseApplicationFormContacts, type ApplicationFormContacts } from './pdfParser.ts'
 export { PLANIT_USER_AGENT, createPlanItSource, planItUrl } from './planit.ts'
 export { recordsToCsv, transformRecords } from './transform.ts'
 export type { CleanedRecord, FetchQuery, FilterConfig, PlanItRecord, PlanningSource, RawPage } from './types.ts'

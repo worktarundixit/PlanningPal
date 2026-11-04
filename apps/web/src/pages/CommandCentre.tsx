@@ -78,10 +78,43 @@ export function CommandCentre() {
   const [leadJob, setLeadJob] = useState<LeadFetch | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [fetchBusy, setFetchBusy] = useState(false)
+  const [scrapingSource, setScrapingSource] = useState(false)
   const [freshIds, setFreshIds] = useState<string[]>([])
   const seenLeads = useRef(new Set<string>())
   const [sessionReady, setSessionReady] = useState(false)
   const can = (permission: string) => permissions.includes(permission)
+
+  const applySchemeUpdate = (updated: Scheme) => {
+    setSelected((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev))
+    setWorkspaceLeads((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)))
+    setData((prev) => prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)))
+  }
+
+  const refreshFromSource = async (scheme: Scheme, force = true) => {
+    setScrapingSource(true)
+    try {
+      const res = await api.leadDossier(scheme.id, force)
+      if (res?.scheme) {
+        applySchemeUpdate(res.scheme)
+        if (force) {
+          notify(
+            res.scheme.phone || res.scheme.email
+              ? `Extracted contact details for ${res.scheme.practice || res.scheme.architect}`
+              : 'Checked council portal & Application Form PDF',
+          )
+        }
+      }
+    } catch {
+      if (force) notify('Could not reach council source URL')
+    } finally {
+      setScrapingSource(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!selected?.id) return
+    void refreshFromSource(selected, false)
+  }, [selected?.id])
 
   const toggleSave = async (id: string) => {
     if (!can('saved.write')) {
@@ -619,6 +652,17 @@ export function CommandCentre() {
                     <a href={selected.phone ? `tel:${selected.phone}` : undefined} className="flex items-center gap-2 rounded-lg bg-[#F0F4FA] px-3 py-2.5 text-[9px] text-[#52627A]"><Icon name="phone" size={12} />{selected.phone || 'Phone not published'}</a>
                   </div>
                   <div className="mt-3 border-t border-[#EEF2F7] pt-3 text-[9px] leading-relaxed text-[#718096]">{selected.architectAddress || 'Agent address not published in source record'}</div>
+                  {selected.portalUrl && (
+                    <button
+                      type="button"
+                      disabled={scrapingSource}
+                      onClick={() => { void refreshFromSource(selected, true) }}
+                      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] px-3 py-2 text-[9px] font-semibold text-[#1E3A8A] hover:bg-[#EFF6FF] disabled:opacity-50"
+                    >
+                      <Icon name="download" size={11} />
+                      {scrapingSource ? 'Scanning council portal & Application Form PDF…' : 'Extract agent details from source URL & Application Form'}
+                    </button>
+                  )}
                 </div>
               </section>
 

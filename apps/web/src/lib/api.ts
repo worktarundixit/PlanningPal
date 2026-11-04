@@ -90,6 +90,8 @@ export type SessionProfile = UserProfile & {
 
 export const api = {
   leads: () => request<{ data: Scheme[]; total: number }>('/api/v1/planning/leads?limit=1000'),
+  leadDossier: (id: string, refresh = false) =>
+    request<{ scheme: Scheme }>(`/api/v1/planning/leads/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`),
   lpas: () => request<{ regions: { region: string; councils: { name: string; gssCode: string; coverage: string }[] }[] }>('/api/v1/lpas'),
   lpaHealth: () => request<LpaHealth>('/api/v1/lpas/health'),
   workspaceLeads: () => request<{ data: Scheme[] }>('/api/v1/workspace-leads'),

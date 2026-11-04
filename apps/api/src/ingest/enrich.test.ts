@@ -1,7 +1,17 @@
 import { readFileSync } from 'node:fs'
-import { extractEmails, extractRecordContacts, extractUkPhones, formatUkPhone, transformRecords, type PlanItRecord } from '@planningpal/ingest'
+import { deflateSync } from 'node:zlib'
+import {
+  extractEmails,
+  extractRecordContacts,
+  extractTextFromPdfBuffer,
+  extractUkPhones,
+  formatUkPhone,
+  parseApplicationFormContacts,
+  transformRecords,
+  type PlanItRecord,
+} from '@planningpal/ingest'
 import { describe, expect, it } from 'vitest'
-import { enrichSourceRecord, enrichSourceRecords, parsePortalHtmlContacts } from './enrich.ts'
+import { enrichSourceRecord, enrichSourceRecords, findApplicationFormPdfUrls, parsePortalHtmlContacts } from './enrich.ts'
 
 const fixture = JSON.parse(readFileSync(new URL('../../../../packages/ingest/fixtures/last24h.json', import.meta.url), 'utf8')) as PlanItRecord[]
 
@@ -89,4 +99,81 @@ describe('multi-source contact & phone extraction', () => {
     expect(croydonRef['Architect Agent Phone']).toBe('07710 183 612')
     expect(croydonRef['Architect Agent Email']).toBe('k.syed@arista-architecture.com')
   })
+
+  it('locates Application Form PDF links in council portal Documents tab HTML and ranks them first', () => {
+    const documentsHtml = `
+      <table id="Documents">
+        <tr>
+          <td>02 Nov 2026</td>
+          <td>Site Location Plan</td>
+          <td><a href="/online-applications/files/111/pdf/SITE_LOCATION_PLAN.pdf">View</a></td>
+        </tr>
+        <tr>
+          <td>02 Nov 2026</td>
+          <td>Application Form - Without Personal Data</td>
+          <td><a href="/online-applications/files/222/pdf/APPLICATION_FORM-987654.pdf">View</a></td>
+        </tr>
+        <tr>
+          <td>02 Nov 2026</td>
+          <td>Design and Access Statement</td>
+          <td><a href="/online-applications/files/333/pdf/DAS.pdf">View</a></td>
+        </tr>
+      </table>
+    `
+    const urls = findApplicationFormPdfUrls(
+      documentsHtml,
+      'https://publicaccess.barnet.gov.uk/online-applications/applicationDetails.do?activeTab=documents&keyVal=TEST123',
+    )
+    expect(urls[0]).toBe('https://publicaccess.barnet.gov.uk/online-applications/files/222/pdf/APPLICATION_FORM-987654.pdf')
+    expect(urls).toContain('https://publicaccess.barnet.gov.uk/online-applications/files/333/pdf/DAS.pdf')
+  })
+
+  it('decompresses FlateDecode PDF streams and parses UK 1APP Application Form Agent & Applicant Details', () => {
+    const streamContent = [
+      'BT',
+      '(Applicant Details) Tj',
+      '(Title: Mr) Tj',
+      '(First name: David) Tj',
+      '(Surname: Sterling) Tj',
+      '(Company name: Sterling Homes Ltd) Tj',
+      '(Address: 14 Bishopsgate, London) Tj',
+      '(Postcode: EC2N 4BQ) Tj',
+      '(Telephone number: 020 7946 0192) Tj',
+      '(Agent Details) Tj',
+      '(Title: Ms) Tj',
+      '(First name: Hannah) Tj',
+      '(Surname: Vance) Tj',
+      '(Company name: Vance Planning & Architecture LLP) Tj',
+      '(Address line 1: 22 Clerkenwell Green, London) Tj',
+      '(Postcode: EC1R 0NA) Tj',
+      '(Telephone number: 020 7946 0888) Tj',
+      '(Mobile number: 07700 900 456) Tj',
+      '(Email address: h.vance@vanceplanning.co.uk) Tj',
+      '(Declaration) Tj',
+      'ET',
+    ].join('\n')
+
+    const compressed = deflateSync(Buffer.from(streamContent, 'latin1'))
+    const header = Buffer.from('%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode /Length ' + compressed.length + ' >>\nstream\n', 'latin1')
+    const footer = Buffer.from('\nendstream\nendobj\n%%EOF', 'latin1')
+    const pdfBuffer = Buffer.concat([header, compressed, footer])
+
+    const extractedText = extractTextFromPdfBuffer(pdfBuffer)
+    expect(extractedText).toContain('Agent Details')
+    expect(extractedText).toContain('Vance Planning & Architecture LLP')
+
+    const contacts = parseApplicationFormContacts(extractedText)
+    expect(contacts).toMatchObject({
+      applicantName: 'Mr David Sterling',
+      applicantCompany: 'Sterling Homes Ltd',
+      applicantPostcode: 'EC2N 4BQ',
+      applicantPhone: '020 7946 0192',
+      agentName: 'Ms Hannah Vance',
+      agentCompany: 'Vance Planning & Architecture LLP',
+      agentPostcode: 'EC1R 0NA',
+      agentPhone: '020 7946 0888',
+      agentEmail: 'h.vance@vanceplanning.co.uk',
+    })
+  })
 })
+

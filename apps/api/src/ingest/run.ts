@@ -240,28 +240,31 @@ export async function replaceContacts(applicationId: string, row: SourceRecord) 
 
 export async function ensureApplicationRowEnriched(
   row: typeof planningApplications.$inferSelect,
-  options?: { allowNetwork?: boolean; persist?: boolean },
+  options?: { allowNetwork?: boolean; forcePortalScrape?: boolean; persist?: boolean },
 ): Promise<typeof planningApplications.$inferSelect> {
   const src = row.sourceRecord ?? {}
-  if (src['Architect Agent Phone'] && src['Architect Agent Email'] && src['Architect Agent Contact']) {
+  if (!options?.forcePortalScrape && src['Architect Agent Phone'] && src['Architect Agent Email'] && src['Architect Agent Contact']) {
     return row
   }
-  const enriched = await enrichSourceRecord(src, { allowNetwork: options?.allowNetwork ?? false })
+  const enriched = await enrichSourceRecord(src, {
+    allowNetwork: options?.allowNetwork ?? false,
+    forcePortalScrape: options?.forcePortalScrape ?? false,
+  })
   const updated: typeof planningApplications.$inferSelect = {
     ...row,
-    clientApplicantContact: enriched['Client Applicant Contact'] ?? row.clientApplicantContact,
-    clientApplicant: enriched['Client Applicant'] ?? row.clientApplicant,
-    clientApplicantRawAddress: enriched['Client Applicant Raw Address'] ?? row.clientApplicantRawAddress,
-    clientApplicantPhone: enriched['Client Applicant Phone'] ?? row.clientApplicantPhone,
-    architectAgentContact: enriched['Architect Agent Contact'] ?? row.architectAgentContact,
-    architectAgent: enriched['Architect Agent'] ?? row.architectAgent,
-    architectAgentRawAddress: enriched['Architect Agent Raw Address'] ?? row.architectAgentRawAddress,
-    architectAgentPhone: enriched['Architect Agent Phone'] ?? row.architectAgentPhone,
-    architectAgentEmail: enriched['Architect Agent Email'] ?? row.architectAgentEmail,
+    clientApplicantContact: enriched['Client Applicant Contact'] || row.clientApplicantContact,
+    clientApplicant: enriched['Client Applicant'] || row.clientApplicant,
+    clientApplicantRawAddress: enriched['Client Applicant Raw Address'] || row.clientApplicantRawAddress,
+    clientApplicantPhone: enriched['Client Applicant Phone'] || row.clientApplicantPhone,
+    architectAgentContact: enriched['Architect Agent Contact'] || row.architectAgentContact,
+    architectAgent: enriched['Architect Agent'] || row.architectAgent,
+    architectAgentRawAddress: enriched['Architect Agent Raw Address'] || row.architectAgentRawAddress,
+    architectAgentPhone: enriched['Architect Agent Phone'] || row.architectAgentPhone,
+    architectAgentEmail: enriched['Architect Agent Email'] || row.architectAgentEmail,
     sourceRecord: enriched,
   }
   if (options?.persist !== false) {
-    void db
+    const updateTask = db
       .update(planningApplications)
       .set({
         clientApplicantContact: updated.clientApplicantContact,
@@ -278,6 +281,8 @@ export async function ensureApplicationRowEnriched(
       })
       .where(eq(planningApplications.id, row.id))
       .catch(() => undefined)
+    if (options?.forcePortalScrape) await updateTask
+    else void updateTask
   }
   return updated
 }

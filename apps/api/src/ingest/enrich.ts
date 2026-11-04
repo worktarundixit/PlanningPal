@@ -2,8 +2,10 @@ import {
   addressLines,
   blank,
   extractEmails,
+  extractTextFromPdfBuffer,
   extractUkPhones,
   formatUkPhone,
+  parseApplicationFormContacts,
   PLANIT_USER_AGENT,
   splitPostcode,
 } from '@planningpal/ingest'
@@ -22,6 +24,7 @@ export type PortalScrapedContacts = {
   applicantAddress: string
   applicantPhone: string
   caseOfficer: string
+  fromApplicationFormPdf?: boolean
 }
 
 const UK_AREA_CODES: Record<string, string> = {
@@ -100,7 +103,7 @@ export function parsePortalHtmlContacts(html: string): Partial<PortalScrapedCont
   const result: Partial<PortalScrapedContacts> = {}
 
   const pairs: Array<{ label: string; value: string }> = []
-  const rowRegex = /<(?:tr|div|dl)[^>]*>[\s\S]*?<(?:th|dt|span|label)[^>]*>([\s\S]*?)<\/(?:th|dt|span|label)>[\s\S]*?<(?:td|dd|span|div)[^>]*>([\s\S]*?)<\/(?:td|dd|span|div)>[\s\S]*?<\/(?:tr|div|dl)>/gi
+  const rowRegex = /<(?:tr|div|dl|li|p)[^>]*>[\s\S]*?<(?:th|dt|span|label|strong|b)[^>]*>([\s\S]*?)<\/(?:th|dt|span|label|strong|b)>[\s\S]*?<(?:td|dd|span|div)[^>]*>([\s\S]*?)<\/(?:td|dd|span|div)>[\s\S]*?<\/(?:tr|div|dl|li|p)>/gi
   let match: RegExpExecArray | null
   while ((match = rowRegex.exec(html)) !== null) {
     const label = stripHtml(match[1] ?? '').toLowerCase().replace(/:$/, '').trim()
@@ -111,7 +114,7 @@ export function parsePortalHtmlContacts(html: string): Partial<PortalScrapedCont
   }
 
   for (const { label, value } of pairs) {
-    if (!result.agentName && /^(agent name|agent contact|agent contact name|architect name)$/.test(label)) {
+    if (!result.agentName && /^(agent name|agent contact|agent contact name|architect name|agent)$/.test(label)) {
       result.agentName = value
     } else if (!result.agentCompany && /^(agent company name|agent company|agent firm|agent organisation|company name)$/.test(label)) {
       result.agentCompany = value
@@ -160,7 +163,7 @@ export function parsePortalHtmlContacts(html: string): Partial<PortalScrapedCont
     }
   }
 
-  // Also scan any Agent / Contact section text for phone and email
+  // Scan any Agent / Contact section text for phone and email
   if (!result.agentPhone || !result.agentEmail) {
     const plain = stripHtml(html)
     const agentSectionIdx = plain.search(/\b(agent\s+details|agent\s+name|agent\s+company|agent\s+phone|contacts?)\b/i)
@@ -178,74 +181,283 @@ export function parsePortalHtmlContacts(html: string): Partial<PortalScrapedCont
   return result
 }
 
+/**
+ * Finds and ranks PDF links from a council portal's Documents tab HTML.
+ * Prioritizes "Application Form" / "1APP" PDFs first, then Design & Access / Planning Statements / Cover Letters.
+ */
+export function findApplicationFormPdfUrls(html: string, baseUrl: string): string[] {
+  if (!html || !baseUrl) return []
+  const candidates: Array<{ url: string; score: number }> = []
+  const seen = new Set<string>()
+
+  const scoreContext = (contextText: string, href: string): number => {
+    const combined = `${contextText} ${href}`.toLowerCase()
+    const isPdfLike =
+      /\.pdf(\b|$|\?)/i.test(href) ||
+      /\/files\/.*\/pdf\//i.test(href) ||
+      /viewdocument|downloaddocument|document\.ashx|getdocument|openfile/i.test(href)
+    if (!isPdfLike) return 0
+
+    let score = 10
+    if (/application\s*[-_]?\s*form|1app|app\s*[-_]?\s*form|planning\s+form/i.test(combined)) {
+      score = 100
+      if (!/redacted|without\s+personal/i.test(combined)) score += 20
+    } else if (/covering\s+letter|cover\s+letter|agent\s+letter|planning\s+statement|design\s+(?:and|&)\s+access/i.test(combined)) {
+      score = 75
+    } else if (/proposed|drawing|elevation|floor\s+plan|site\s+plan|block\s+plan/i.test(combined)) {
+      score = 40
+    }
+    return score
+  }
+
+  const addCandidate = (rawHref: string, contextText: string) => {
+    const cleanHref = rawHref.replace(/&amp;/g, '&').trim()
+    if (!cleanHref || cleanHref.startsWith('javascript:') || cleanHref.startsWith('#') || cleanHref.startsWith('mailto:')) return
+    let resolved = ''
+    try {
+      resolved = new URL(cleanHref, baseUrl).toString()
+    } catch {
+      return
+    }
+    if (seen.has(resolved)) return
+    const score = scoreContext(contextText, resolved)
+    if (score <= 0) return
+    seen.add(resolved)
+    candidates.push({ url: resolved, score })
+  }
+
+  // 1. Scan table rows <tr>...</tr> so we see the Document Type / Description alongside the <a href>
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
+  let trMatch: RegExpExecArray | null
+  while ((trMatch = trRegex.exec(html)) !== null) {
+    const rowHtml = trMatch[1] ?? ''
+    const rowText = stripHtml(rowHtml)
+    const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    let linkMatch: RegExpExecArray | null
+    while ((linkMatch = linkRegex.exec(rowHtml)) !== null) {
+      addCandidate(linkMatch[1] ?? '', `${rowText} ${stripHtml(linkMatch[2] ?? '')}`)
+    }
+  }
+
+  // 2. Scan standalone <a> links outside tables
+  const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+  let linkMatch: RegExpExecArray | null
+  while ((linkMatch = linkRegex.exec(html)) !== null) {
+    const start = Math.max(0, linkMatch.index - 200)
+    const end = Math.min(html.length, linkMatch.index + linkMatch[0].length + 200)
+    const surrounding = stripHtml(html.slice(start, end))
+    addCandidate(linkMatch[1] ?? '', surrounding)
+  }
+
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates.map((c) => c.url)
+}
+
 const portalCache = new Map<string, Promise<Partial<PortalScrapedContacts>>>()
 const domainPhoneCache = new Map<string, Promise<string>>()
 
-function candidatePortalUrls(portalUrl: string): string[] {
-  if (!portalUrl) return []
-  try {
-    const parsed = new URL(portalUrl)
-    if (parsed.hostname === 'example.test' || parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-      return []
+function extractCookies(response: Response, existing = ''): string {
+  const map = new Map<string, string>()
+  if (existing) {
+    for (const part of existing.split(';')) {
+      const eqIdx = part.indexOf('=')
+      if (eqIdx > 0) map.set(part.slice(0, eqIdx).trim(), part.slice(eqIdx + 1).trim())
     }
-    if (parsed.pathname.includes('applicationDetails.do') && parsed.searchParams.has('keyVal')) {
-      const contactsUrl = new URL(parsed.toString())
-      contactsUrl.searchParams.set('activeTab', 'contacts')
-      const detailsUrl = new URL(parsed.toString())
-      detailsUrl.searchParams.set('activeTab', 'details')
-      return [detailsUrl.toString(), contactsUrl.toString(), portalUrl]
-    }
-    return [portalUrl]
-  } catch {
-    return []
   }
+  const headersWithSetCookie = response.headers as unknown as { getSetCookie?: () => string[] }
+  const rawList =
+    typeof headersWithSetCookie.getSetCookie === 'function'
+      ? headersWithSetCookie.getSetCookie()
+      : (response.headers.get('set-cookie') ?? '').split(/,(?=\s*[A-Za-z0-9_-]+=)/)
+
+  for (const raw of rawList) {
+    const firstPair = raw.split(';')[0]?.trim() ?? ''
+    const eqIdx = firstPair.indexOf('=')
+    if (eqIdx > 0) {
+      map.set(firstPair.slice(0, eqIdx).trim(), firstPair.slice(eqIdx + 1).trim())
+    }
+  }
+  return [...map.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
 }
 
-async function fetchHtmlWithTimeout(url: string, timeoutMs = 2200): Promise<string> {
+async function fetchHtmlWithSession(
+  url: string,
+  options?: { cookie?: string; referer?: string; timeoutMs?: number },
+): Promise<{ html: string; cookie: string }> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2500)
   try {
+    const headers: Record<string, string> = {
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-GB,en;q=0.9',
+      'User-Agent': PLANIT_USER_AGENT,
+    }
+    if (options?.cookie) headers.Cookie = options.cookie
+    if (options?.referer) headers.Referer = options.referer
+
     const response = await fetch(url, {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': PLANIT_USER_AGENT,
-      },
+      headers,
       signal: controller.signal,
       redirect: 'follow',
     })
-    if (!response.ok) return ''
-    return await response.text()
+    const cookie = extractCookies(response, options?.cookie)
+    if (!response.ok) return { html: '', cookie }
+    const html = await response.text()
+    return { html, cookie }
   } catch {
-    return ''
+    return { html: '', cookie: options?.cookie ?? '' }
   } finally {
     clearTimeout(timer)
   }
 }
 
-export async function scrapeCouncilPortal(portalUrl: string): Promise<Partial<PortalScrapedContacts>> {
-  const urls = candidatePortalUrls(portalUrl)
-  if (!urls.length) return {}
-  const cacheKey = urls[0]!
-  const cached = portalCache.get(cacheKey)
-  if (cached) return cached
+async function fetchPdfBufferWithSession(
+  url: string,
+  options?: { cookie?: string; referer?: string; timeoutMs?: number; maxBytes?: number },
+): Promise<Buffer | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3500)
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/pdf,application/octet-stream,*/*',
+      'User-Agent': PLANIT_USER_AGENT,
+    }
+    if (options?.cookie) headers.Cookie = options.cookie
+    if (options?.referer) headers.Referer = options.referer
+
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+      redirect: 'follow',
+    })
+    if (!response.ok) return null
+    const maxBytes = options?.maxBytes ?? 4_500_000
+    const contentLength = Number(response.headers.get('content-length') || 0)
+    if (contentLength > maxBytes) return null
+
+    const arrayBuffer = await response.arrayBuffer()
+    if (arrayBuffer.byteLength > maxBytes || arrayBuffer.byteLength < 16) return null
+    const buf = Buffer.from(arrayBuffer)
+    // Verify %PDF- header within first 32 bytes
+    const head = buf.subarray(0, 32).toString('latin1')
+    if (!head.includes('%PDF-')) return null
+    return buf
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function mergeScraped(target: Partial<PortalScrapedContacts>, source: Partial<PortalScrapedContacts>) {
+  if (source.agentName && !target.agentName) target.agentName = source.agentName
+  if (source.agentCompany && !target.agentCompany) target.agentCompany = source.agentCompany
+  if (source.agentAddress && !target.agentAddress) target.agentAddress = source.agentAddress
+  if (source.agentPhone && !target.agentPhone) target.agentPhone = source.agentPhone
+  if (source.agentEmail && !target.agentEmail) target.agentEmail = source.agentEmail
+  if (source.applicantContact && !target.applicantContact) target.applicantContact = source.applicantContact
+  if (source.applicant && !target.applicant) target.applicant = source.applicant
+  if (source.applicantAddress && !target.applicantAddress) target.applicantAddress = source.applicantAddress
+  if (source.applicantPhone && !target.applicantPhone) target.applicantPhone = source.applicantPhone
+  if (source.caseOfficer && !target.caseOfficer) target.caseOfficer = source.caseOfficer
+}
+
+/**
+ * Stateful Council Portal + Application Form PDF Scraper:
+ * 1. Performs JSESSIONID session handshake on the summary URL
+ * 2. Scrapes Idox activeTab=details, activeTab=contacts, and activeTab=documents (or non-Idox portal HTML)
+ * 3. Locates, downloads, and parses the "Application Form" PDF (and fallback Cover Letter / DAS PDF)
+ */
+export async function scrapeCouncilPortal(
+  portalUrl: string,
+  options?: { force?: boolean; downloadPdf?: boolean },
+): Promise<Partial<PortalScrapedContacts>> {
+  if (!portalUrl) return {}
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(portalUrl)
+    if (parsedUrl.hostname === 'example.test' || parsedUrl.hostname === 'localhost' || parsedUrl.hostname === '127.0.0.1') {
+      return {}
+    }
+  } catch {
+    return {}
+  }
+
+  const cacheKey = parsedUrl.toString()
+  if (!options?.force && portalCache.has(cacheKey)) {
+    return portalCache.get(cacheKey)!
+  }
 
   const job = (async () => {
     const merged: Partial<PortalScrapedContacts> = {}
-    const pages = await Promise.all(urls.slice(0, 2).map((u) => fetchHtmlWithTimeout(u, 2200)))
-    for (const html of pages) {
-      if (!html) continue
-      const parsed = parsePortalHtmlContacts(html)
-      merged.agentName ||= parsed.agentName
-      merged.agentCompany ||= parsed.agentCompany
-      merged.agentAddress ||= parsed.agentAddress
-      merged.agentPhone ||= parsed.agentPhone
-      merged.agentEmail ||= parsed.agentEmail
-      merged.applicantContact ||= parsed.applicantContact
-      merged.applicant ||= parsed.applicant
-      merged.applicantAddress ||= parsed.applicantAddress
-      merged.applicantPhone ||= parsed.applicantPhone
-      merged.caseOfficer ||= parsed.caseOfficer
+    const isIdox = parsedUrl.pathname.includes('applicationDetails.do') && parsedUrl.searchParams.has('keyVal')
+
+    // Step 1: Initial summary request to establish session cookies (e.g. Idox JSESSIONID)
+    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: 2500 })
+    let sessionCookie = entry.cookie
+    if (entry.html) {
+      mergeScraped(merged, parsePortalHtmlContacts(entry.html))
     }
+
+    let documentsHtml = entry.html
+    let documentsBaseUrl = parsedUrl.toString()
+
+    // Step 2: If Idox Public Access, fetch details, contacts, and documents tabs with session cookie + referer
+    if (isIdox) {
+      const detailsUrl = new URL(parsedUrl.toString())
+      detailsUrl.searchParams.set('activeTab', 'details')
+      const contactsUrl = new URL(parsedUrl.toString())
+      contactsUrl.searchParams.set('activeTab', 'contacts')
+      const docsUrl = new URL(parsedUrl.toString())
+      docsUrl.searchParams.set('activeTab', 'documents')
+
+      const [detailsRes, contactsRes, docsRes] = await Promise.all([
+        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+      ])
+
+      sessionCookie = docsRes.cookie || detailsRes.cookie || contactsRes.cookie || sessionCookie
+      if (detailsRes.html) mergeScraped(merged, parsePortalHtmlContacts(detailsRes.html))
+      if (contactsRes.html) mergeScraped(merged, parsePortalHtmlContacts(contactsRes.html))
+      if (docsRes.html) {
+        documentsHtml = docsRes.html
+        documentsBaseUrl = docsUrl.toString()
+      }
+    }
+
+    // Step 3: Download and parse the "Application Form" PDF (if any contact details are still missing or PDF download requested)
+    const shouldDownloadPdf =
+      options?.downloadPdf !== false &&
+      Boolean(documentsHtml) &&
+      (!merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany)
+
+    if (shouldDownloadPdf) {
+      const pdfUrls = findApplicationFormPdfUrls(documentsHtml, documentsBaseUrl)
+      for (const pdfUrl of pdfUrls.slice(0, 2)) {
+        const pdfBuf = await fetchPdfBufferWithSession(pdfUrl, {
+          cookie: sessionCookie,
+          referer: documentsBaseUrl,
+          timeoutMs: 3500,
+        })
+        if (!pdfBuf) continue
+        const pdfText = extractTextFromPdfBuffer(pdfBuf)
+        if (!pdfText) continue
+        const formContacts = parseApplicationFormContacts(pdfText)
+        if (
+          formContacts.agentName ||
+          formContacts.agentCompany ||
+          formContacts.agentPhone ||
+          formContacts.agentEmail ||
+          formContacts.applicant
+        ) {
+          merged.fromApplicationFormPdf = true
+          mergeScraped(merged, formContacts)
+        }
+        if (merged.agentPhone && merged.agentEmail && merged.agentName) break
+      }
+    }
+
     return merged
   })()
 
@@ -262,7 +474,8 @@ export async function scrapePracticeWebsitePhone(email: string): Promise<string>
   if (cached) return cached
 
   const job = (async () => {
-    const html = await fetchHtmlWithTimeout(`https://${domain}`, 1800) || await fetchHtmlWithTimeout(`https://www.${domain}`, 1800)
+    const first = await fetchHtmlWithSession(`https://${domain}`, { timeoutMs: 1800 })
+    const html = first.html || (await fetchHtmlWithSession(`https://www.${domain}`, { timeoutMs: 1800 })).html
     if (!html) return ''
     const parsed = parsePortalHtmlContacts(html)
     if (parsed.agentPhone) return parsed.agentPhone
@@ -425,20 +638,21 @@ function synthesizePracticeEmail(firm: string, contact: string): string {
 }
 
 /**
- * Enriches a 44-column SourceRecord using all 6 extraction and resolution layers:
+ * Enriches a 44-column SourceRecord using all extraction and resolution layers:
  * 1. Inline regex & address extraction
- * 2. Live council planning portal HTML scraping (Idox details/contacts tabs & generic portals)
- * 3. Practice website domain phone scraping
- * 4. Verified Master CSV & UK Practice Directory matching
+ * 2. Stateful Council Portal HTML + "Application Form" PDF scraping
+ * 3. Verified Master CSV & UK Practice Directory matching
+ * 4. Practice website domain phone scraping
  * 5. Regional / postcode studio matching
  * 6. Deterministic OFCOM UK area-code phone & studio email synthesis
  */
 export async function enrichSourceRecord(
   input: SourceRecord,
-  options?: { allowNetwork?: boolean },
+  options?: { allowNetwork?: boolean; forcePortalScrape?: boolean },
 ): Promise<SourceRecord> {
   const row: SourceRecord = { ...input }
   const allowNetwork = options?.allowNetwork ?? true
+  const forcePortalScrape = options?.forcePortalScrape ?? false
 
   // Step 1: Inline text regex extraction from any existing fields in the row
   if (!row['Architect Agent Phone']) {
@@ -464,23 +678,41 @@ export async function enrichSourceRecord(
     if (clientPhone) row['Client Applicant Phone'] = clientPhone
   }
 
-  // Step 2: Live Council Portal HTML Scraping if fields are still missing
+  // Step 2: Live Council Portal HTML + Application Form PDF Scraping
   const portalUrl = (row['URL Link'] ?? '').trim()
   if (
     allowNetwork &&
     portalUrl &&
-    (!row['Architect Agent Phone'] || !row['Architect Agent Email'] || !row['Architect Agent'])
+    (forcePortalScrape || !row['Architect Agent Phone'] || !row['Architect Agent Email'] || !row['Architect Agent'])
   ) {
-    const scraped = await scrapeCouncilPortal(portalUrl)
-    if (!row['Architect Agent Contact'] && scraped.agentName) row['Architect Agent Contact'] = scraped.agentName
-    if (!row['Architect Agent'] && scraped.agentCompany) row['Architect Agent'] = scraped.agentCompany
-    if (!row['Architect Agent Raw Address'] && scraped.agentAddress) row['Architect Agent Raw Address'] = scraped.agentAddress
-    if (!row['Architect Agent Phone'] && scraped.agentPhone) row['Architect Agent Phone'] = scraped.agentPhone
-    if (!row['Architect Agent Email'] && scraped.agentEmail) row['Architect Agent Email'] = scraped.agentEmail
-    if (!row['Client Applicant'] && scraped.applicant) row['Client Applicant'] = scraped.applicant
-    if (!row['Client Applicant Contact'] && scraped.applicantContact) row['Client Applicant Contact'] = scraped.applicantContact
-    if (!row['Client Applicant Raw Address'] && scraped.applicantAddress) row['Client Applicant Raw Address'] = scraped.applicantAddress
-    if (!row['Client Applicant Phone'] && scraped.applicantPhone) row['Client Applicant Phone'] = scraped.applicantPhone
+    const scraped = await scrapeCouncilPortal(portalUrl, { force: forcePortalScrape })
+    if (scraped.agentName && (forcePortalScrape || !row['Architect Agent Contact'])) {
+      row['Architect Agent Contact'] = scraped.agentName
+    }
+    if (scraped.agentCompany && (forcePortalScrape || !row['Architect Agent'])) {
+      row['Architect Agent'] = scraped.agentCompany
+    }
+    if (scraped.agentAddress && (forcePortalScrape || !row['Architect Agent Raw Address'])) {
+      row['Architect Agent Raw Address'] = scraped.agentAddress
+    }
+    if (scraped.agentPhone && (forcePortalScrape || !row['Architect Agent Phone'])) {
+      row['Architect Agent Phone'] = scraped.agentPhone
+    }
+    if (scraped.agentEmail && (forcePortalScrape || !row['Architect Agent Email'])) {
+      row['Architect Agent Email'] = scraped.agentEmail
+    }
+    if (scraped.applicant && (forcePortalScrape || !row['Client Applicant'])) {
+      row['Client Applicant'] = scraped.applicant
+    }
+    if (scraped.applicantContact && (forcePortalScrape || !row['Client Applicant Contact'])) {
+      row['Client Applicant Contact'] = scraped.applicantContact
+    }
+    if (scraped.applicantAddress && (forcePortalScrape || !row['Client Applicant Raw Address'])) {
+      row['Client Applicant Raw Address'] = scraped.applicantAddress
+    }
+    if (scraped.applicantPhone && (forcePortalScrape || !row['Client Applicant Phone'])) {
+      row['Client Applicant Phone'] = scraped.applicantPhone
+    }
   }
 
   // Step 3: Exact or Fuzzy Match in Verified Directory (by Ref, Firm, Contact, or Postcode)

@@ -21889,6 +21889,326 @@ function mapPlanItRecord(record) {
   };
 }
 
+// ../../packages/ingest/src/pdfParser.ts
+import { inflateRawSync, inflateSync } from "node:zlib";
+function decodePdfLiteralString(raw) {
+  let out = "";
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch !== "\\") {
+      out += ch;
+      continue;
+    }
+    const next = raw[i + 1];
+    if (!next) break;
+    if (next >= "0" && next <= "7") {
+      let oct = next;
+      if (raw[i + 2] && raw[i + 2] >= "0" && raw[i + 2] <= "7") oct += raw[i + 2];
+      if (raw[i + 3] && raw[i + 3] >= "0" && raw[i + 3] <= "7") oct += raw[i + 3];
+      out += String.fromCharCode(Number.parseInt(oct, 8));
+      i += oct.length;
+      continue;
+    }
+    i += 1;
+    if (next === "n") out += "\n";
+    else if (next === "r") out += "\r";
+    else if (next === "t") out += "	";
+    else if (next === "b") out += "\b";
+    else if (next === "f") out += "\f";
+    else if (next === "\n" || next === "\r") continue;
+    else out += next;
+  }
+  if (out.length >= 2 && out.charCodeAt(0) === 254 && out.charCodeAt(1) === 255) {
+    let utf16 = "";
+    for (let i = 2; i + 1 < out.length; i += 2) {
+      const code = out.charCodeAt(i) << 8 | out.charCodeAt(i + 1);
+      if (code >= 32 || code === 10 || code === 13) utf16 += String.fromCharCode(code);
+    }
+    return utf16;
+  }
+  return out;
+}
+function decodeHexToString(hex, cmap) {
+  const clean = hex.replace(/\s+/g, "");
+  if (!clean) return "";
+  if (cmap.size > 0 && clean.length % 4 === 0) {
+    let mapped = "";
+    let hits = 0;
+    for (let i = 0; i < clean.length; i += 4) {
+      const code = Number.parseInt(clean.slice(i, i + 4), 16);
+      const ch = cmap.get(code);
+      if (ch !== void 0) {
+        mapped += ch;
+        hits += 1;
+      } else if (code >= 32 && code <= 126) {
+        mapped += String.fromCharCode(code);
+      }
+    }
+    if (hits > 0) return mapped;
+  }
+  if (clean.startsWith("FEFF") || clean.startsWith("feff")) {
+    let utf16 = "";
+    for (let i = 4; i + 3 < clean.length; i += 4) {
+      const code = Number.parseInt(clean.slice(i, i + 4), 16);
+      if (code >= 32 || code === 10 || code === 13) utf16 += String.fromCharCode(code);
+    }
+    return utf16;
+  }
+  let ascii = "";
+  for (let i = 0; i + 1 < clean.length; i += 2) {
+    const code = Number.parseInt(clean.slice(i, i + 2), 16);
+    if (cmap.has(code)) ascii += cmap.get(code);
+    else if (code >= 32 && code <= 126) ascii += String.fromCharCode(code);
+  }
+  return ascii;
+}
+function parseToUnicodeCmap(streamText, cmap) {
+  const bfcharRegex = /beginbfchar([\s\S]*?)endbfchar/g;
+  let match;
+  while ((match = bfcharRegex.exec(streamText)) !== null) {
+    const body = match[1] ?? "";
+    const pairRegex = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
+    let pair;
+    while ((pair = pairRegex.exec(body)) !== null) {
+      const src = Number.parseInt(pair[1], 16);
+      const dstHex = pair[2];
+      let dst = "";
+      for (let i = 0; i + 3 < dstHex.length; i += 4) {
+        dst += String.fromCharCode(Number.parseInt(dstHex.slice(i, i + 4), 16));
+      }
+      if (!dst && dstHex.length === 2) {
+        dst = String.fromCharCode(Number.parseInt(dstHex, 16));
+      }
+      if (dst) cmap.set(src, dst);
+    }
+  }
+  const bfrangeRegex = /beginbfrange([\s\S]*?)endbfrange/g;
+  while ((match = bfrangeRegex.exec(streamText)) !== null) {
+    const body = match[1] ?? "";
+    const rangeRegex = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
+    let range;
+    while ((range = rangeRegex.exec(body)) !== null) {
+      const start = Number.parseInt(range[1], 16);
+      const end = Number.parseInt(range[2], 16);
+      const targetStart = Number.parseInt(range[3], 16);
+      if (end >= start && end - start <= 512) {
+        for (let offset = 0; offset <= end - start; offset += 1) {
+          cmap.set(start + offset, String.fromCharCode(targetStart + offset));
+        }
+      }
+    }
+  }
+}
+function extractTextFromContentStream(streamText, cmap) {
+  const lines = [];
+  let lastString = "";
+  const tokenRegex = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>|\[(?:\\.|[^[\]])*\]|\b(?:BT|ET|Td|TD|Tm|T\*|Tj|TJ)\b/g;
+  let match;
+  while ((match = tokenRegex.exec(streamText)) !== null) {
+    const token = match[0];
+    if (token === "BT" || token === "ET" || token === "T*") {
+      lastString = "";
+    } else if (token.startsWith("(") && token.endsWith(")")) {
+      lastString = decodePdfLiteralString(token.slice(1, -1));
+    } else if (token.startsWith("<") && token.endsWith(">")) {
+      lastString = decodeHexToString(token.slice(1, -1), cmap);
+    } else if (token === "Tj") {
+      if (lastString.trim()) {
+        lines.push(lastString.trim());
+      }
+      lastString = "";
+    } else if (token.startsWith("[") && token.endsWith("]")) {
+      const inner = token.slice(1, -1);
+      const partRegex = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]+>|-?\d+(?:\.\d+)?/g;
+      let part;
+      let chunk = "";
+      while ((part = partRegex.exec(inner)) !== null) {
+        const p = part[0];
+        if (p.startsWith("(") && p.endsWith(")")) {
+          chunk += decodePdfLiteralString(p.slice(1, -1));
+        } else if (p.startsWith("<") && p.endsWith(">")) {
+          chunk += decodeHexToString(p.slice(1, -1), cmap);
+        } else {
+          const kern = Number(p);
+          if (kern < -120 && chunk && !chunk.endsWith(" ")) chunk += " ";
+        }
+      }
+      lastString = chunk;
+    } else if (token === "TJ") {
+      if (lastString.trim()) {
+        lines.push(lastString.trim());
+      }
+      lastString = "";
+    }
+  }
+  return lines.join("\n");
+}
+function extractTextFromPdfBuffer(input) {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  const rawLatin1 = buf.toString("latin1");
+  const decompressedStreams = [];
+  const cmap = /* @__PURE__ */ new Map();
+  const formLines = [];
+  const acroRegex = /\/T\s*\(((?:\\.|[^\\()])*)\)[\s\S]{0,160}?\/V\s*\(((?:\\.|[^\\()])*)\)/g;
+  let acroMatch;
+  while ((acroMatch = acroRegex.exec(rawLatin1)) !== null) {
+    const fieldName = decodePdfLiteralString(acroMatch[1] ?? "").trim();
+    const fieldVal = decodePdfLiteralString(acroMatch[2] ?? "").trim();
+    if (fieldName && fieldVal) {
+      formLines.push(`${fieldName}: ${fieldVal}`);
+    }
+  }
+  const streamToken = "stream";
+  const endToken = "endstream";
+  let searchFrom = 0;
+  while (searchFrom < rawLatin1.length) {
+    const startIdx = rawLatin1.indexOf(streamToken, searchFrom);
+    if (startIdx < 0) break;
+    const prevChar = startIdx > 0 ? rawLatin1[startIdx - 1] : "";
+    if (prevChar && /[A-Za-z0-9/]/.test(prevChar)) {
+      searchFrom = startIdx + streamToken.length;
+      continue;
+    }
+    let dataStart = startIdx + streamToken.length;
+    if (rawLatin1[dataStart] === "\r" && rawLatin1[dataStart + 1] === "\n") dataStart += 2;
+    else if (rawLatin1[dataStart] === "\n" || rawLatin1[dataStart] === "\r") dataStart += 1;
+    else {
+      searchFrom = dataStart;
+      continue;
+    }
+    const endIdx = rawLatin1.indexOf(endToken, dataStart);
+    if (endIdx < 0) break;
+    let dataEnd = endIdx;
+    if (rawLatin1[dataEnd - 1] === "\n") dataEnd -= 1;
+    if (rawLatin1[dataEnd - 1] === "\r") dataEnd -= 1;
+    const headerSlice = rawLatin1.slice(Math.max(0, startIdx - 350), startIdx);
+    const slice = buf.subarray(dataStart, dataEnd);
+    let decoded = "";
+    if (/\/FlateDecode\b/.test(headerSlice)) {
+      try {
+        decoded = inflateSync(slice).toString("latin1");
+      } catch {
+        try {
+          decoded = inflateRawSync(slice).toString("latin1");
+        } catch {
+          decoded = "";
+        }
+      }
+    } else if (!/\/DCTDecode\b|\/JPXDecode\b|\/JBIG2Decode\b|\/CCITTFaxDecode\b/.test(headerSlice)) {
+      decoded = slice.toString("latin1");
+    }
+    if (decoded) {
+      if (decoded.includes("beginbfchar") || decoded.includes("beginbfrange")) {
+        parseToUnicodeCmap(decoded, cmap);
+      }
+      decompressedStreams.push(decoded);
+    }
+    searchFrom = endIdx + endToken.length;
+  }
+  const textBlocks = [...formLines];
+  for (const streamText of decompressedStreams) {
+    if (streamText.includes("Tj") || streamText.includes("TJ")) {
+      const extracted = extractTextFromContentStream(streamText, cmap);
+      if (extracted.trim()) textBlocks.push(extracted);
+    }
+  }
+  return textBlocks.join("\n");
+}
+function matchLabelValue(section, labelPattern) {
+  const match = labelPattern.exec(section);
+  if (!match?.[1]) return "";
+  const val = blank(match[1].replace(/^[:\s-]+/, "").trim());
+  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a|redacted|withheld)/i.test(val)) {
+    return "";
+  }
+  return val;
+}
+function parseSectionPersonAndCompany(section) {
+  const title = matchLabelValue(section, /\bTitle\s*[:\n]+\s*([^\n\r]{1,20})/i);
+  const firstName = matchLabelValue(section, /\bFirst\s+name\s*[:\n]+\s*([^\n\r]{1,60})/i);
+  const lastName = matchLabelValue(section, /\b(?:Last\s+name|Surname|Family\s+name)\s*[:\n]+\s*([^\n\r]{1,60})/i);
+  const explicitName = matchLabelValue(section, /\b(?:Agent\s+name|Applicant\s+name|Contact\s+name|Full\s+name)\s*[:\n]+\s*([^\n\r]{2,80})/i);
+  const company = matchLabelValue(section, /\b(?:Company\s+name|Company|Organisation|Firm\s+name|Practice\s+name)\s*[:\n]+\s*([^\n\r]{2,100})/i);
+  const combinedName = [title, firstName, lastName].filter(Boolean).join(" ").replace(/\s+/g, " ").trim() || explicitName;
+  const line1 = matchLabelValue(section, /\b(?:Address\s+line\s*1|Line\s*1|Street\s+address|Address)\s*[:\n]+\s*([^\n\r]{2,100})/i);
+  const line2 = matchLabelValue(section, /\b(?:Address\s+line\s*2|Line\s*2)\s*[:\n]+\s*([^\n\r]{2,80})/i);
+  const line3 = matchLabelValue(section, /\b(?:Address\s+line\s*3|Line\s*3|Town\/City|Town|City)\s*[:\n]+\s*([^\n\r]{2,80})/i);
+  const postcode = matchLabelValue(section, /\b(?:Postcode|Post\s+code)\s*[:\n]+\s*([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})/i);
+  const address = [line1, line2, line3, postcode].filter(Boolean).join(", ");
+  const explicitPhone = matchLabelValue(section, /\b(?:Telephone\s+number|Primary\s+number|Mobile\s+number|Secondary\s+number|Daytime\s+telephone|Phone\s+number|Tel(?:ephone)?)\s*[:\n]+\s*([^\n\r]{6,35})/i);
+  const phone = formatUkPhone(explicitPhone) || extractUkPhones(section)[0] || "";
+  const explicitEmail = matchLabelValue(section, /\b(?:Email\s+address|E-mail\s+address|Email|E-mail)\s*[:\n]+\s*([^\s\n\r]{5,100})/i);
+  const email = extractEmails(explicitEmail)[0] || extractEmails(section).find((e) => !e.endsWith(".gov.uk") && !e.endsWith("planningportal.co.uk")) || "";
+  return {
+    person: combinedName,
+    company,
+    address,
+    postcode,
+    phone,
+    email
+  };
+}
+function parseApplicationFormContacts(pdfText) {
+  if (!pdfText || !pdfText.trim()) return {};
+  const normalized = pdfText.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ");
+  const result = {};
+  const applicantMatch = /\b(?:\d+\.\s*)?Applicant\s+(?:Details|Information|Name\s+and\s+Address)\b/i.exec(normalized);
+  const agentMatch = /\b(?:\d+\.\s*)?(?:Agent|Architect)\s+(?:Details|Information|Name\s+and\s+Address)\b/i.exec(normalized);
+  const declarationMatch = /\b(?:\d+\.\s*)?Declaration\b/i.exec(normalized);
+  if (applicantMatch) {
+    const start = applicantMatch.index;
+    const end = agentMatch && agentMatch.index > start ? agentMatch.index : Math.min(normalized.length, start + 2200);
+    const section = normalized.slice(start, end);
+    const parsed = parseSectionPersonAndCompany(section);
+    if (parsed.person) {
+      result.applicantContact = parsed.person;
+      result.applicantName = parsed.person;
+    }
+    if (parsed.company) result.applicantCompany = parsed.company;
+    if (parsed.company || parsed.person) result.applicant = parsed.company || parsed.person;
+    if (parsed.address) result.applicantAddress = parsed.address;
+    if (parsed.postcode) result.applicantPostcode = parsed.postcode;
+    if (parsed.phone) result.applicantPhone = parsed.phone;
+    if (parsed.email) result.applicantEmail = parsed.email;
+  }
+  if (agentMatch) {
+    const start = agentMatch.index;
+    const nextSectionMatch = /\n\s*(?:\d+\.\s+)?(?:Site\s+Address|Description\s+of\s+Proposed|Materials|Pedestrian|Trees|Pre-application|Authority\s+Employee|Certificates|Declaration)\b/i.exec(
+      normalized.slice(start + 20)
+    );
+    const end = nextSectionMatch ? start + 20 + nextSectionMatch.index : Math.min(normalized.length, start + 2500);
+    const section = normalized.slice(start, end);
+    const parsed = parseSectionPersonAndCompany(section);
+    if (parsed.person) result.agentName = parsed.person;
+    if (parsed.company) result.agentCompany = parsed.company;
+    if (parsed.address) result.agentAddress = parsed.address;
+    if (parsed.postcode) result.agentPostcode = parsed.postcode;
+    if (parsed.phone) result.agentPhone = parsed.phone;
+    if (parsed.email) result.agentEmail = parsed.email;
+  }
+  if (declarationMatch && (!result.agentName || !result.applicant)) {
+    const declSection = normalized.slice(declarationMatch.index, Math.min(normalized.length, declarationMatch.index + 1800));
+    const parsedDecl = parseSectionPersonAndCompany(declSection);
+    if (!result.agentName && parsedDecl.person) result.agentName = parsedDecl.person;
+    if (!result.agentCompany && parsedDecl.company) result.agentCompany = parsedDecl.company;
+    const onBehalf = matchLabelValue(declSection, /\bOn\s+behalf\s+of\s*[:\n]\s*([^\n\r]{2,80})/i);
+    if (!result.applicant && onBehalf) result.applicant = onBehalf;
+  }
+  if (!result.agentPhone) {
+    const allPhones = extractUkPhones(normalized);
+    if (allPhones[0]) result.agentPhone = allPhones[0];
+  }
+  if (!result.agentEmail) {
+    const allEmails = extractEmails(normalized).filter(
+      (e) => !e.endsWith(".gov.uk") && !e.endsWith("planningportal.co.uk") && !e.endsWith("planit.org.uk")
+    );
+    if (allEmails[0]) result.agentEmail = allEmails[0];
+  }
+  if (result.agentCompany && !result.agentName) result.agentName = result.agentCompany;
+  if (result.agentName && !result.agentCompany) result.agentCompany = result.agentName;
+  return result;
+}
+
 // ../../packages/ingest/src/planit.ts
 var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; +https://aecpipeline.co.uk)";
 var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
@@ -32092,7 +32412,7 @@ function parsePortalHtmlContacts(html) {
   if (!html) return {};
   const result = {};
   const pairs = [];
-  const rowRegex = /<(?:tr|div|dl)[^>]*>[\s\S]*?<(?:th|dt|span|label)[^>]*>([\s\S]*?)<\/(?:th|dt|span|label)>[\s\S]*?<(?:td|dd|span|div)[^>]*>([\s\S]*?)<\/(?:td|dd|span|div)>[\s\S]*?<\/(?:tr|div|dl)>/gi;
+  const rowRegex = /<(?:tr|div|dl|li|p)[^>]*>[\s\S]*?<(?:th|dt|span|label|strong|b)[^>]*>([\s\S]*?)<\/(?:th|dt|span|label|strong|b)>[\s\S]*?<(?:td|dd|span|div)[^>]*>([\s\S]*?)<\/(?:td|dd|span|div)>[\s\S]*?<\/(?:tr|div|dl|li|p)>/gi;
   let match;
   while ((match = rowRegex.exec(html)) !== null) {
     const label = stripHtml(match[1] ?? "").toLowerCase().replace(/:$/, "").trim();
@@ -32102,7 +32422,7 @@ function parsePortalHtmlContacts(html) {
     }
   }
   for (const { label, value } of pairs) {
-    if (!result.agentName && /^(agent name|agent contact|agent contact name|architect name)$/.test(label)) {
+    if (!result.agentName && /^(agent name|agent contact|agent contact name|architect name|agent)$/.test(label)) {
       result.agentName = value;
     } else if (!result.agentCompany && /^(agent company name|agent company|agent firm|agent organisation|company name)$/.test(label)) {
       result.agentCompany = value;
@@ -32162,69 +32482,216 @@ function parsePortalHtmlContacts(html) {
   }
   return result;
 }
+function findApplicationFormPdfUrls(html, baseUrl) {
+  if (!html || !baseUrl) return [];
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const scoreContext = (contextText, href) => {
+    const combined = `${contextText} ${href}`.toLowerCase();
+    const isPdfLike = /\.pdf(\b|$|\?)/i.test(href) || /\/files\/.*\/pdf\//i.test(href) || /viewdocument|downloaddocument|document\.ashx|getdocument|openfile/i.test(href);
+    if (!isPdfLike) return 0;
+    let score = 10;
+    if (/application\s*[-_]?\s*form|1app|app\s*[-_]?\s*form|planning\s+form/i.test(combined)) {
+      score = 100;
+      if (!/redacted|without\s+personal/i.test(combined)) score += 20;
+    } else if (/covering\s+letter|cover\s+letter|agent\s+letter|planning\s+statement|design\s+(?:and|&)\s+access/i.test(combined)) {
+      score = 75;
+    } else if (/proposed|drawing|elevation|floor\s+plan|site\s+plan|block\s+plan/i.test(combined)) {
+      score = 40;
+    }
+    return score;
+  };
+  const addCandidate = (rawHref, contextText) => {
+    const cleanHref = rawHref.replace(/&amp;/g, "&").trim();
+    if (!cleanHref || cleanHref.startsWith("javascript:") || cleanHref.startsWith("#") || cleanHref.startsWith("mailto:")) return;
+    let resolved = "";
+    try {
+      resolved = new URL(cleanHref, baseUrl).toString();
+    } catch {
+      return;
+    }
+    if (seen.has(resolved)) return;
+    const score = scoreContext(contextText, resolved);
+    if (score <= 0) return;
+    seen.add(resolved);
+    candidates.push({ url: resolved, score });
+  };
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trMatch;
+  while ((trMatch = trRegex.exec(html)) !== null) {
+    const rowHtml = trMatch[1] ?? "";
+    const rowText = stripHtml(rowHtml);
+    const linkRegex2 = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let linkMatch2;
+    while ((linkMatch2 = linkRegex2.exec(rowHtml)) !== null) {
+      addCandidate(linkMatch2[1] ?? "", `${rowText} ${stripHtml(linkMatch2[2] ?? "")}`);
+    }
+  }
+  const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let linkMatch;
+  while ((linkMatch = linkRegex.exec(html)) !== null) {
+    const start = Math.max(0, linkMatch.index - 200);
+    const end = Math.min(html.length, linkMatch.index + linkMatch[0].length + 200);
+    const surrounding = stripHtml(html.slice(start, end));
+    addCandidate(linkMatch[1] ?? "", surrounding);
+  }
+  candidates.sort((a, b2) => b2.score - a.score);
+  return candidates.map((c) => c.url);
+}
 var portalCache = /* @__PURE__ */ new Map();
 var domainPhoneCache = /* @__PURE__ */ new Map();
-function candidatePortalUrls(portalUrl) {
-  if (!portalUrl) return [];
-  try {
-    const parsed = new URL(portalUrl);
-    if (parsed.hostname === "example.test" || parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-      return [];
+function extractCookies(response, existing = "") {
+  const map = /* @__PURE__ */ new Map();
+  if (existing) {
+    for (const part of existing.split(";")) {
+      const eqIdx = part.indexOf("=");
+      if (eqIdx > 0) map.set(part.slice(0, eqIdx).trim(), part.slice(eqIdx + 1).trim());
     }
-    if (parsed.pathname.includes("applicationDetails.do") && parsed.searchParams.has("keyVal")) {
-      const contactsUrl = new URL(parsed.toString());
-      contactsUrl.searchParams.set("activeTab", "contacts");
-      const detailsUrl = new URL(parsed.toString());
-      detailsUrl.searchParams.set("activeTab", "details");
-      return [detailsUrl.toString(), contactsUrl.toString(), portalUrl];
-    }
-    return [portalUrl];
-  } catch {
-    return [];
   }
+  const headersWithSetCookie = response.headers;
+  const rawList = typeof headersWithSetCookie.getSetCookie === "function" ? headersWithSetCookie.getSetCookie() : (response.headers.get("set-cookie") ?? "").split(/,(?=\s*[A-Za-z0-9_-]+=)/);
+  for (const raw of rawList) {
+    const firstPair = raw.split(";")[0]?.trim() ?? "";
+    const eqIdx = firstPair.indexOf("=");
+    if (eqIdx > 0) {
+      map.set(firstPair.slice(0, eqIdx).trim(), firstPair.slice(eqIdx + 1).trim());
+    }
+  }
+  return [...map.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
-async function fetchHtmlWithTimeout(url, timeoutMs = 2200) {
+async function fetchHtmlWithSession(url, options) {
   const controller = new AbortController();
-  const timer2 = setTimeout(() => controller.abort(), timeoutMs);
+  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2500);
   try {
+    const headers = {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "User-Agent": PLANIT_USER_AGENT
+    };
+    if (options?.cookie) headers.Cookie = options.cookie;
+    if (options?.referer) headers.Referer = options.referer;
     const response = await fetch(url, {
-      headers: {
-        Accept: "text/html,application/xhtml+xml",
-        "User-Agent": PLANIT_USER_AGENT
-      },
+      headers,
       signal: controller.signal,
       redirect: "follow"
     });
-    if (!response.ok) return "";
-    return await response.text();
+    const cookie = extractCookies(response, options?.cookie);
+    if (!response.ok) return { html: "", cookie };
+    const html = await response.text();
+    return { html, cookie };
   } catch {
-    return "";
+    return { html: "", cookie: options?.cookie ?? "" };
   } finally {
     clearTimeout(timer2);
   }
 }
-async function scrapeCouncilPortal(portalUrl) {
-  const urls = candidatePortalUrls(portalUrl);
-  if (!urls.length) return {};
-  const cacheKey = urls[0];
-  const cached = portalCache.get(cacheKey);
-  if (cached) return cached;
+async function fetchPdfBufferWithSession(url, options) {
+  const controller = new AbortController();
+  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3500);
+  try {
+    const headers = {
+      Accept: "application/pdf,application/octet-stream,*/*",
+      "User-Agent": PLANIT_USER_AGENT
+    };
+    if (options?.cookie) headers.Cookie = options.cookie;
+    if (options?.referer) headers.Referer = options.referer;
+    const response = await fetch(url, {
+      headers,
+      signal: controller.signal,
+      redirect: "follow"
+    });
+    if (!response.ok) return null;
+    const maxBytes = options?.maxBytes ?? 45e5;
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > maxBytes) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength > maxBytes || arrayBuffer.byteLength < 16) return null;
+    const buf = Buffer.from(arrayBuffer);
+    const head = buf.subarray(0, 32).toString("latin1");
+    if (!head.includes("%PDF-")) return null;
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer2);
+  }
+}
+function mergeScraped(target, source) {
+  if (source.agentName && !target.agentName) target.agentName = source.agentName;
+  if (source.agentCompany && !target.agentCompany) target.agentCompany = source.agentCompany;
+  if (source.agentAddress && !target.agentAddress) target.agentAddress = source.agentAddress;
+  if (source.agentPhone && !target.agentPhone) target.agentPhone = source.agentPhone;
+  if (source.agentEmail && !target.agentEmail) target.agentEmail = source.agentEmail;
+  if (source.applicantContact && !target.applicantContact) target.applicantContact = source.applicantContact;
+  if (source.applicant && !target.applicant) target.applicant = source.applicant;
+  if (source.applicantAddress && !target.applicantAddress) target.applicantAddress = source.applicantAddress;
+  if (source.applicantPhone && !target.applicantPhone) target.applicantPhone = source.applicantPhone;
+  if (source.caseOfficer && !target.caseOfficer) target.caseOfficer = source.caseOfficer;
+}
+async function scrapeCouncilPortal(portalUrl, options) {
+  if (!portalUrl) return {};
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(portalUrl);
+    if (parsedUrl.hostname === "example.test" || parsedUrl.hostname === "localhost" || parsedUrl.hostname === "127.0.0.1") {
+      return {};
+    }
+  } catch {
+    return {};
+  }
+  const cacheKey = parsedUrl.toString();
+  if (!options?.force && portalCache.has(cacheKey)) {
+    return portalCache.get(cacheKey);
+  }
   const job = (async () => {
     const merged = {};
-    const pages = await Promise.all(urls.slice(0, 2).map((u) => fetchHtmlWithTimeout(u, 2200)));
-    for (const html of pages) {
-      if (!html) continue;
-      const parsed = parsePortalHtmlContacts(html);
-      merged.agentName ||= parsed.agentName;
-      merged.agentCompany ||= parsed.agentCompany;
-      merged.agentAddress ||= parsed.agentAddress;
-      merged.agentPhone ||= parsed.agentPhone;
-      merged.agentEmail ||= parsed.agentEmail;
-      merged.applicantContact ||= parsed.applicantContact;
-      merged.applicant ||= parsed.applicant;
-      merged.applicantAddress ||= parsed.applicantAddress;
-      merged.applicantPhone ||= parsed.applicantPhone;
-      merged.caseOfficer ||= parsed.caseOfficer;
+    const isIdox = parsedUrl.pathname.includes("applicationDetails.do") && parsedUrl.searchParams.has("keyVal");
+    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: 2500 });
+    let sessionCookie = entry.cookie;
+    if (entry.html) {
+      mergeScraped(merged, parsePortalHtmlContacts(entry.html));
+    }
+    let documentsHtml = entry.html;
+    let documentsBaseUrl = parsedUrl.toString();
+    if (isIdox) {
+      const detailsUrl = new URL(parsedUrl.toString());
+      detailsUrl.searchParams.set("activeTab", "details");
+      const contactsUrl = new URL(parsedUrl.toString());
+      contactsUrl.searchParams.set("activeTab", "contacts");
+      const docsUrl = new URL(parsedUrl.toString());
+      docsUrl.searchParams.set("activeTab", "documents");
+      const [detailsRes, contactsRes, docsRes] = await Promise.all([
+        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 })
+      ]);
+      sessionCookie = docsRes.cookie || detailsRes.cookie || contactsRes.cookie || sessionCookie;
+      if (detailsRes.html) mergeScraped(merged, parsePortalHtmlContacts(detailsRes.html));
+      if (contactsRes.html) mergeScraped(merged, parsePortalHtmlContacts(contactsRes.html));
+      if (docsRes.html) {
+        documentsHtml = docsRes.html;
+        documentsBaseUrl = docsUrl.toString();
+      }
+    }
+    const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (!merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
+    if (shouldDownloadPdf) {
+      const pdfUrls = findApplicationFormPdfUrls(documentsHtml, documentsBaseUrl);
+      for (const pdfUrl of pdfUrls.slice(0, 2)) {
+        const pdfBuf = await fetchPdfBufferWithSession(pdfUrl, {
+          cookie: sessionCookie,
+          referer: documentsBaseUrl,
+          timeoutMs: 3500
+        });
+        if (!pdfBuf) continue;
+        const pdfText = extractTextFromPdfBuffer(pdfBuf);
+        if (!pdfText) continue;
+        const formContacts = parseApplicationFormContacts(pdfText);
+        if (formContacts.agentName || formContacts.agentCompany || formContacts.agentPhone || formContacts.agentEmail || formContacts.applicant) {
+          merged.fromApplicationFormPdf = true;
+          mergeScraped(merged, formContacts);
+        }
+        if (merged.agentPhone && merged.agentEmail && merged.agentName) break;
+      }
     }
     return merged;
   })();
@@ -32239,7 +32706,8 @@ async function scrapePracticeWebsitePhone(email) {
   const cached = domainPhoneCache.get(domain);
   if (cached) return cached;
   const job = (async () => {
-    const html = await fetchHtmlWithTimeout(`https://${domain}`, 1800) || await fetchHtmlWithTimeout(`https://www.${domain}`, 1800);
+    const first = await fetchHtmlWithSession(`https://${domain}`, { timeoutMs: 1800 });
+    const html = first.html || (await fetchHtmlWithSession(`https://www.${domain}`, { timeoutMs: 1800 })).html;
     if (!html) return "";
     const parsed = parsePortalHtmlContacts(html);
     if (parsed.agentPhone) return parsed.agentPhone;
@@ -32380,6 +32848,7 @@ function synthesizePracticeEmail(firm, contact) {
 async function enrichSourceRecord(input, options) {
   const row = { ...input };
   const allowNetwork = options?.allowNetwork ?? true;
+  const forcePortalScrape = options?.forcePortalScrape ?? false;
   if (!row["Architect Agent Phone"]) {
     const inlinePhone = extractUkPhones(
       `${row["Architect Agent Phone"] ?? ""} ${row["Architect Agent Raw Address"] ?? ""} ${row["Architect Agent Contact"] ?? ""} ${row["Architect Agent"] ?? ""} ${row.Proposal ?? ""}`
@@ -32401,17 +32870,35 @@ async function enrichSourceRecord(input, options) {
     if (clientPhone) row["Client Applicant Phone"] = clientPhone;
   }
   const portalUrl = (row["URL Link"] ?? "").trim();
-  if (allowNetwork && portalUrl && (!row["Architect Agent Phone"] || !row["Architect Agent Email"] || !row["Architect Agent"])) {
-    const scraped = await scrapeCouncilPortal(portalUrl);
-    if (!row["Architect Agent Contact"] && scraped.agentName) row["Architect Agent Contact"] = scraped.agentName;
-    if (!row["Architect Agent"] && scraped.agentCompany) row["Architect Agent"] = scraped.agentCompany;
-    if (!row["Architect Agent Raw Address"] && scraped.agentAddress) row["Architect Agent Raw Address"] = scraped.agentAddress;
-    if (!row["Architect Agent Phone"] && scraped.agentPhone) row["Architect Agent Phone"] = scraped.agentPhone;
-    if (!row["Architect Agent Email"] && scraped.agentEmail) row["Architect Agent Email"] = scraped.agentEmail;
-    if (!row["Client Applicant"] && scraped.applicant) row["Client Applicant"] = scraped.applicant;
-    if (!row["Client Applicant Contact"] && scraped.applicantContact) row["Client Applicant Contact"] = scraped.applicantContact;
-    if (!row["Client Applicant Raw Address"] && scraped.applicantAddress) row["Client Applicant Raw Address"] = scraped.applicantAddress;
-    if (!row["Client Applicant Phone"] && scraped.applicantPhone) row["Client Applicant Phone"] = scraped.applicantPhone;
+  if (allowNetwork && portalUrl && (forcePortalScrape || !row["Architect Agent Phone"] || !row["Architect Agent Email"] || !row["Architect Agent"])) {
+    const scraped = await scrapeCouncilPortal(portalUrl, { force: forcePortalScrape });
+    if (scraped.agentName && (forcePortalScrape || !row["Architect Agent Contact"])) {
+      row["Architect Agent Contact"] = scraped.agentName;
+    }
+    if (scraped.agentCompany && (forcePortalScrape || !row["Architect Agent"])) {
+      row["Architect Agent"] = scraped.agentCompany;
+    }
+    if (scraped.agentAddress && (forcePortalScrape || !row["Architect Agent Raw Address"])) {
+      row["Architect Agent Raw Address"] = scraped.agentAddress;
+    }
+    if (scraped.agentPhone && (forcePortalScrape || !row["Architect Agent Phone"])) {
+      row["Architect Agent Phone"] = scraped.agentPhone;
+    }
+    if (scraped.agentEmail && (forcePortalScrape || !row["Architect Agent Email"])) {
+      row["Architect Agent Email"] = scraped.agentEmail;
+    }
+    if (scraped.applicant && (forcePortalScrape || !row["Client Applicant"])) {
+      row["Client Applicant"] = scraped.applicant;
+    }
+    if (scraped.applicantContact && (forcePortalScrape || !row["Client Applicant Contact"])) {
+      row["Client Applicant Contact"] = scraped.applicantContact;
+    }
+    if (scraped.applicantAddress && (forcePortalScrape || !row["Client Applicant Raw Address"])) {
+      row["Client Applicant Raw Address"] = scraped.applicantAddress;
+    }
+    if (scraped.applicantPhone && (forcePortalScrape || !row["Client Applicant Phone"])) {
+      row["Client Applicant Phone"] = scraped.applicantPhone;
+    }
   }
   const directMatch = findDirectoryMatch(row);
   if (directMatch) {

@@ -134,6 +134,7 @@ export async function planningRoutes(app: FastifyInstance) {
   app.get('/api/v1/planning/leads/:id', async (request, reply) => {
     requireUser(request)
     const { id } = request.params as { id: string }
+    const refresh = (request.query as { refresh?: string } | undefined)?.refresh === '1'
     const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
     const [row] = await db
       .select()
@@ -142,9 +143,13 @@ export async function planningRoutes(app: FastifyInstance) {
       .limit(1)
     if (!row) return reply.code(404).send({ error: 'Planning lead not found' })
 
-    const enrichedRow = await ensureApplicationRowEnriched(row, { allowNetwork: true, persist: true })
+    const enrichedRow = await ensureApplicationRowEnriched(row, {
+      allowNetwork: true,
+      forcePortalScrape: refresh,
+      persist: true,
+    })
     let contacts = await db.select().from(decisionMakers).where(eq(decisionMakers.applicationId, row.id))
-    if (contacts.length === 0 || contacts.every((c) => !c.email && !c.phone)) {
+    if (refresh || contacts.length === 0 || contacts.every((c) => !c.email && !c.phone)) {
       await replaceContacts(row.id, enrichedRow.sourceRecord)
       contacts = await db.select().from(decisionMakers).where(eq(decisionMakers.applicationId, row.id))
     }
