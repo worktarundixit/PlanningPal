@@ -23,7 +23,11 @@ export function OnboardingPage() {
   const [busy, setBusy] = useState(false)
   const [companyName, setCompanyName] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
-  const [name, setName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
+  const [secondaryEmail, setSecondaryEmail] = useState('')
   const [jobTitle, setJobTitle] = useState('')
   const [coverage, setCoverage] = useState('regional')
   const [regions, setRegions] = useState<string[]>([])
@@ -31,7 +35,11 @@ export function OnboardingPage() {
   const [projectTypes, setProjectTypes] = useState<string[]>([])
   const [valueRanges, setValueRanges] = useState<string[]>([])
   const [ribaStages, setRibaStages] = useState<string[]>(['0', '1', '2'])
-  const [invites, setInvites] = useState([{ email: '', role: 'member' }])
+  const [invites, setInvites] = useState([
+    { name: '', email: '', role: 'member' },
+    { name: '', email: '', role: 'member' },
+    { name: '', email: '', role: 'member' },
+  ])
   const [alertsEnabled, setAlertsEnabled] = useState(true)
   const [frequency, setFrequency] = useState('weekly')
   const [areas, setAreas] = useState(UK_AREAS)
@@ -41,8 +49,13 @@ export function OnboardingPage() {
     setState(next)
     setCompanyName(next.draft.companyName)
     setLogoUrl(next.draft.logoUrl)
-    setName(next.draft.name)
-    setJobTitle(next.draft.jobTitle)
+    const parts = (next.draft.name || '').trim().split(/\s+/)
+    setFirstName(next.draft.firstName || parts[0] || '')
+    setLastName(next.draft.lastName || parts.slice(1).join(' ') || '')
+    setEmail(next.draft.email || '')
+    setPhone(next.draft.phone || '')
+    setSecondaryEmail(next.draft.secondaryEmail || '')
+    setJobTitle(next.draft.jobTitle || (next.invited ? 'Estimator' : 'Managing Director'))
     setCoverage(next.draft.coverage || 'regional')
     setRegions(next.draft.coverage === 'nationwide' ? areas.map((area) => area.region) : next.draft.regions)
     setCouncils(next.draft.councils)
@@ -119,8 +132,19 @@ export function OnboardingPage() {
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (state.step === 'workspace') void save({ action: 'save-workspace', companyName, logoUrl })
-    else if (state.step === 'profile') void save({ action: 'save-profile', name, jobTitle })
-    else if (state.step === 'icp') void save({ action: 'save-icp', coverage, regions: coverage === 'nationwide' ? areas.map((area) => area.region) : regions, councils, projectTypes, valueRanges, ribaStages })
+    else if (state.step === 'profile') {
+      const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
+      void save({
+        action: 'save-profile',
+        name: fullName,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        phone: phone.trim(),
+        secondaryEmail: secondaryEmail.trim(),
+        companyName: companyName.trim() || undefined,
+        jobTitle,
+      })
+    } else if (state.step === 'icp') void save({ action: 'save-icp', coverage, regions: coverage === 'nationwide' ? areas.map((area) => area.region) : regions, councils, projectTypes, valueRanges, ribaStages })
     else if (state.step === 'team') void save({ action: 'save-team', invites: invites.filter((invite) => invite.email.trim()) })
     else void save({ action: 'save-alerts', enabled: alertsEnabled, frequency })
   }
@@ -140,7 +164,7 @@ export function OnboardingPage() {
           ))}
         </ol>
         <form onSubmit={submit} className="rounded-2xl border border-[#DCE4F0] bg-white p-5 shadow-[0_12px_40px_rgba(23,37,84,0.06)] sm:p-8">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#2563EB]">{state.invited ? 'Join your team' : 'Set up PlanningPal'}</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#2563EB]">{state.invited ? 'Welcome to your workspace' : 'Set up PlanningPal'}</div>
           <h1 className="mt-2 font-display text-[28px] font-semibold tracking-[-0.03em]">{current?.label}</h1>
           {state.step === 'workspace' && (
             <div className="mt-6 grid gap-4">
@@ -152,9 +176,25 @@ export function OnboardingPage() {
           )}
           {state.step === 'profile' && (
             <div className="mt-6 grid gap-4">
-              <p className="text-[13px] leading-relaxed text-[#52627A]">{state.invited ? `${state.draft.companyName || 'Your team'} already has a workspace. Add your name and role.` : 'This is how teammates see you in the command centre.'}</p>
-              <label className={label}>Your name<input required value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
-              <label className={label}>Job role<input required value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} placeholder="Estimator, director, bid manager" className={field} /></label>
+              {state.invited ? (
+                <div className="rounded-xl border border-[#DBEAFE] bg-[#EFF6FF] px-4 py-3 text-[13px] text-[#1E3A8A]">
+                  <strong>Welcome to {state.draft.companyName || 'PlanningPal'}!</strong> Your First and Last Name from your invitation are pre-filled below. Complete your contact number and optional secondary email to continue (teammates join as <strong>Member</strong> by default — Admins can assign roles in the Team section).
+                </div>
+              ) : (
+                <p className="text-[13px] leading-relaxed text-[#52627A]">Complete your personal contact details and role so teammates and notifications reach you cleanly.</p>
+              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className={label}>First name<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} placeholder="Alex" className={field} /></label>
+                <label className={label}>Last name<input required value={lastName} onChange={(event) => setLastName(event.target.value)} placeholder="Morgan" className={field} /></label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className={label}>Primary email<input type="email" value={email} readOnly className={`${field} bg-[#F8FAFC] text-[#64748B]`} /></label>
+                <label className={label}>Secondary email (optional)<input type="email" value={secondaryEmail} onChange={(event) => setSecondaryEmail(event.target.value)} placeholder="backup@company.co.uk" className={field} /></label>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className={label}>Contact number<input required value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="07700 900123 or 020 7946 0192" className={field} /></label>
+                <label className={label}>Job role<input required value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} placeholder="Estimator, director, bid manager" className={field} /></label>
+              </div>
             </div>
           )}
           {state.step === 'icp' && (
@@ -205,19 +245,61 @@ export function OnboardingPage() {
             </div>
           )}
           {state.step === 'team' && (
-            <div className="mt-6 grid gap-3">
-              <p className="text-[13px] leading-relaxed text-[#52627A]">Invite colleagues as Admin, Member, or Viewer. Owner stays with you. PlanningPal emails the invite through Resend when it is configured.</p>
-              {invites.map((invite, index) => (
-                <div key={index} className="grid gap-2 sm:grid-cols-[1fr_140px]">
-                  <input type="email" value={invite.email} onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, email: event.target.value } : row))} placeholder="name@company.co.uk" className={field} />
-                  <select value={invite.role} onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, role: event.target.value } : row))} className={field}>
-                    <option value="admin">Admin</option>
-                    <option value="member">Member</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
+            <div className="mt-6 grid gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#DBEAFE] bg-[#EFF6FF] px-4 py-3">
+                <div>
+                  <div className="text-[13px] font-semibold text-[#1E3A8A]">Add Your Team — Available Seat Slots</div>
+                  <p className="mt-0.5 text-[12px] text-[#3B82F6]">Enter each colleague&apos;s Name and Email. When they join via their invite link, they are welcomed as <strong>Member</strong> by default. Admins can assign or customize roles anytime in the Team section.</p>
                 </div>
-              ))}
-              <button type="button" onClick={() => setInvites((rows) => [...rows, { email: '', role: 'member' }])} className="w-fit text-[13px] font-semibold text-[#2563EB]">Add another</button>
+                <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#1D4ED8] shadow-xs">
+                  {Math.max(1, 5 - (state.draft.teamInvites?.length ?? 0))} slots available
+                </span>
+              </div>
+              {state.draft.teamInvites && state.draft.teamInvites.length > 0 && (
+                <div className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[#64748B]">Already Invited</div>
+                  <div className="mt-2 grid gap-1.5">
+                    {state.draft.teamInvites.map((member, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-[12px]">
+                        <span className="font-semibold text-[#172554]">{member.name} · <span className="font-normal text-[#64748B]">{member.email}</span></span>
+                        <span className="rounded-full bg-[#DBEAFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">{member.role} · {member.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="grid gap-3">
+                {invites.map((invite, index) => (
+                  <div key={index} className="grid gap-2 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC]/60 p-3 sm:grid-cols-[180px_1fr_110px]">
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748B]">Slot {index + 1} · Full Name</span>
+                      <input
+                        value={invite.name}
+                        onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))}
+                        placeholder="Jamie Clarke"
+                        className="mt-1 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2.5 text-sm outline-none focus:border-[#2563EB]"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748B]">Work Email</span>
+                      <input
+                        type="email"
+                        value={invite.email}
+                        onChange={(event) => setInvites((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, email: event.target.value } : row))}
+                        placeholder="jamie@company.co.uk"
+                        className="mt-1 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2.5 text-sm outline-none focus:border-[#2563EB]"
+                      />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-[#64748B]">Default Role</span>
+                      <div className="mt-1 flex h-[40px] items-center rounded-lg border border-[#E2E8F0] bg-white px-3 text-[12px] font-semibold text-[#475569]">
+                        Member
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => setInvites((rows) => [...rows, { name: '', email: '', role: 'member' }])} className="w-fit text-[13px] font-semibold text-[#2563EB]">+ Add another team slot</button>
             </div>
           )}
           {state.step === 'alerts' && (

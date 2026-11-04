@@ -1,16 +1,24 @@
 import { coverageChoice, councilsFor, UK_AREAS, validateIcp, type OnboardingStep } from '@planningpal/shared'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, isNull } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { appOrigin, mailer } from '../auth/mailer.ts'
 import { roleLabel, type Permission } from '../auth/permissions.ts'
 import { db } from '../db/client.ts'
-import { auditLog, invitations, organisations, teamMembers, users } from '../db/schema.ts'
+import { auditLog, invitations, organisations, planningApplications, teamMembers, users, workspaceLeads } from '../db/schema.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 import type { AuthUser } from '../types.ts'
 
 const logoPattern = /^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i
+
+const createCustomerBody = z.object({
+  firstName: z.string().trim().min(1).max(60),
+  lastName: z.string().trim().max(60).optional().default(''),
+  email: z.string().trim().email(),
+  companyName: z.string().trim().max(120).optional().default(''),
+  coverage: z.enum(['regional', 'multi_county', 'nationwide']).optional(),
+})
 
 const saveBody = z.discriminatedUnion('action', [
   z.object({
@@ -20,8 +28,13 @@ const saveBody = z.discriminatedUnion('action', [
   }),
   z.object({
     action: z.literal('save-profile'),
-    name: z.string().trim().min(1).max(80),
+    name: z.string().trim().max(80).optional(),
+    firstName: z.string().trim().max(60).optional(),
+    lastName: z.string().trim().max(60).optional(),
     jobTitle: z.string().trim().min(1).max(80),
+    phone: z.string().trim().max(40).optional(),
+    secondaryEmail: z.string().trim().max(120).optional(),
+    companyName: z.string().trim().max(120).optional(),
   }),
   z.object({
     action: z.literal('save-icp'),
@@ -34,7 +47,15 @@ const saveBody = z.discriminatedUnion('action', [
   }),
   z.object({
     action: z.literal('save-team'),
-    invites: z.array(z.object({ email: z.string().email(), role: z.enum(['admin', 'member', 'viewer']) })).max(10),
+    invites: z
+      .array(
+        z.object({
+          name: z.string().trim().max(80).optional(),
+          email: z.string().email(),
+          role: z.enum(['admin', 'member', 'viewer']).optional().default('member'),
+        }),
+      )
+      .max(10),
   }),
   z.object({
     action: z.literal('save-alerts'),
@@ -95,11 +116,20 @@ async function present(row: typeof users.$inferSelect, permissions: Permission[]
   const seats = row.organisationId
     ? await db.select({ id: teamMembers.id }).from(teamMembers).where(eq(teamMembers.organisationId, row.organisationId))
     : []
+  const prefs = (row.emailPreferences ?? {}) as Record<string, unknown>
+  const nameParts = (row.name && !row.name.includes('@') ? row.name : '').trim().split(/\s+/).filter(Boolean)
+  const firstName = typeof prefs.firstName === 'string' && prefs.firstName ? prefs.firstName : (nameParts[0] ?? '')
+  const lastName = typeof prefs.lastName === 'string' && prefs.lastName ? prefs.lastName : nameParts.slice(1).join(' ')
+  const phone = typeof prefs.phone === 'string' ? prefs.phone : ''
+  const secondaryEmail = typeof prefs.secondaryEmail === 'string' ? prefs.secondaryEmail : ''
+  const availableSlots = Math.max(1, 3 - Math.max(0, seats.length - 1))
   const current = row.onboardingStep as OnboardingStep
   const cursor = current === 'done' ? steps.length : Math.max(0, steps.indexOf(current))
   return {
     step: current,
     invited: skipped.has('workspace'),
+    orgRole: row.orgRole,
+    availableSlots,
     steps: steps.map((id) => ({
       id,
       label: STEP_LABEL[id],
@@ -110,6 +140,11 @@ async function present(row: typeof users.$inferSelect, permissions: Permission[]
       companyName: client?.companyName ?? '',
       logoUrl: client?.logoUrl ?? '',
       name: row.name,
+      firstName,
+      lastName,
+      email: row.email,
+      phone,
+      secondaryEmail,
       jobTitle: row.jobTitle,
       coverage: client?.coverage ?? '',
       regions: client?.targetTerritories ?? [],
@@ -174,12 +209,31 @@ export async function onboardingRoutes(app: FastifyInstance) {
         planName: organisations.planName,
         step: users.onboardingStep,
         role: users.orgRole,
+        userName: users.name,
       })
       .from(organisations)
       .leftJoin(users, eq(users.organisationId, organisations.id))
       .orderBy(asc(organisations.companyName))
-    const byWorkspace = new Map<string, { id: string; name: string; coverage: string; planName: string; step: string; finished: boolean; owner: boolean }>()
+    const pendingInvites = await db
+      .select({
+        organisationId: invitations.organisationId,
+        token: invitations.token,
+        role: invitations.role,
+      })
+      .from(invitations)
+      .where(isNull(invitations.acceptedAt))
+    const inviteByOrg = new Map<string, string>()
+    for (const inv of pendingInvites) {
+      if (inv.role === 'owner' || !inviteByOrg.has(inv.organisationId)) {
+        inviteByOrg.set(inv.organisationId, `${appOrigin()}/accept-invite?token=${inv.token}`)
+      }
+    }
+    const byWorkspace = new Map<
+      string,
+      { id: string; name: string; coverage: string; planName: string; step: string; finished: boolean; owner: boolean; ownerName?: string; inviteUrl?: string }
+    >()
     for (const row of rows) {
+      const cleanUserName = row.userName && !row.userName.includes('@') ? row.userName : undefined
       const candidate = {
         id: row.id,
         name: row.name,
@@ -188,6 +242,8 @@ export async function onboardingRoutes(app: FastifyInstance) {
         step: row.step ?? 'workspace',
         finished: row.step === 'done',
         owner: row.role === 'owner',
+        ownerName: cleanUserName,
+        inviteUrl: inviteByOrg.get(row.id),
       }
       const current = byWorkspace.get(row.id)
       if (!current || (candidate.owner && !current.owner) || (candidate.owner && current.owner && current.finished && !candidate.finished)) {
@@ -195,6 +251,72 @@ export async function onboardingRoutes(app: FastifyInstance) {
       }
     }
     return { data: [...byWorkspace.values()].map(({ owner: _owner, ...client }) => client) }
+  })
+
+  app.post('/api/v1/onboarding/clients', async (request, reply) => {
+    const user = requireUser(request)
+    if (user.platformRole !== 'super_admin') throw new HttpError(403, 'Forbidden')
+    const body = parseBody(createCustomerBody, request.body, reply)
+    if (!body) return
+    const fullName = [body.firstName, body.lastName].filter(Boolean).join(' ').trim() || body.firstName
+    const companyName = body.companyName?.trim() || `${fullName} Workspace`
+    const email = body.email.toLowerCase()
+    const plan = body.coverage ? coverageChoice(body.coverage) : undefined
+    const [organisation] = await db
+      .insert(organisations)
+      .values({
+        companyName,
+        slug: slugify(companyName),
+        coverage: body.coverage ?? '',
+        tier: plan?.tier ?? 'CATEGORY_3',
+        planName: plan?.planName ?? 'Team Plan',
+        monthlyPrice: plan?.monthlyPrice ?? '£2,950',
+      })
+      .returning()
+    if (!organisation) throw new HttpError(500, 'Could not create customer workspace')
+    const token = randomBytes(24).toString('hex')
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+    await db.insert(teamMembers).values({
+      organisationId: organisation.id,
+      name: fullName,
+      email,
+      role: 'owner',
+      status: 'Pending',
+    })
+    await db.insert(invitations).values({
+      organisationId: organisation.id,
+      email,
+      role: 'owner',
+      token,
+      expiresAt,
+      invitedBy: user.id,
+    })
+    const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`
+    await mailer.send({
+      kind: 'invite',
+      to: email,
+      subject: `Your ${companyName} workspace on PlanningPal is ready`,
+      text: `Hello ${fullName},\n\nYour PlanningPal workspace (${companyName}) has been created.\nOpen your personal onboarding link to set up your account and team:\n${inviteUrl}`,
+    })
+    await db.insert(auditLog).values({
+      actorUserId: user.id,
+      workspaceId: organisation.id,
+      action: 'staff.customer.create',
+      method: request.method,
+      path: '/api/v1/onboarding/clients',
+    })
+    return reply.code(201).send({
+      id: organisation.id,
+      name: organisation.companyName,
+      customerName: fullName,
+      email,
+      coverage: organisation.coverage,
+      planName: organisation.planName,
+      step: 'profile',
+      finished: false,
+      inviteUrl,
+      token,
+    })
   })
 
   app.put('/api/v1/onboarding', async (request, reply) => {
@@ -265,8 +387,30 @@ async function applyStep(user: AuthUser, row: typeof users.$inferSelect, body: S
   }
   if (body.action === 'save-profile') {
     requireCurrent(row, 'profile')
-    await db.update(teamMembers).set({ name: body.name }).where(eq(teamMembers.userId, row.id))
-    await advance(row, user.permissions, { name: body.name, jobTitle: body.jobTitle })
+    const fullName =
+      body.name?.trim() ||
+      [body.firstName?.trim(), body.lastName?.trim()].filter(Boolean).join(' ').trim()
+    if (!fullName) throw new HttpError(400, 'Enter your name')
+    const parts = fullName.split(/\s+/)
+    const firstName = body.firstName?.trim() || parts[0] || ''
+    const lastName = body.lastName?.trim() || parts.slice(1).join(' ')
+    const existingPrefs = (row.emailPreferences ?? {}) as Record<string, unknown>
+    const updatedPrefs = {
+      ...existingPrefs,
+      firstName,
+      lastName,
+      ...(body.phone !== undefined ? { phone: body.phone.trim() } : {}),
+      ...(body.secondaryEmail !== undefined ? { secondaryEmail: body.secondaryEmail.trim() } : {}),
+    }
+    if (body.companyName?.trim() && row.organisationId && row.orgRole === 'owner') {
+      await db.update(organisations).set({ companyName: body.companyName.trim() }).where(eq(organisations.id, row.organisationId))
+    }
+    await db.update(teamMembers).set({ name: fullName }).where(eq(teamMembers.userId, row.id))
+    await advance(row, user.permissions, {
+      name: fullName,
+      jobTitle: body.jobTitle,
+      emailPreferences: updatedPrefs,
+    })
     return
   }
   if (body.action === 'save-icp') {
@@ -291,6 +435,23 @@ async function applyStep(user: AuthUser, row: typeof users.$inferSelect, body: S
         monthlyPrice: plan?.monthlyPrice ?? '£99',
       })
       .where(eq(organisations.id, row.organisationId))
+    // Seed initial workspaceLeads matching the organisation's regions so the dashboard has immediate schemes
+    const apps = await db.select({ id: planningApplications.id, region: planningApplications.region }).from(planningApplications).limit(80)
+    const matching = apps.filter((a) => body.coverage === 'nationwide' || !a.region || regions.includes(a.region)).slice(0, 30)
+    const toLink = matching.length ? matching : apps.slice(0, 20)
+    if (toLink.length > 0) {
+      const existingLinks = await db
+        .select({ applicationId: workspaceLeads.applicationId })
+        .from(workspaceLeads)
+        .where(eq(workspaceLeads.workspaceId, row.organisationId))
+      const linkedSet = new Set(existingLinks.map((l) => l.applicationId))
+      const freshLinks = toLink
+        .filter((a) => !linkedSet.has(a.id))
+        .map((a) => ({ workspaceId: row.organisationId!, applicationId: a.id }))
+      if (freshLinks.length > 0) {
+        await db.insert(workspaceLeads).values(freshLinks).catch(() => undefined)
+      }
+    }
     await advance(row, user.permissions)
     return
   }
@@ -302,6 +463,7 @@ async function applyStep(user: AuthUser, row: typeof users.$inferSelect, body: S
     const company = client?.companyName || user.companyName || 'your workspace'
     for (const invite of body.invites) {
       const email = invite.email.toLowerCase()
+      const role = invite.role || 'member'
       if (email === row.email) throw new HttpError(400, 'You are already in this workspace')
       const [already] = await db
         .select({ id: teamMembers.id })
@@ -311,22 +473,23 @@ async function applyStep(user: AuthUser, row: typeof users.$inferSelect, body: S
       if (already) throw new HttpError(409, 'That email is already on the team')
       const token = randomBytes(24).toString('hex')
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      const name = email
+      const fallbackName = email
         .split('@')[0]
         ?.split(/[._-]/)
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ')
+      const memberName = invite.name?.trim() || fallbackName || 'Invited member'
       await db.insert(teamMembers).values({
         organisationId: row.organisationId,
-        name: name || 'Invited member',
+        name: memberName,
         email,
-        role: invite.role,
+        role,
         status: 'Pending',
       })
       await db.insert(invitations).values({
         organisationId: row.organisationId,
         email,
-        role: invite.role,
+        role,
         token,
         expiresAt,
         invitedBy: row.id,
@@ -336,7 +499,7 @@ async function applyStep(user: AuthUser, row: typeof users.$inferSelect, body: S
         kind: 'invite',
         to: email,
         subject: `Join ${company} on PlanningPal`,
-        text: `${row.name || 'A teammate'} invited you to ${company} as ${roleLabel(invite.role)}.\nOpen this link to create your account:\n${inviteUrl}`,
+        text: `${row.name || 'A teammate'} invited you to ${company} as ${roleLabel(role)}.\nOpen this link to create your account:\n${inviteUrl}`,
       })
     }
     await advance(row, user.permissions)

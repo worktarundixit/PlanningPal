@@ -9,7 +9,7 @@ import {
   PLANIT_USER_AGENT,
   splitPostcode,
 } from '@planningpal/ingest'
-import { MASTER_COLUMNS, type SourceRecord } from '@planningpal/shared'
+import { MASTER_COLUMNS, type PortalDocument, type SourceRecord } from '@planningpal/shared'
 import { createHash } from 'node:crypto'
 import http from 'node:http'
 import https from 'node:https'
@@ -27,6 +27,7 @@ export type PortalScrapedContacts = {
   applicantPhone: string
   caseOfficer: string
   fromApplicationFormPdf?: boolean
+  documents?: PortalDocument[]
 }
 
 const UK_AREA_CODES: Record<string, string> = {
@@ -253,6 +254,146 @@ export function findApplicationFormPdfUrls(html: string, baseUrl: string): strin
 
   candidates.sort((a, b) => b.score - a.score)
   return candidates.map((c) => c.url)
+}
+
+export function extractPortalDocuments(html: string, baseUrl: string): PortalDocument[] {
+  if (!html || !baseUrl) return []
+  const docs: PortalDocument[] = []
+  const seen = new Set<string>()
+
+  const classifyDoc = (text: string): { kind: PortalDocument['kind']; title: string } => {
+    const lower = text.toLowerCase()
+    if (/application\s*[-_]?\s*form|1app|app\s*[-_]?\s*form|planning\s+form/i.test(lower)) {
+      return { kind: 'application_form', title: 'Application Form (1APP)' }
+    }
+    if (/design\s+(?:and|&)\s+access|planning\s+statement|heritage\s+statement|covering\s+letter|cover\s+letter/i.test(lower)) {
+      const title = /heritage/i.test(lower)
+        ? 'Heritage & Design Statement'
+        : /covering|cover\s+letter/i.test(lower)
+          ? 'Agent Covering Letter'
+          : 'Design & Access / Planning Statement'
+      return { kind: 'design_access_statement', title }
+    }
+    if (/decision\s+notice|grant\s+of\s+planning|approval\s+notice|officer\s+report|delegated\s+report/i.test(lower)) {
+      return { kind: 'decision_notice', title: /officer|delegated/i.test(lower) ? 'Officer Delegated Report' : 'Decision Notice' }
+    }
+    if (/proposed|existing|elevation|floor\s+plan|site\s+plan|location\s+plan|block\s+plan|drawing|section|layout/i.test(lower)) {
+      const clean = text.replace(/\b(view|download|open|pdf)\b/gi, '').replace(/\s+/g, ' ').trim()
+      return { kind: 'drawing_plan', title: clean.slice(0, 80) || 'Architectural Plans & Elevations' }
+    }
+    const clean = text.replace(/\b(view|download|open|pdf)\b/gi, '').replace(/\s+/g, ' ').trim()
+    return { kind: 'other', title: clean.slice(0, 80) || 'Supporting Planning Document' }
+  }
+
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi
+  let trMatch: RegExpExecArray | null
+  while ((trMatch = trRegex.exec(html)) !== null) {
+    const rowHtml = trMatch[1] ?? ''
+    const cells: string[] = []
+    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi
+    let tdMatch: RegExpExecArray | null
+    while ((tdMatch = tdRegex.exec(rowHtml)) !== null) {
+      cells.push(stripHtml(tdMatch[1] ?? ''))
+    }
+    const rowText = cells.join(' · ') || stripHtml(rowHtml)
+    const dateMatch = rowText.match(/\b(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/)
+    const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
+    let linkMatch: RegExpExecArray | null
+    while ((linkMatch = linkRegex.exec(rowHtml)) !== null) {
+      const rawHref = (linkMatch[1] ?? '').replace(/&amp;/g, '&').trim()
+      if (!rawHref || rawHref.startsWith('javascript:') || rawHref.startsWith('#')) continue
+      const isPdfLike =
+        /\.pdf(\b|$|\?)/i.test(rawHref) ||
+        /\/files\/.*\/pdf\//i.test(rawHref) ||
+        /viewdocument|downloaddocument|document\.ashx|getdocument|openfile/i.test(rawHref)
+      if (!isPdfLike) continue
+      let resolved = ''
+      try {
+        resolved = new URL(rawHref, baseUrl).toString()
+      } catch {
+        continue
+      }
+      if (seen.has(resolved)) continue
+      seen.add(resolved)
+      const descriptiveCells = cells.filter((c) => c && !/^(view|download|open|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})$/i.test(c))
+      const labelSource = descriptiveCells.join(' — ') || rowText
+      const { kind, title } = classifyDoc(labelSource)
+      docs.push({
+        title,
+        kind,
+        url: resolved,
+        publishedOn: dateMatch?.[1],
+      })
+    }
+  }
+
+  const orderWeight: Record<PortalDocument['kind'], number> = {
+    application_form: 1,
+    design_access_statement: 2,
+    drawing_plan: 3,
+    decision_notice: 4,
+    other: 5,
+  }
+  docs.sort((a, b) => orderWeight[a.kind] - orderWeight[b.kind])
+  return docs.slice(0, 12)
+}
+
+export function buildLeadDocuments(row: SourceRecord): PortalDocument[] {
+  const cachedRaw = row['_portal_documents']
+  if (cachedRaw) {
+    try {
+      const parsed = JSON.parse(cachedRaw) as PortalDocument[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    } catch {
+      // ignore invalid JSON
+    }
+  }
+  const portalUrl = (row['URL Link'] ?? '').trim()
+  let docsTabUrl = portalUrl
+  const summaryUrl = portalUrl
+  if (portalUrl) {
+    try {
+      const u = new URL(portalUrl)
+      if (u.pathname.includes('applicationDetails.do')) {
+        u.searchParams.set('activeTab', 'documents')
+        docsTabUrl = u.toString()
+      }
+    } catch {
+      // keep raw portalUrl
+    }
+  }
+  const submittedDate = row['Date Validated'] || row['Date Received'] || row['Submission Date'] || undefined
+  const decisionDate = row['Decision Date'] || undefined
+  const fallbackUrl = docsTabUrl || summaryUrl || '#'
+  const list: PortalDocument[] = [
+    {
+      title: 'Application Form (1APP — Agent & Applicant Details)',
+      kind: 'application_form',
+      url: fallbackUrl,
+      publishedOn: submittedDate,
+    },
+    {
+      title: 'Design & Access / Planning Statement',
+      kind: 'design_access_statement',
+      url: fallbackUrl,
+      publishedOn: submittedDate,
+    },
+    {
+      title: 'Proposed Site Layout, Floor Plans & Elevations',
+      kind: 'drawing_plan',
+      url: fallbackUrl,
+      publishedOn: submittedDate,
+    },
+  ]
+  if (decisionDate || /approved|granted|refused|conditional/i.test(row['Planning Status'] || row['Decision'] || '')) {
+    list.push({
+      title: 'Council Decision Notice & Delegated Officer Report',
+      kind: 'decision_notice',
+      url: fallbackUrl,
+      publishedOn: decisionDate || submittedDate,
+    })
+  }
+  return list
 }
 
 const portalCache = new Map<string, Promise<Partial<PortalScrapedContacts>>>()
@@ -494,6 +635,13 @@ export async function scrapeCouncilPortal(
       if (docsRes.html) {
         documentsHtml = docsRes.html
         documentsBaseUrl = docsUrl.toString()
+      }
+    }
+
+    if (documentsHtml) {
+      const extractedDocs = extractPortalDocuments(documentsHtml, documentsBaseUrl)
+      if (extractedDocs.length > 0) {
+        merged.documents = extractedDocs
       }
     }
 
@@ -783,6 +931,9 @@ export async function enrichSourceRecord(
     }
     if (scraped.applicantPhone && (forcePortalScrape || !row['Client Applicant Phone'])) {
       row['Client Applicant Phone'] = scraped.applicantPhone
+    }
+    if (scraped.documents?.length) {
+      row['_portal_documents'] = JSON.stringify(scraped.documents)
     }
   }
 

@@ -87,7 +87,7 @@ export const users = pgTable('users', {
   apiToken: text('api_token').notNull().unique(),
   passwordHash: text('password_hash'),
   twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
-  emailPreferences: jsonb('email_preferences').$type<Record<string, boolean>>().notNull().default(sql`'{}'::jsonb`),
+  emailPreferences: jsonb('email_preferences').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
   onboardingStep: text('onboarding_step').notNull().default('done'),
   onboardingSkipped: text('onboarding_skipped').array().notNull().default(sql`ARRAY[]::text[]`),
   checklistDismissed: boolean('checklist_dismissed').notNull().default(true),

@@ -1,9 +1,9 @@
 import { and, eq } from 'drizzle-orm'
 import type { FastifyRequest } from 'fastify'
 import { db } from '../db/client.ts'
-import { auditLog, organisations, users, workspaceMembers } from '../db/schema.ts'
+import { auditLog, customRoles, organisations, users, workspaceMembers } from '../db/schema.ts'
 import type { AuthUser } from '../types.ts'
-import { permissionsFor, type OrgRole, type PlatformRole } from './permissions.ts'
+import { parseOrgRole, permissionsFor, type OrgRole, type PlatformRole } from './permissions.ts'
 import { provisionDomainUser } from './provision.ts'
 import { userFromAccessToken } from './supabase.ts'
 
@@ -32,6 +32,7 @@ async function presentUser(request: FastifyRequest, authUserId: string, email: s
   let organisationId = row.user.organisationId
   let companyName = row.companyName ?? (row.user.platformRole === 'super_admin' ? 'Hitcaliber Ltd' : '')
   let orgRole = (row.user.orgRole as OrgRole | null) ?? null
+  let customRolePermissions: string[] | undefined
   if (organisationId) {
     const [membership] = await db
       .select()
@@ -42,6 +43,18 @@ async function presentUser(request: FastifyRequest, authUserId: string, email: s
       orgRole = null
     } else if (membership) {
       orgRole = membership.role as OrgRole
+    }
+    if (orgRole && !parseOrgRole(orgRole)) {
+      const [custom] = await db
+        .select()
+        .from(customRoles)
+        .where(and(eq(customRoles.organisationId, organisationId), eq(customRoles.name, String(orgRole))))
+        .limit(1)
+      if (custom) {
+        customRolePermissions = custom.permissions
+      } else {
+        orgRole = null
+      }
     }
   }
   if (row.user.platformRole === 'super_admin') {
@@ -77,7 +90,27 @@ async function presentUser(request: FastifyRequest, authUserId: string, email: s
       })
     }
   }
-  const platformRole = row.user.platformRole === 'super_admin' ? ('super_admin' as PlatformRole) : null
+  const previewRole = headerValue(request.headers['x-preview-role'])?.trim()
+  let platformRole = row.user.platformRole === 'super_admin' ? ('super_admin' as PlatformRole) : null
+  if (previewRole && (platformRole === 'super_admin' || orgRole === 'owner' || orgRole === 'admin')) {
+    const parsedPreview = parseOrgRole(previewRole)
+    if (parsedPreview) {
+      orgRole = parsedPreview
+      platformRole = null
+      customRolePermissions = undefined
+    } else if (organisationId) {
+      const [custom] = await db
+        .select()
+        .from(customRoles)
+        .where(and(eq(customRoles.organisationId, organisationId), eq(customRoles.name, previewRole)))
+        .limit(1)
+      if (custom) {
+        orgRole = custom.name as OrgRole
+        platformRole = null
+        customRolePermissions = custom.permissions
+      }
+    }
+  }
   return {
     id: row.user.id,
     authUserId,
@@ -89,7 +122,7 @@ async function presentUser(request: FastifyRequest, authUserId: string, email: s
     twoFactorEnabled: row.user.twoFactorEnabled,
     orgRole,
     platformRole,
-    permissions: permissionsFor(orgRole, platformRole),
+    permissions: permissionsFor(orgRole, platformRole, customRolePermissions),
   }
 }
 

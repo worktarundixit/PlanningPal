@@ -138,12 +138,34 @@ export const PUBLIC_PHONE_DISPLAY = '+44 07774 720591'
 
 export const PUBLIC_PHONE_TEL = '+4407774720591'
 
+export type EmailPreferences = {
+  highIntent?: boolean
+  taskReminders?: boolean
+  weeklyDigest?: boolean
+}
+
+export type PortalDocument = {
+  title: string
+  kind: 'application_form' | 'design_access_statement' | 'drawing_plan' | 'decision_notice' | 'other'
+  category?: 'Application Form' | 'Statement' | 'Drawing / Plan' | 'Decision / Notice' | 'Supporting Document'
+  url: string
+  publishedOn?: string
+  date?: string
+}
+
 export type UserProfile = {
   name: string
+  firstName?: string
+  lastName?: string
   role: string
   company: string
   email: string
+  phone?: string
+  secondaryEmail?: string
   twoFactorEnabled?: boolean
+  alertsEnabled?: boolean
+  alertFrequency?: string
+  emailPreferences?: EmailPreferences
 }
 
 const COLOURS = ['bg-[#7DD3FC]', 'bg-[#C4B5FD]', 'bg-[#F9A8D4]', 'bg-[#FCD34D]', 'bg-[#86EFAC]']

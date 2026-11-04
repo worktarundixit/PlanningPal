@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { activities, decisionMakers, planningApplications, savedSchemes } from '../db/schema.ts'
-import { enrichSourceRecord } from '../ingest/enrich.ts'
+import { buildLeadDocuments, enrichSourceRecord } from '../ingest/enrich.ts'
 import { ensureApplicationRowEnriched, replaceContacts } from '../ingest/run.ts'
 import { parseBody, requireUser } from '../lib/http.ts'
 
@@ -177,6 +177,7 @@ export async function planningRoutes(app: FastifyInstance) {
         rawAddress: contact.rawAddress,
         confidenceLevel: contact.confidenceLevel,
       })),
+      documents: buildLeadDocuments(enrichedRow.sourceRecord),
       activities: history.map(presentActivity),
     }
   })

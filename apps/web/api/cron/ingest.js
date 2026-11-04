@@ -32540,6 +32540,77 @@ function findApplicationFormPdfUrls(html, baseUrl) {
   candidates.sort((a, b2) => b2.score - a.score);
   return candidates.map((c) => c.url);
 }
+function extractPortalDocuments(html, baseUrl) {
+  if (!html || !baseUrl) return [];
+  const docs = [];
+  const seen = /* @__PURE__ */ new Set();
+  const classifyDoc = (text2) => {
+    const lower = text2.toLowerCase();
+    if (/application\s*[-_]?\s*form|1app|app\s*[-_]?\s*form|planning\s+form/i.test(lower)) {
+      return { kind: "application_form", title: "Application Form (1APP)" };
+    }
+    if (/design\s+(?:and|&)\s+access|planning\s+statement|heritage\s+statement|covering\s+letter|cover\s+letter/i.test(lower)) {
+      const title = /heritage/i.test(lower) ? "Heritage & Design Statement" : /covering|cover\s+letter/i.test(lower) ? "Agent Covering Letter" : "Design & Access / Planning Statement";
+      return { kind: "design_access_statement", title };
+    }
+    if (/decision\s+notice|grant\s+of\s+planning|approval\s+notice|officer\s+report|delegated\s+report/i.test(lower)) {
+      return { kind: "decision_notice", title: /officer|delegated/i.test(lower) ? "Officer Delegated Report" : "Decision Notice" };
+    }
+    if (/proposed|existing|elevation|floor\s+plan|site\s+plan|location\s+plan|block\s+plan|drawing|section|layout/i.test(lower)) {
+      const clean2 = text2.replace(/\b(view|download|open|pdf)\b/gi, "").replace(/\s+/g, " ").trim();
+      return { kind: "drawing_plan", title: clean2.slice(0, 80) || "Architectural Plans & Elevations" };
+    }
+    const clean = text2.replace(/\b(view|download|open|pdf)\b/gi, "").replace(/\s+/g, " ").trim();
+    return { kind: "other", title: clean.slice(0, 80) || "Supporting Planning Document" };
+  };
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trMatch;
+  while ((trMatch = trRegex.exec(html)) !== null) {
+    const rowHtml = trMatch[1] ?? "";
+    const cells = [];
+    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let tdMatch;
+    while ((tdMatch = tdRegex.exec(rowHtml)) !== null) {
+      cells.push(stripHtml(tdMatch[1] ?? ""));
+    }
+    const rowText = cells.join(" \xB7 ") || stripHtml(rowHtml);
+    const dateMatch = rowText.match(/\b(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/);
+    const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let linkMatch;
+    while ((linkMatch = linkRegex.exec(rowHtml)) !== null) {
+      const rawHref = (linkMatch[1] ?? "").replace(/&amp;/g, "&").trim();
+      if (!rawHref || rawHref.startsWith("javascript:") || rawHref.startsWith("#")) continue;
+      const isPdfLike = /\.pdf(\b|$|\?)/i.test(rawHref) || /\/files\/.*\/pdf\//i.test(rawHref) || /viewdocument|downloaddocument|document\.ashx|getdocument|openfile/i.test(rawHref);
+      if (!isPdfLike) continue;
+      let resolved = "";
+      try {
+        resolved = new URL(rawHref, baseUrl).toString();
+      } catch {
+        continue;
+      }
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      const descriptiveCells = cells.filter((c) => c && !/^(view|download|open|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})$/i.test(c));
+      const labelSource = descriptiveCells.join(" \u2014 ") || rowText;
+      const { kind, title } = classifyDoc(labelSource);
+      docs.push({
+        title,
+        kind,
+        url: resolved,
+        publishedOn: dateMatch?.[1]
+      });
+    }
+  }
+  const orderWeight = {
+    application_form: 1,
+    design_access_statement: 2,
+    drawing_plan: 3,
+    decision_notice: 4,
+    other: 5
+  };
+  docs.sort((a, b2) => orderWeight[a.kind] - orderWeight[b2.kind]);
+  return docs.slice(0, 12);
+}
 var portalCache = /* @__PURE__ */ new Map();
 var domainPhoneCache = /* @__PURE__ */ new Map();
 function mergeCookies(setCookieHeaders, existing = "") {
@@ -32727,6 +32798,12 @@ async function scrapeCouncilPortal(portalUrl, options) {
       if (docsRes.html) {
         documentsHtml = docsRes.html;
         documentsBaseUrl = docsUrl.toString();
+      }
+    }
+    if (documentsHtml) {
+      const extractedDocs = extractPortalDocuments(documentsHtml, documentsBaseUrl);
+      if (extractedDocs.length > 0) {
+        merged.documents = extractedDocs;
       }
     }
     const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (options?.force || !merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
@@ -32954,6 +33031,9 @@ async function enrichSourceRecord(input, options) {
     }
     if (scraped.applicantPhone && (forcePortalScrape || !row["Client Applicant Phone"])) {
       row["Client Applicant Phone"] = scraped.applicantPhone;
+    }
+    if (scraped.documents?.length) {
+      row["_portal_documents"] = JSON.stringify(scraped.documents);
     }
   }
   const directMatch = findDirectoryMatch(row);

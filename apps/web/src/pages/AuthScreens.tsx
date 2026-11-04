@@ -40,15 +40,20 @@ function safeRedirect(path: string) {
   }
 }
 
-/** Where a completed sign-in should land. The temporary Admin login link is /sign-in?next=/app. */
-function destinationAfterSignIn() {
-  return '/app'
+/** Where a completed sign-in should land. Super Admin lands on /app/admin. */
+function destinationAfterSignIn(isSuperAdmin = false) {
+  const nextParam = new URLSearchParams(window.location.search).get('next')
+  if (nextParam && nextParam.startsWith('/')) return nextParam
+  return isSuperAdmin ? '/app/admin' : '/app'
 }
 
 export function SignInPage() {
   const expired = new URLSearchParams(window.location.search).get('expired') === '1'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [require2fa, setRequire2fa] = useState(false)
+  const [totpCode, setTotpCode] = useState('')
+  const [pendingDestination, setPendingDestination] = useState('/app')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -58,10 +63,37 @@ export function SignInPage() {
     if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
+    if (require2fa) {
+      try {
+        const { api } = await import('../lib/api')
+        await api.verifyTwoFactor(totpCode)
+        window.location.assign(pendingDestination)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Invalid 6-digit verification code')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-    setBusy(false)
-    if (signInError) return setError(signInError.message)
-    window.location.assign(destinationAfterSignIn())
+    if (signInError) {
+      setBusy(false)
+      return setError(signInError.message)
+    }
+    try {
+      const { api } = await import('../lib/api')
+      const me = await api.me()
+      const dest = destinationAfterSignIn(me.platformRole === 'super_admin')
+      if (me.twoFactorEnabled) {
+        setPendingDestination(dest)
+        setRequire2fa(true)
+        setBusy(false)
+        return
+      }
+      window.location.assign(dest)
+    } catch {
+      window.location.assign(destinationAfterSignIn(false))
+    }
   }
 
   const sendLink = async () => {
@@ -79,42 +111,62 @@ export function SignInPage() {
   }
 
   return (
-    <Shell title="Sign in" lede="Open the command centre for your organisation.">
+    <Shell title={require2fa ? 'Two-Factor Authentication' : 'Sign in'} lede={require2fa ? 'Enter the 6-digit verification code from your authenticator app.' : 'Open the command centre for your organisation.'}>
       {expired && <p className="mb-4 rounded-lg bg-[#FFF7ED] px-3 py-2 text-[13px] text-[#9A3412]">Your session has expired. Sign in again.</p>}
       <form onSubmit={submit}>
-        <label className={label}>Email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
-        <label className={label}>Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
+        {!require2fa ? (
+          <>
+            <label className={label}>Email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
+            <label className={label}>Password<input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
+          </>
+        ) : (
+          <label className={label}>
+            6-digit authenticator code
+            <input
+              required
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              placeholder="123456"
+              value={totpCode}
+              onChange={(event) => setTotpCode(event.target.value)}
+              className={`${field} tracking-[0.25em] font-mono text-base`}
+            />
+          </label>
+        )}
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
         {notice && <p className="mt-3 text-[13px] leading-relaxed text-[#166534]">{notice}</p>}
-        <button type="submit" disabled={busy} className={primary}>Sign in</button>
+        <button type="submit" disabled={busy} className={primary}>{require2fa ? 'Verify & Continue' : 'Sign in'}</button>
       </form>
-      <button type="button" disabled={busy} onClick={() => void sendLink()} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold text-[#172554]">Email me a sign-in link</button>
-      <button
-        type="button"
-        className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
-        onClick={() => {
-          if (!supabase) return setError(missingClient())
-          void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: safeRedirect(destinationAfterSignIn()) } })
-        }}
-      >
-        Continue with Google
-      </button>
-      <div className="mt-5 flex justify-between text-[13px]">
-        <a href="/forgot-password" className="font-semibold text-[#2563EB]">Forgot password</a>
-        <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
-      </div>
-      {/* TEMPORARY Admin login. TODO remove later.
-          Same sign-in form and the same Supabase session. After login the browser goes to /app.
-          Nothing is prefilled. */}
-      <p className="mt-4 text-center text-[13px]">
-        <a href="/sign-in?next=/app" className="font-semibold text-[#2563EB]">Admin login</a>
-      </p>
+      {!require2fa && (
+        <>
+          <button type="button" disabled={busy} onClick={() => void sendLink()} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold text-[#172554]">Email me a sign-in link</button>
+          <button
+            type="button"
+            className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
+            onClick={() => {
+              if (!supabase) return setError(missingClient())
+              void supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: safeRedirect(destinationAfterSignIn()) } })
+            }}
+          >
+            Continue with Google
+          </button>
+          <div className="mt-5 flex justify-between text-[13px]">
+            <a href="/forgot-password" className="font-semibold text-[#2563EB]">Forgot password</a>
+            <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
+          </div>
+          <p className="mt-4 text-center text-[13px]">
+            <a href="/sign-in?next=/app/admin" className="font-semibold text-[#2563EB]">Super Admin Console login</a>
+          </p>
+        </>
+      )}
     </Shell>
   )
 }
 
 export function SignUpPage() {
-  const [name, setName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -126,10 +178,11 @@ export function SignUpPage() {
     if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
+    const name = `${firstName.trim()} ${lastName.trim()}`.trim()
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: safeRedirect('/onboarding') },
+      options: { data: { name, firstName: firstName.trim(), lastName: lastName.trim() }, emailRedirectTo: safeRedirect('/onboarding') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)
@@ -137,18 +190,21 @@ export function SignUpPage() {
       window.location.assign('/onboarding')
       return
     }
-    setNotice('Check your email to confirm the address. Supabase sends that message. You will then name your workspace.')
+    setNotice('Check your email to confirm the address. Supabase sends that message. You will then complete your onboarding.')
   }
 
   return (
-    <Shell title="Create an account" lede="After you confirm your email, you'll name your workspace and choose the leads you want.">
+    <Shell title="Create an account" lede="Sign up to launch your PlanningPal onboarding, add your contact details, and invite your team.">
       <form onSubmit={submit}>
-        <label className={label}>Name<input required value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={label}>First name<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} placeholder="Alex" className={field} /></label>
+          <label className={label}>Last name<input required value={lastName} onChange={(event) => setLastName(event.target.value)} placeholder="Morgan" className={field} /></label>
+        </div>
         <label className={label}>Work email<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className={field} /></label>
         <label className={label}>Password<input required type="password" autoComplete="new-password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
         {notice && <p className="mt-3 text-[13px] leading-relaxed text-[#166534]">{notice}</p>}
-        <button type="submit" disabled={busy} className={primary}>Create account</button>
+        <button type="submit" disabled={busy} className={primary}>Create account & start onboarding</button>
       </form>
       <p className="mt-5 text-[13px] text-[#52627A]">Already registered? <a href="/sign-in" className="font-semibold text-[#2563EB]">Sign in</a></p>
     </Shell>
@@ -219,7 +275,8 @@ export function AcceptInvitePage() {
   const [email, setEmail] = useState('')
   const [organisation, setOrganisation] = useState('')
   const [role, setRole] = useState('')
-  const [name, setName] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -231,7 +288,15 @@ export function AcceptInvitePage() {
       if (cancelled) return
       setEmail(invite.email)
       setOrganisation(invite.organisation)
-      setRole(invite.role)
+      setRole(invite.role || 'Member')
+      if (invite.firstName || invite.lastName) {
+        setFirstName(invite.firstName || '')
+        setLastName(invite.lastName || '')
+      } else if (invite.name) {
+        const parts = invite.name.trim().split(/\s+/)
+        setFirstName(parts[0] || '')
+        setLastName(parts.slice(1).join(' '))
+      }
       if (invite.expired) setError('This invitation has expired. Ask an admin to send a new one.')
     }).catch(() => {
       if (!cancelled) setError('This invitation link is not valid.')
@@ -244,10 +309,11 @@ export function AcceptInvitePage() {
     if (!supabase) return setError(missingClient())
     setBusy(true)
     setError('')
+    const name = `${firstName.trim()} ${lastName.trim()}`.trim()
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { name }, emailRedirectTo: safeRedirect('/onboarding') },
+      options: { data: { name, firstName: firstName.trim(), lastName: lastName.trim() }, emailRedirectTo: safeRedirect('/onboarding') },
     })
     setBusy(false)
     if (signUpError) return setError(signUpError.message)
@@ -259,13 +325,25 @@ export function AcceptInvitePage() {
   }
 
   return (
-    <Shell title="Join your team" lede={organisation ? `${organisation} invited you as ${role}.` : 'Accept your PlanningPal invitation.'}>
+    <Shell
+      title={role === 'Owner' ? `Welcome to ${organisation || 'PlanningPal'}` : 'Welcome to your team'}
+      lede={
+        organisation
+          ? role === 'Owner'
+            ? `Your customer workspace for ${organisation} has been prepared. Confirm your name and choose a password to start onboarding.`
+            : `${organisation} invited you to join their workspace (Default Role: ${role || 'Member'} — your Admin can assign roles in the Team section).`
+          : 'Accept your PlanningPal invitation to continue to onboarding.'
+      }
+    >
       <form onSubmit={submit}>
-        <label className={label}>Name<input required value={name} onChange={(event) => setName(event.target.value)} className={field} /></label>
-        <label className={label}>Email<input required type="email" value={email} readOnly className={`${field} bg-[#F8FAFC]`} /></label>
-        <label className={label}>Password<input required type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={label}>First name<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} className={field} /></label>
+          <label className={label}>Last name<input required value={lastName} onChange={(event) => setLastName(event.target.value)} className={field} /></label>
+        </div>
+        <label className={label}>Invited Email<input required type="email" value={email} readOnly className={`${field} bg-[#F8FAFC]`} /></label>
+        <label className={label}>Choose Password<input required type="password" minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} className={field} /></label>
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
-        <button type="submit" disabled={busy || !email} className={primary}>Create account and join</button>
+        <button type="submit" disabled={busy || !email} className={primary}>Accept invite & continue to onboarding</button>
       </form>
     </Shell>
   )

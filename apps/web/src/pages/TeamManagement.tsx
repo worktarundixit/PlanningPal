@@ -14,7 +14,7 @@ export function TeamManagement({ canManage = true }: { canManage?: boolean; acto
   useEffect(() => {
     void api.team().then((team) => {
       setMembers(team.members.map((member) => ({ ...member, status: member.status === 'Pending' ? 'Pending' : 'Active' })))
-      setCustomRoles(team.customRoles.map((role) => ({ name: role.name, permissions: role.permissions })))
+      setCustomRoles(team.customRoles.map((role) => ({ id: role.id, name: role.name, permissions: role.permissions })))
       setTeamStatus('ready')
     }).catch(() => setTeamStatus('error'))
   }, [])
@@ -26,7 +26,7 @@ export function TeamManagement({ canManage = true }: { canManage?: boolean; acto
   const [roleOpen, setRoleOpen] = useState(false)
   const [roleName, setRoleName] = useState('')
   const [rolePermissions, setRolePermissions] = useState<string[]>(['View planning data'])
-  const [customRoles, setCustomRoles] = useState<{ name: string; permissions: string[] }[]>([])
+  const [customRoles, setCustomRoles] = useState<{ id?: string; name: string; permissions: string[] }[]>([])
   const permissionOptions = ['View planning data', 'Export schemes', 'Manage campaigns', 'Manage CRM', 'Manage contacts', 'View reports', 'Manage workspace', 'Manage billing']
   const availableRoles = ['Admin', 'Member', 'Viewer', ...customRoles.map((role) => role.name)]
   const additionalSeats = Math.max(0, members.length - 3)
@@ -64,13 +64,30 @@ export function TeamManagement({ canManage = true }: { canManage?: boolean; acto
   const createRole = (event: FormEvent) => {
     event.preventDefault()
     if (!roleName.trim() || !rolePermissions.length) return
-    void api.createRole(roleName.trim(), rolePermissions).then(() => {
-      setCustomRoles((roles) => [...roles, { name: roleName.trim(), permissions: rolePermissions }])
+    void api.createRole(roleName.trim(), rolePermissions).then((created) => {
+      setCustomRoles((roles) => [...roles, { id: created.id, name: created.name, permissions: created.permissions }])
       setRoleName('')
       setRolePermissions(['View planning data'])
       setRoleOpen(false)
       notify('Custom access role created')
-    }).catch(() => notify('Could not create that role'))
+    }).catch((err: unknown) => notify(err instanceof Error ? err.message : 'Could not create that role'))
+  }
+
+  const deleteRole = (roleId?: string, name?: string) => {
+    if (!canManage) return
+    if (!roleId && !name) return
+    if (!confirm(`Delete custom role "${name}"? Any assigned members will be set to Member.`)) return
+    const role = customRoles.find((r) => r.id === roleId || r.name === name)
+    if (!role?.id) {
+      setCustomRoles((prev) => prev.filter((r) => r.name !== name))
+      notify(`Role ${name} deleted`)
+      return
+    }
+    void api.deleteRole(role.id).then(() => {
+      setCustomRoles((prev) => prev.filter((r) => r.id !== role.id))
+      setMembers((prev) => prev.map((m) => m.role === role.name ? { ...m, role: 'Member' } : m))
+      notify(`Role ${role.name} deleted`)
+    }).catch((err: unknown) => notify(err instanceof Error ? err.message : 'Could not delete role'))
   }
   return (
     <>
@@ -90,7 +107,55 @@ export function TeamManagement({ canManage = true }: { canManage?: boolean; acto
               {member.role !== 'Owner' && canManage && (removeId === member.id ? <div className="flex gap-1"><button onClick={() => removeMember(member.id)} className="rounded-md bg-[#B91C1C] px-2 py-1.5 text-[7px] font-semibold text-white">Confirm</button><button onClick={() => setRemoveId(null)} className="rounded-md bg-[#F1F5F9] px-2 py-1.5 text-[7px] text-[#64748B]">Cancel</button></div> : <button onClick={() => setRemoveId(member.id)} className="text-[8px] font-semibold text-[#B91C1C]">Remove</button>)}
             </div>)}
           </section>
-          <section className="rounded-xl border border-[#DCE4F0] bg-white p-5"><div className="flex items-start justify-between gap-4"><div><h3 className="font-display text-[14px] font-semibold">Access control</h3><p className="mt-1 text-[8px] text-[#94A3B8]">Roles define what each teammate can view and manage.</p></div><button type="button" disabled={!canManage} onClick={() => setRoleOpen(true)} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[#BFDBFE] px-3 py-2 text-[8px] font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"><span className="text-sm leading-none">+</span> Create role</button></div><div className="mt-4 grid gap-3 sm:grid-cols-3">{[['Admin', 'Manage team, campaigns, CRM and workspace settings'], ['Member', 'Manage leads, contacts, tasks and campaigns'], ['Viewer', 'View planning data, CRM and reports only']].map(([role, detail]) => <div key={role} className="rounded-lg border border-[#E2E8F0] p-4"><div className="text-[10px] font-semibold text-[#334155]">{role}</div><div className="mt-2 text-[8px] leading-relaxed text-[#94A3B8]">{detail}</div></div>)}{customRoles.map((role) => <div key={role.name} className="rounded-lg border border-[#93C5FD] bg-[#F8FAFD] p-4"><div className="flex items-center justify-between"><div className="text-[10px] font-semibold text-[#1D4ED8]">{role.name}</div><span className="rounded-full bg-[#DBEAFE] px-2 py-1 text-[7px] font-bold text-[#1D4ED8]">CUSTOM</span></div><div className="mt-2 text-[8px] leading-relaxed text-[#64748B]">{role.permissions.join(', ')}</div></div>)}</div></section>
+          <section className="rounded-xl border border-[#DCE4F0] bg-white p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="font-display text-[14px] font-semibold">Access control</h3>
+                <p className="mt-1 text-[8px] text-[#94A3B8]">Roles define what each teammate can view and manage.</p>
+              </div>
+              <button
+                type="button"
+                disabled={!canManage}
+                onClick={() => setRoleOpen(true)}
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[#BFDBFE] px-3 py-2 text-[8px] font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <span className="text-sm leading-none">+</span> Create role
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              {[
+                ['Admin', 'Manage team, campaigns, CRM and workspace settings'],
+                ['Member', 'Manage leads, contacts, tasks and campaigns'],
+                ['Viewer', 'View planning data, CRM and reports only'],
+              ].map(([role, detail]) => (
+                <div key={role} className="rounded-lg border border-[#E2E8F0] p-4">
+                  <div className="text-[10px] font-semibold text-[#334155]">{role}</div>
+                  <div className="mt-2 text-[8px] leading-relaxed text-[#94A3B8]">{detail}</div>
+                </div>
+              ))}
+              {customRoles.map((role) => (
+                <div key={role.name} className="relative rounded-lg border border-[#93C5FD] bg-[#F8FAFD] p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] font-semibold text-[#1D4ED8]">{role.name}</div>
+                    <div className="flex items-center gap-1">
+                      <span className="rounded-full bg-[#DBEAFE] px-2 py-0.5 text-[7px] font-bold text-[#1D4ED8]">CUSTOM</span>
+                      {canManage && (
+                        <button
+                          type="button"
+                          onClick={() => deleteRole(role.id, role.name)}
+                          className="text-[#94A3B8] hover:text-[#B91C1C] ml-1 text-xs"
+                          title="Delete role"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-2 text-[8px] leading-relaxed text-[#64748B]">{role.permissions.join(', ')}</div>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
         <aside className="space-y-5 xl:sticky xl:top-[96px] xl:self-start">
           <section className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white"><div className="bg-[#F8FAFD] p-4"><div className="text-[8px] font-bold uppercase tracking-wider text-[#64748B]">Team Plan seats</div><div className="mt-3 flex items-end justify-between"><div className="font-display text-[24px] font-semibold">{members.length}</div><span className="text-[8px] font-semibold text-[#64748B]">3 included</span></div></div><div className="p-4"><div className="space-y-2 border-b border-[#EEF2F7] pb-3"><div className="flex justify-between text-[9px]"><span className="text-[#64748B]">Included seats</span><span className="font-semibold">3</span></div><div className="flex justify-between text-[9px]"><span className="text-[#64748B]">Additional seats</span><span className="font-semibold">{additionalSeats}</span></div><div className="flex justify-between text-[9px]"><span className="text-[#64748B]">Price per extra seat</span><span className="font-semibold">€9/mo</span></div></div><div className="mt-3 flex items-end justify-between"><div><div className="text-[8px] uppercase tracking-wider text-[#94A3B8]">Next invoice adjustment</div><div className="mt-1 text-[8px] text-[#94A3B8]">Recurring · VAT excluded</div></div><div className="font-display text-[18px] font-semibold">+€{monthlySeatCost}</div></div></div></section>

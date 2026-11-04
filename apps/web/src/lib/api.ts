@@ -1,8 +1,45 @@
-import type { Scheme, UserProfile } from '@planningpal/shared'
+import type { PortalDocument, Scheme, UserProfile } from '@planningpal/shared'
 import type { Activity, BoardCard, Conversation } from '../types'
 import { accessToken } from './auth-client'
 
 const base = import.meta.env.VITE_API_URL ?? ''
+
+const ACTIVE_WORKSPACE_KEY = 'planningpal_active_workspace_id'
+const PREVIEW_ROLE_KEY = 'planningpal_preview_role'
+
+export function getActiveWorkspaceId(): string {
+  try {
+    return localStorage.getItem(ACTIVE_WORKSPACE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setActiveWorkspaceId(workspaceId: string | null) {
+  try {
+    if (workspaceId) localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId)
+    else localStorage.removeItem(ACTIVE_WORKSPACE_KEY)
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function getPreviewRole(): string {
+  try {
+    return localStorage.getItem(PREVIEW_ROLE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function setPreviewRole(role: string | null) {
+  try {
+    if (role) localStorage.setItem(PREVIEW_ROLE_KEY, role)
+    else localStorage.removeItem(PREVIEW_ROLE_KEY)
+  } catch {
+    // ignore storage errors
+  }
+}
 
 function safeError(status: number, payload: { error?: string }) {
   if (status === 401) return 'Your session has expired. Sign in again.'
@@ -18,6 +55,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const token = await accessToken()
   if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
+  const activeWs = getActiveWorkspaceId()
+  if (activeWs && !headers.has('x-workspace-id')) headers.set('x-workspace-id', activeWs)
+  const previewRole = getPreviewRole()
+  if (previewRole && !headers.has('x-preview-role')) headers.set('x-preview-role', previewRole)
   let response: Response
   try {
     response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
@@ -82,16 +123,42 @@ export type Domain = { id: string; name: string; inboxes: number; health: string
 
 export type SessionProfile = UserProfile & {
   organisationId: string | null
-  orgRole: 'owner' | 'admin' | 'member' | 'viewer' | null
+  orgRole: string | null
   orgRoleLabel: string
   platformRole: 'super_admin' | null
   permissions: string[]
 }
 
+export type DossierContact = {
+  id: string
+  role: string
+  firmName: string
+  contactName: string
+  email: string
+  phone: string
+  rawAddress: string
+  confidenceLevel: string
+}
+
+export type LeadDossierResponse = {
+  scheme: Scheme
+  summary?: {
+    heading: string
+    council: string
+    value: string
+    status: string
+    populatedColumns: number
+    columnCount: number
+  }
+  contacts?: DossierContact[]
+  documents?: PortalDocument[]
+  activities?: Activity[]
+}
+
 export const api = {
   leads: () => request<{ data: Scheme[]; total: number }>('/api/v1/planning/leads?limit=1000'),
   leadDossier: (id: string, refresh = false) =>
-    request<{ scheme: Scheme }>(`/api/v1/planning/leads/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`),
+    request<LeadDossierResponse>(`/api/v1/planning/leads/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`),
   lpas: () => request<{ regions: { region: string; councils: { name: string; gssCode: string; coverage: string }[] }[] }>('/api/v1/lpas'),
   lpaHealth: () => request<LpaHealth>('/api/v1/lpas/health'),
   workspaceLeads: () => request<{ data: Scheme[] }>('/api/v1/workspace-leads'),
@@ -110,14 +177,32 @@ export const api = {
     })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    link.download = `aec-pipeline-schemes-${new Date().toISOString().slice(0, 10)}.csv`
+    link.download = `planningpal-schemes-${new Date().toISOString().slice(0, 10)}.csv`
     link.click()
     URL.revokeObjectURL(link.href)
   },
   me: () => request<SessionProfile>('/api/v1/me'),
   providers: () => request<{ email: boolean; magicLink: boolean; google: boolean; microsoft: boolean }>('/api/v1/auth/providers'),
-  invitation: (token: string) => request<{ email: string; role: string; organisation: string; expired: boolean }>(`/api/v1/team/invites/${token}`),
+  invitation: (token: string) =>
+    request<{ email: string; name?: string; firstName?: string; lastName?: string; role: string; organisation: string; expired: boolean }>(
+      `/api/v1/team/invites/${token}`,
+    ),
   updateMe: (profile: UserProfile) => request<UserProfile>('/api/v1/me', { method: 'PATCH', body: JSON.stringify(profile) }),
+  setupTwoFactor: () =>
+    request<{ secret: string; otpauthUrl: string; currentCodeHint?: string }>('/api/v1/me/2fa', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'setup' }),
+    }),
+  verifyTwoFactor: (code: string) =>
+    request<{ twoFactorEnabled: boolean; backupCodes: string[] }>('/api/v1/me/2fa', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'verify', code }),
+    }),
+  disableTwoFactor: () =>
+    request<{ twoFactorEnabled: boolean }>('/api/v1/me/2fa', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'disable' }),
+    }),
   overview: () => request<Overview>('/api/v1/overview'),
   reports: () => request<NonNullable<Overview['metrics']['reports']>>('/api/v1/reports'),
   delivery: () => request<Record<string, unknown>>('/api/v1/delivery'),
@@ -149,14 +234,24 @@ export const api = {
   saveWorkspace: (body: { territories?: string[]; trades?: string[]; radius?: number; signalAlerts?: boolean }) =>
     request('/api/v1/workspace', { method: 'PATCH', body: JSON.stringify(body) }),
   team: () => request<{ members: { id: string; name: string; email: string; role: string; status: string }[]; customRoles: { id: string; name: string; permissions: string[] }[] }>('/api/v1/team'),
-  invite: (email: string, role: string) =>
+  invite: (email: string, role: string, name?: string) =>
     request<{ id: string; name: string; email: string; role: string; status: string; inviteUrl: string }>('/api/v1/team/invites', {
       method: 'POST',
-      body: JSON.stringify({ email, role }),
+      body: JSON.stringify({ email, role, ...(name ? { name } : {}) }),
     }),
   updateMember: (id: string, role: string) => request(`/api/v1/team/${id}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   removeMember: (id: string) => request(`/api/v1/team/${id}`, { method: 'DELETE' }),
-  createRole: (name: string, permissions: string[]) => request('/api/v1/roles', { method: 'POST', body: JSON.stringify({ name, permissions }) }),
+  createRole: (name: string, permissions: string[]) =>
+    request<{ id: string; name: string; permissions: string[] }>('/api/v1/roles', {
+      method: 'POST',
+      body: JSON.stringify({ name, permissions }),
+    }),
+  updateRole: (id: string, body: { name?: string; permissions?: string[] }) =>
+    request<{ id: string; name: string; permissions: string[] }>(`/api/v1/roles/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteRole: (id: string) => request<{ id: string; deleted: boolean }>(`/api/v1/roles/${id}`, { method: 'DELETE' }),
   persona: () => request<{ stakeholder: string; angle: string; proofPoints: string[] }>('/api/v1/persona'),
   savePersona: (body: { stakeholder: string; angle: string; proofPoints?: string[] }) => request('/api/v1/persona', { method: 'PUT', body: JSON.stringify(body) }),
   bookDemo: (body: { name: string; email: string; company: string; trade: string; note: string }) =>
@@ -175,6 +270,17 @@ export const api = {
   onboarding: () => request<OnboardingState>('/api/v1/onboarding'),
   saveOnboarding: (body: Record<string, unknown>) => request<OnboardingState>('/api/v1/onboarding', { method: 'PUT', body: JSON.stringify(body) }),
   onboardingClients: () => request<{ data: ClientOnboarding[] }>('/api/v1/onboarding/clients'),
+  createOnboardingClient: (body: {
+    firstName: string
+    lastName?: string
+    email: string
+    companyName: string
+    coverage?: 'ALL_UK' | 'CATEGORY_3'
+  }) =>
+    request<ClientOnboarding & { customerName: string; inviteToken: string }>('/api/v1/onboarding/clients', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   downloadRunCsv: async (id: string) => {
     const csv = await request<string>(`/api/v1/ingest/runs/${id}/csv`)
     const link = document.createElement('a')
@@ -214,6 +320,11 @@ export type OnboardingState = {
     companyName: string
     logoUrl: string
     name: string
+    firstName: string
+    lastName: string
+    email: string
+    phone: string
+    secondaryEmail: string
     jobTitle: string
     coverage: string
     regions: string[]
@@ -223,6 +334,7 @@ export type OnboardingState = {
     ribaStages: string[]
     alertsEnabled: boolean
     frequency: string
+    teamInvites?: { name: string; email: string; role: string; status: string }[]
   }
   checklistDismissed: boolean
   checklist: { id: string; label: string; done: boolean; skipped: boolean }[]
@@ -231,6 +343,8 @@ export type OnboardingState = {
 export type ClientOnboarding = {
   id: string
   name: string
+  ownerName?: string
+  inviteUrl?: string
   coverage: string
   planName: string
   step: string

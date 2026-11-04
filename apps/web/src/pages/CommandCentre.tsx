@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Scheme, UserProfile } from '@planningpal/shared'
+import type { PortalDocument, Scheme, UserProfile } from '@planningpal/shared'
 import { EmptyState, LoadingBlock, SampleBars } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { LeadFetchProgress, LeadWindowPicker } from '../components/LeadFetchPanel'
@@ -7,7 +7,7 @@ import { ToastHost } from '../components/ToastHost'
 import { exportSchemes, notify } from '../lib/notify'
 import { supabase } from '../lib/auth-client'
 import { ClientOnboardingList, GettingStarted } from '../components/GettingStarted'
-import { api, type ClientOnboarding, type LeadFetch, type OnboardingState, type Overview } from '../lib/api'
+import { api, getActiveWorkspaceId, getPreviewRole, setActiveWorkspaceId, setPreviewRole, type ClientOnboarding, type DossierContact, type LeadFetch, type OnboardingState, type Overview } from '../lib/api'
 import type { CrmTab, ReportsTab, SetupTab } from '../types'
 import { StatusScreen } from '../components/StatusScreen'
 import { WorkspaceView } from './WorkspaceView'
@@ -20,8 +20,6 @@ const nav = [
   { label: 'CRM & intent', icon: 'signal' as const },
   { label: 'Reports & delivery', icon: 'chart' as const },
   { label: 'Workspace setup', icon: 'settings' as const },
-  { label: 'Ingestion', icon: 'download' as const },
-  { label: 'Campaign provider', icon: 'briefcase' as const },
 ]
 
 function CountUp({ value, text }: { value: number; text: string }) {
@@ -82,6 +80,12 @@ export function CommandCentre() {
   const [freshIds, setFreshIds] = useState<string[]>([])
   const seenLeads = useRef(new Set<string>())
   const [sessionReady, setSessionReady] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  const [activeWorkspaceId, setActiveWsId] = useState(getActiveWorkspaceId)
+  const [previewRole, setPrvRole] = useState(getPreviewRole)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const [dossierContacts, setDossierContacts] = useState<DossierContact[]>([])
+  const [dossierDocs, setDossierDocs] = useState<PortalDocument[]>([])
   const can = (permission: string) => permissions.includes(permission)
 
   const applySchemeUpdate = (updated: Scheme) => {
@@ -96,6 +100,8 @@ export function CommandCentre() {
       const res = await api.leadDossier(scheme.id, force)
       if (res?.scheme) {
         applySchemeUpdate(res.scheme)
+        if (res.contacts) setDossierContacts(res.contacts)
+        if (res.documents) setDossierDocs(res.documents)
         if (force) {
           notify(
             res.scheme.phone || res.scheme.email
@@ -112,7 +118,11 @@ export function CommandCentre() {
   }
 
   useEffect(() => {
-    if (!selected?.id) return
+    if (!selected?.id) {
+      setDossierContacts([])
+      setDossierDocs([])
+      return
+    }
     void refreshFromSource(selected, false)
   }, [selected?.id])
 
@@ -140,6 +150,7 @@ export function CommandCentre() {
         setProfile(me)
         setPermissions(me.permissions)
         setOrgRole(me.orgRole)
+        setIsSuperAdmin(me.platformRole === 'super_admin')
         const flow = await api.onboarding()
         if (flow.step !== 'done') {
           window.location.assign('/onboarding')
@@ -148,7 +159,14 @@ export function CommandCentre() {
         if (!flow.checklistDismissed) setChecklist(flow.checklist)
         if (me.platformRole === 'super_admin') {
           const listed = await api.onboardingClients().catch(() => ({ data: [] as ClientOnboarding[] }))
-          if (!cancelled) setClients(listed.data)
+          if (!cancelled) {
+            setClients(listed.data)
+            if (!activeWorkspaceId && listed.data.length > 0) {
+              const firstId = listed.data[0]!.id
+              setActiveWorkspaceId(firstId)
+              setActiveWsId(firstId)
+            }
+          }
         }
         const [leads, savedIds, overview, workspace, fetchState] = await Promise.all([
           api.leads(),
@@ -350,6 +368,67 @@ export function CommandCentre() {
       </aside>
 
       <main className="min-h-screen lg:pl-[248px]">
+        {/* Super Admin Client View Bar */}
+        {(isSuperAdmin || previewRole) && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#BFDBFE] bg-[#EFF6FF] px-4 py-2.5 text-xs text-[#1E3A8A] sm:px-7 lg:px-9">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-bold tracking-wide uppercase text-[10px] bg-[#2563EB] text-white px-2 py-0.5 rounded">
+                Super Admin Preview
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[#64748B]">Viewing Client:</span>
+                <select
+                  value={activeWorkspaceId}
+                  onChange={(e) => {
+                    const nextId = e.target.value
+                    setActiveWorkspaceId(nextId || null)
+                    setActiveWsId(nextId)
+                    window.location.reload()
+                  }}
+                  className="rounded-md border border-[#BFDBFE] bg-white px-2 py-1 text-xs font-semibold text-[#1E3A8A] outline-none"
+                >
+                  {clients && clients.length > 0 ? (
+                    clients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.planName})
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Default Workspace</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[#64748B]">View as Role:</span>
+                <select
+                  value={previewRole || ''}
+                  onChange={(e) => {
+                    const nextRole = e.target.value
+                    setPreviewRole(nextRole || null)
+                    setPrvRole(nextRole)
+                    window.location.reload()
+                  }}
+                  className="rounded-md border border-[#BFDBFE] bg-white px-2 py-1 text-xs font-semibold text-[#1E3A8A] outline-none"
+                >
+                  <option value="">Super Admin (Full Access)</option>
+                  <option value="owner">Owner</option>
+                  <option value="admin">Admin</option>
+                  <option value="member">Member</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
+            </div>
+
+            <a
+              href="/app/admin"
+              className="flex items-center gap-1 rounded-md bg-[#172554] px-3 py-1 text-[11px] font-semibold text-white hover:bg-[#1E3A8A]"
+            >
+              ← Back to Super Admin Console
+            </a>
+          </div>
+        )}
+
         <header className="sticky top-0 z-30 flex h-[78px] items-center justify-between border-b border-[#DCE4F0] bg-[#F4F7FB]/95 px-4 backdrop-blur-md sm:px-7 lg:px-9">
           <div className="flex items-center gap-3">
             <button className="grid h-9 w-9 place-items-center rounded-lg border border-[#D8DDD5] lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Icon name="menu" /></button>
@@ -406,9 +485,14 @@ export function CommandCentre() {
                 <button disabled={!can('campaigns.write')} onClick={() => setCampaignCreateSignal((signal) => signal + 1)} className="rounded-md px-3 py-2 text-[10px] font-semibold text-[#2563EB] transition hover:bg-[#DBEAFE] disabled:cursor-not-allowed disabled:opacity-40">+ New campaign</button>
               </nav>
             )}
-            {active === 'Overview' && <button onClick={() => { setActive('CRM & intent'); notify('Showing your priority CRM actions') }} className="relative grid h-9 w-9 place-items-center rounded-lg border border-[#D8DDD5] bg-white text-[#52605F] hover:border-[#AEB8B3]">
-              <Icon name="bell" size={16} /><span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#E96345] ring-2 ring-white" />
-            </button>}
+            <button
+              onClick={() => setNotificationOpen((open) => !open)}
+              className="relative grid h-9 w-9 place-items-center rounded-lg border border-[#D8DDD5] bg-white text-[#52605F] hover:border-[#AEB8B3]"
+              aria-label="Toggle notifications"
+            >
+              <Icon name="bell" size={16} />
+              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#E96345] ring-2 ring-white" />
+            </button>
             {active === 'Overview' && (
               <button disabled={!can('leads.export')} onClick={() => exportSchemes(filteredData)} className="hidden items-center gap-2 rounded-lg bg-[#172554] px-4 py-2.5 text-[11px] font-semibold text-white shadow-sm hover:bg-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-40 sm:flex">
                 <Icon name="download" size={14} /> Export leads
@@ -592,6 +676,41 @@ export function CommandCentre() {
       {pickerOpen && <LeadWindowPicker busy={fetchBusy} onClose={() => setPickerOpen(false)} onConfirm={(days) => { void beginFetch(days) }} />}
       {mobileNav && <button className="fixed inset-0 z-30 bg-[#0F172A]/50 lg:hidden" onClick={() => setMobileNav(false)} aria-label="Close navigation overlay" />}
 
+      {/* Notifications Drawer */}
+      {notificationOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-[1px]" onMouseDown={() => setNotificationOpen(false)}>
+          <aside className="h-full w-full max-w-sm bg-white p-6 shadow-2xl overflow-y-auto" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-[#EEF2F7] pb-4">
+              <div className="flex items-center gap-2">
+                <Icon name="bell" size={16} />
+                <h3 className="font-bold text-sm text-[#172554]">Notifications & Signals</h3>
+              </div>
+              <button onClick={() => setNotificationOpen(false)} className="text-[#94A3B8] hover:text-[#64748B]">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {overview?.intent && overview.intent.length > 0 ? (
+                overview.intent.map((item, idx) => (
+                  <div key={idx} className="rounded-xl border border-[#EEF2F7] bg-[#F8FAFC] p-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#1E293B]">{item.name}</span>
+                      <span className="text-[10px] text-[#94A3B8]">{item.time}</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-[#64748B]">{item.action} — {item.detail}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="py-8 text-center text-xs text-[#94A3B8]">
+                  No new unread signals or intent notifications.
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+
       {selected && (
         <div className="fixed inset-0 z-50 flex justify-end bg-[#0F172A]/55 backdrop-blur-[2px]" onMouseDown={() => setSelected(null)}>
           <aside className="h-full w-full max-w-[540px] overflow-y-auto bg-[#F7F9FC] shadow-2xl animate-slide-in" onMouseDown={(e) => e.stopPropagation()}>
@@ -635,33 +754,123 @@ export function CommandCentre() {
 
               <section className="mt-7">
                 <div className="flex items-center justify-between">
-                  <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6F7B78]">Architect / planning agent</div>
-                  <span className={`flex items-center gap-1 text-[8px] font-bold ${selected.email || selected.phone ? 'text-[#43815A]' : 'text-[#A16207]'}`}><span className={`h-1.5 w-1.5 rounded-full ${selected.email || selected.phone ? 'bg-[#5FA871]' : 'bg-[#FACC15]'}`} /> {selected.email && selected.phone ? 'DIRECT CONTACT' : selected.email || selected.phone ? 'PARTIAL CONTACT' : 'NOT PUBLISHED'}</span>
+                  <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6F7B78]">Key decision makers & contacts</div>
+                  <span className={`flex items-center gap-1 text-[8px] font-bold ${selected.email || selected.phone ? 'text-[#43815A]' : 'text-[#A16207]'}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${selected.email || selected.phone ? 'bg-[#5FA871]' : 'bg-[#FACC15]'}`} />
+                    {selected.email && selected.phone ? 'DIRECT CONTACT' : selected.email || selected.phone ? 'PARTIAL CONTACT' : 'NOT PUBLISHED'}
+                  </span>
                 </div>
-                <div className="mt-3 rounded-xl border border-[#DCE4F0] bg-white p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-10 w-10 place-items-center rounded-full bg-[#BDD8FF] text-[10px] font-bold">{selected.architect.split(' ').map((name) => name[0]).join('')}</div>
-                    <div className="flex-1">
-                      <div className="font-display text-[13px] font-semibold">{selected.architect}</div>
-                      <div className="mt-1 text-[9px] text-[#7A8583]">Director · {selected.practice}</div>
+
+                {dossierContacts.length > 0 ? (
+                  <div className="mt-3 space-y-2">
+                    {dossierContacts.map((c) => (
+                      <div key={c.id} className="rounded-xl border border-[#DCE4F0] bg-white p-3.5">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-[12px] text-[#1E293B]">{c.contactName || c.firmName}</span>
+                              <span className="rounded-full bg-[#EFF6FF] px-2 py-0.5 text-[8px] font-bold text-[#2563EB] uppercase">
+                                {c.role}
+                              </span>
+                            </div>
+                            {c.contactName && c.firmName && c.firmName !== c.contactName && (
+                              <div className="text-[10px] text-[#64748B] mt-0.5">{c.firmName}</div>
+                            )}
+                          </div>
+                          <span className={`rounded-full px-2 py-0.5 text-[8px] font-semibold ${
+                            c.confidenceLevel === 'HIGH' ? 'bg-[#DCFCE7] text-[#15803D]' : 'bg-[#FEF3C7] text-[#B45309]'
+                          }`}>
+                            {c.confidenceLevel} CONFIDENCE
+                          </span>
+                        </div>
+
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2 text-[9px]">
+                          {c.email ? (
+                            <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 rounded-lg bg-[#F0F4FA] px-2.5 py-1.5 text-[#52627A]">
+                              <Icon name="mail" size={11} /><span className="truncate">{c.email}</span>
+                            </a>
+                          ) : <span className="text-[#94A3B8] italic py-1">Email not published</span>}
+                          {c.phone ? (
+                            <a href={`tel:${c.phone}`} className="flex items-center gap-1.5 rounded-lg bg-[#F0F4FA] px-2.5 py-1.5 text-[#52627A]">
+                              <Icon name="phone" size={11} /><span>{c.phone}</span>
+                            </a>
+                          ) : <span className="text-[#94A3B8] italic py-1">Phone not published</span>}
+                        </div>
+                        {c.rawAddress && (
+                          <div className="mt-2 border-t border-[#EEF2F7] pt-2 text-[8px] text-[#64748B]">{c.rawAddress}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-xl border border-[#DCE4F0] bg-white p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="grid h-10 w-10 place-items-center rounded-full bg-[#BDD8FF] text-[10px] font-bold">
+                        {selected.architect.split(' ').map((name) => name[0]).join('')}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-display text-[13px] font-semibold">{selected.architect}</div>
+                        <div className="mt-1 text-[9px] text-[#7A8583]">Director · {selected.practice}</div>
+                      </div>
                     </div>
-                    <button className="grid h-8 w-8 place-items-center rounded-lg border border-[#DCE1DA] text-[#687471]"><Icon name="external" size={13} /></button>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      <a href={selected.email ? `mailto:${selected.email}` : undefined} className="flex items-center gap-2 rounded-lg bg-[#F0F4FA] px-3 py-2.5 text-[9px] text-[#52627A]">
+                        <Icon name="mail" size={12} /><span className="truncate">{selected.email || 'Email not published'}</span>
+                      </a>
+                      <a href={selected.phone ? `tel:${selected.phone}` : undefined} className="flex items-center gap-2 rounded-lg bg-[#F0F4FA] px-3 py-2.5 text-[9px] text-[#52627A]">
+                        <Icon name="phone" size={12} />{selected.phone || 'Phone not published'}
+                      </a>
+                    </div>
                   </div>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    <a href={selected.email ? `mailto:${selected.email}` : undefined} className="flex items-center gap-2 rounded-lg bg-[#F0F4FA] px-3 py-2.5 text-[9px] text-[#52627A]"><Icon name="mail" size={12} /><span className="truncate">{selected.email || 'Email not published'}</span></a>
-                    <a href={selected.phone ? `tel:${selected.phone}` : undefined} className="flex items-center gap-2 rounded-lg bg-[#F0F4FA] px-3 py-2.5 text-[9px] text-[#52627A]"><Icon name="phone" size={12} />{selected.phone || 'Phone not published'}</a>
-                  </div>
-                  <div className="mt-3 border-t border-[#EEF2F7] pt-3 text-[9px] leading-relaxed text-[#718096]">{selected.architectAddress || 'Agent address not published in source record'}</div>
-                  {selected.portalUrl && (
-                    <button
-                      type="button"
-                      disabled={scrapingSource}
-                      onClick={() => { void refreshFromSource(selected, true) }}
-                      className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] px-3 py-2 text-[9px] font-semibold text-[#1E3A8A] hover:bg-[#EFF6FF] disabled:opacity-50"
-                    >
-                      <Icon name="download" size={11} />
-                      {scrapingSource ? 'Scanning council portal & Application Form PDF…' : 'Extract agent details from source URL & Application Form'}
-                    </button>
+                )}
+
+                {selected.portalUrl && (
+                  <button
+                    type="button"
+                    disabled={scrapingSource}
+                    onClick={() => { void refreshFromSource(selected, true) }}
+                    className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#DCE4F0] bg-[#F8FAFC] px-3 py-2 text-[9px] font-semibold text-[#1E3A8A] hover:bg-[#EFF6FF] disabled:opacity-50"
+                  >
+                    <Icon name="download" size={11} />
+                    {scrapingSource ? 'Scanning council portal & Application Form PDF…' : 'Re-extract from council portal & Application Form PDF'}
+                  </button>
+                )}
+              </section>
+
+              {/* Planning Documents Section */}
+              <section className="mt-7">
+                <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6F7B78]">Planning documents & PDFs</div>
+                <div className="mt-3 space-y-2">
+                  {dossierDocs.length > 0 ? (
+                    dossierDocs.map((doc, idx) => (
+                      <div key={idx} className="flex items-center justify-between rounded-xl border border-[#DCE4F0] bg-white p-3 text-[10px]">
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          <span className="grid h-7 w-7 shrink-0 place-items-center rounded bg-[#EFF6FF] text-[#2563EB]">
+                            <Icon name="building" size={12} />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-[#1E293B]">{doc.title}</div>
+                            {doc.publishedOn && <div className="text-[8px] text-[#94A3B8]">Published: {doc.publishedOn}</div>}
+                          </div>
+                        </div>
+                        <a
+                          href={doc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="shrink-0 rounded-lg bg-[#EFF6FF] px-2.5 py-1 text-[9px] font-semibold text-[#2563EB] hover:bg-[#DBEAFE]"
+                        >
+                          View PDF
+                        </a>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-[#DCE4F0] bg-white p-3 text-center text-xs text-[#64748B]">
+                      {selected.portalUrl ? (
+                        <a href={selected.portalUrl} target="_blank" rel="noreferrer" className="text-[#2563EB] font-semibold flex items-center justify-center gap-1">
+                          View Documents on Council Portal <Icon name="external" size={11} />
+                        </a>
+                      ) : 'No documents recorded'}
+                    </div>
                   )}
                 </div>
               </section>

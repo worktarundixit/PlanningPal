@@ -23,16 +23,27 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
     .limit(1)
 
   if (invite && invite.expiresAt.getTime() > Date.now()) {
+    const [existingSeat] = await db
+      .select()
+      .from(teamMembers)
+      .where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, email)))
+      .limit(1)
+    const resolvedName = created.name?.trim() || existingSeat?.name || email
+    const parts = resolvedName.includes('@') ? [] : resolvedName.split(/\s+/)
+    const firstName = parts[0] ?? ''
+    const lastName = parts.slice(1).join(' ')
+    const parsedRole = parseOrgRole(invite.role) ?? 'member'
     const [member] = await db
       .insert(users)
       .values({
         organisationId: invite.organisationId,
         authUserId: created.id,
         email,
-        name: created.name || email,
-        jobTitle: '',
-        orgRole: parseOrgRole(invite.role) ?? 'member',
+        name: resolvedName,
+        jobTitle: parsedRole === 'owner' ? 'Account owner' : 'Team member',
+        orgRole: parsedRole,
         apiToken: randomBytes(24).toString('hex'),
+        emailPreferences: { firstName, lastName, phone: '', secondaryEmail: '' },
         onboardingStep: 'profile',
         onboardingSkipped: ['workspace'],
         checklistDismissed: false,
@@ -43,7 +54,7 @@ export async function provisionDomainUser(created: CreatedAuthUser) {
     await db.update(invitations).set({ acceptedAt: new Date() }).where(eq(invitations.id, invite.id))
     await db
       .update(teamMembers)
-      .set({ userId: member?.id, status: 'Active', name: created.name || email, role: invite.role })
+      .set({ userId: member?.id, status: 'Active', name: resolvedName, role: invite.role })
       .where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, email)))
     return member?.id
   }

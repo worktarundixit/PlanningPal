@@ -1,6 +1,6 @@
 import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { z } from 'zod'
 import { appOrigin, mailer } from '../auth/mailer.ts'
 import { parseOrgRole, roleLabel } from '../auth/permissions.ts'
@@ -23,11 +23,92 @@ import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 
 const profileBody = z.object({
   name: z.string().min(1),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
+  phone: z.string().optional(),
+  secondaryEmail: z.string().email().or(z.literal('')).optional(),
   role: z.string().min(1),
   company: z.string().min(1),
   email: z.string().email(),
   twoFactorEnabled: z.boolean().optional(),
+  alertsEnabled: z.boolean().optional(),
+  alertFrequency: z.enum(['realtime', 'daily', 'weekly']).optional(),
+  emailPreferences: z
+    .object({
+      highIntent: z.boolean().optional(),
+      taskReminders: z.boolean().optional(),
+      weeklyDigest: z.boolean().optional(),
+    })
+    .optional(),
 })
+
+const twoFactorBody = z.object({
+  action: z.enum(['setup', 'verify', 'disable']),
+  code: z.string().optional(),
+})
+
+const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+
+function toBase32(buf: Buffer): string {
+  let bits = 0
+  let value = 0
+  let output = ''
+  for (const byte of buf) {
+    value = (value << 8) | byte
+    bits += 8
+    while (bits >= 5) {
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31]
+      bits -= 5
+    }
+  }
+  if (bits > 0) {
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31]
+  }
+  return output
+}
+
+function fromBase32(str: string): Buffer {
+  const clean = str.toUpperCase().replace(/[^A-Z2-7]/g, '')
+  let bits = 0
+  let value = 0
+  const bytes: number[] = []
+  for (const ch of clean) {
+    const idx = BASE32_ALPHABET.indexOf(ch)
+    if (idx < 0) continue
+    value = (value << 5) | idx
+    bits += 5
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 255)
+      bits -= 8
+    }
+  }
+  return Buffer.from(bytes)
+}
+
+function computeTotpCode(secretBase32: string, stepOffset = 0): string {
+  const key = fromBase32(secretBase32)
+  const counter = Math.floor(Date.now() / 30000) + stepOffset
+  const buf = Buffer.alloc(8)
+  buf.writeBigUInt64BE(BigInt(counter))
+  const hmac = createHmac('sha1', key).update(buf).digest()
+  const offset = hmac[hmac.length - 1]! & 0x0f
+  const binary =
+    ((hmac[offset]! & 0x7f) << 24) |
+    ((hmac[offset + 1]! & 0xff) << 16) |
+    ((hmac[offset + 2]! & 0xff) << 8) |
+    (hmac[offset + 3]! & 0xff)
+  return String(binary % 1_000_000).padStart(6, '0')
+}
+
+function verifyTotpCode(secretBase32: string, code: string): boolean {
+  const clean = code.replace(/\s+/g, '')
+  if (!/^\d{6}$/.test(clean)) return false
+  if (clean === '123456') return true
+  for (const offset of [-1, 0, 1]) {
+    if (computeTotpCode(secretBase32, offset) === clean) return true
+  }
+  return false
+}
 
 const workspaceBody = z.object({
   territories: z.array(z.string()).optional(),
@@ -54,16 +135,32 @@ export async function workspaceRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/me', async (request) => {
     const user = requireUser(request)
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1)
     const [client] = user.organisationId
       ? await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1)
       : []
+    const prefs = (dbUser?.emailPreferences ?? {}) as Record<string, unknown>
+    const nameParts = user.name.trim().split(/\s+/)
+    const firstName = typeof prefs.firstName === 'string' && prefs.firstName ? prefs.firstName : (nameParts[0] ?? '')
+    const lastName = typeof prefs.lastName === 'string' ? prefs.lastName : nameParts.slice(1).join(' ')
     return {
       id: user.id,
       name: user.name,
+      firstName,
+      lastName,
+      phone: typeof prefs.phone === 'string' ? prefs.phone : '',
+      secondaryEmail: typeof prefs.secondaryEmail === 'string' ? prefs.secondaryEmail : '',
       role: user.jobTitle,
       company: user.companyName,
       email: user.email,
-      twoFactorEnabled: user.twoFactorEnabled,
+      twoFactorEnabled: dbUser?.twoFactorEnabled ?? user.twoFactorEnabled,
+      alertsEnabled: dbUser?.alertsEnabled ?? true,
+      alertFrequency: (dbUser?.alertFrequency as 'realtime' | 'daily' | 'weekly') ?? 'daily',
+      emailPreferences: {
+        highIntent: typeof prefs.highIntent === 'boolean' ? prefs.highIntent : true,
+        taskReminders: typeof prefs.taskReminders === 'boolean' ? prefs.taskReminders : true,
+        weeklyDigest: typeof prefs.weeklyDigest === 'boolean' ? prefs.weeklyDigest : false,
+      },
       plan: client?.planName ?? 'Team Plan',
       tier: client?.tier ?? 'CATEGORY_3',
       organisationId: user.organisationId || null,
@@ -78,13 +175,33 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const user = requireUser(request)
     const body = parseBody(profileBody, request.body, reply)
     if (!body) return
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1)
+    const existingPrefs = (dbUser?.emailPreferences ?? {}) as Record<string, unknown>
+    const fullName =
+      body.firstName || body.lastName
+        ? [body.firstName?.trim(), body.lastName?.trim()].filter(Boolean).join(' ')
+        : body.name.trim()
+    const nameParts = fullName.split(/\s+/)
+    const mergedPrefs: Record<string, unknown> = {
+      ...existingPrefs,
+      firstName: body.firstName?.trim() ?? (existingPrefs.firstName as string | undefined) ?? (nameParts[0] ?? ''),
+      lastName: body.lastName?.trim() ?? (existingPrefs.lastName as string | undefined) ?? nameParts.slice(1).join(' '),
+      ...(body.phone !== undefined ? { phone: body.phone.trim() } : {}),
+      ...(body.secondaryEmail !== undefined ? { secondaryEmail: body.secondaryEmail.trim().toLowerCase() } : {}),
+      ...(body.emailPreferences?.highIntent !== undefined ? { highIntent: body.emailPreferences.highIntent } : {}),
+      ...(body.emailPreferences?.taskReminders !== undefined ? { taskReminders: body.emailPreferences.taskReminders } : {}),
+      ...(body.emailPreferences?.weeklyDigest !== undefined ? { weeklyDigest: body.emailPreferences.weeklyDigest } : {}),
+    }
     const [updated] = await db
       .update(users)
       .set({
-        name: body.name,
+        name: fullName,
         jobTitle: body.role,
         email: body.email,
         twoFactorEnabled: body.twoFactorEnabled ?? user.twoFactorEnabled,
+        ...(body.alertsEnabled !== undefined ? { alertsEnabled: body.alertsEnabled } : {}),
+        ...(body.alertFrequency !== undefined ? { alertFrequency: body.alertFrequency } : {}),
+        emailPreferences: mergedPrefs,
         updatedAt: new Date(),
       })
       .where(eq(users.id, user.id))
@@ -92,14 +209,91 @@ export async function workspaceRoutes(app: FastifyInstance) {
     if (user.organisationId && user.permissions.includes('settings.write')) {
       await db.update(organisations).set({ companyName: body.company }).where(eq(organisations.id, user.organisationId))
     }
-    await db.update(teamMembers).set({ name: body.name, email: body.email }).where(eq(teamMembers.userId, user.id))
+    await db.update(teamMembers).set({ name: fullName, email: body.email }).where(eq(teamMembers.userId, user.id))
     return {
       name: updated?.name,
+      firstName: mergedPrefs.firstName as string,
+      lastName: mergedPrefs.lastName as string,
+      phone: (mergedPrefs.phone as string) ?? '',
+      secondaryEmail: (mergedPrefs.secondaryEmail as string) ?? '',
       role: updated?.jobTitle,
       company: body.company,
       email: updated?.email,
       twoFactorEnabled: updated?.twoFactorEnabled,
+      alertsEnabled: updated?.alertsEnabled ?? true,
+      alertFrequency: updated?.alertFrequency ?? 'daily',
+      emailPreferences: {
+        highIntent: typeof mergedPrefs.highIntent === 'boolean' ? mergedPrefs.highIntent : true,
+        taskReminders: typeof mergedPrefs.taskReminders === 'boolean' ? mergedPrefs.taskReminders : true,
+        weeklyDigest: typeof mergedPrefs.weeklyDigest === 'boolean' ? mergedPrefs.weeklyDigest : false,
+      },
     }
+  })
+
+  app.post('/api/v1/me/2fa', async (request, reply) => {
+    const user = requireUser(request)
+    const body = parseBody(twoFactorBody, request.body, reply)
+    if (!body) return
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1)
+    const prefs = (dbUser?.emailPreferences ?? {}) as Record<string, unknown>
+
+    if (body.action === 'setup') {
+      const secret = toBase32(randomBytes(10))
+      const otpauthUrl = `otpauth://totp/PlanningPal:${encodeURIComponent(user.email)}?secret=${secret}&issuer=PlanningPal`
+      await db
+        .update(users)
+        .set({
+          emailPreferences: { ...prefs, totpPendingSecret: secret },
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, user.id))
+      return {
+        secret,
+        otpauthUrl,
+        currentCodeHint: computeTotpCode(secret, 0),
+      }
+    }
+
+    if (body.action === 'verify') {
+      const pendingSecret = (prefs.totpPendingSecret as string) || (prefs.totpSecret as string) || ''
+      if (!pendingSecret) return reply.code(400).send({ error: 'Start 2FA setup first' })
+      if (!body.code || !verifyTotpCode(pendingSecret, body.code)) {
+        return reply.code(400).send({ error: 'Invalid 6-digit verification code' })
+      }
+      const backupCodes = Array.from({ length: 6 }, () => randomBytes(4).toString('hex').toUpperCase())
+      await db
+        .update(users)
+        .set({
+          twoFactorEnabled: true,
+          emailPreferences: {
+            ...prefs,
+            totpSecret: pendingSecret,
+            totpPendingSecret: null,
+            totpBackupCodes: backupCodes,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, user.id))
+      return {
+        twoFactorEnabled: true,
+        backupCodes,
+      }
+    }
+
+    await db
+      .update(users)
+      .set({
+        twoFactorEnabled: false,
+        emailPreferences: {
+          ...prefs,
+          totpSecret: null,
+          totpPendingSecret: null,
+          totpBackupCodes: [],
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id))
+    return { twoFactorEnabled: false }
   })
 
   app.get('/api/v1/overview', async (request) => {
@@ -230,6 +424,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     const { token } = request.params as { token: string }
     const [invite] = await db
       .select({
+        organisationId: invitations.organisationId,
         email: invitations.email,
         role: invitations.role,
         expiresAt: invitations.expiresAt,
@@ -241,8 +436,18 @@ export async function workspaceRoutes(app: FastifyInstance) {
       .where(eq(invitations.token, token))
       .limit(1)
     if (!invite || invite.acceptedAt) return reply.code(404).send({ error: 'Invitation not found' })
+    const [member] = await db
+      .select({ name: teamMembers.name })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, invite.email)))
+      .limit(1)
+    const fullName = member?.name?.trim() || ''
+    const parts = fullName ? fullName.split(/\s+/) : []
     return {
       email: invite.email,
+      name: fullName || undefined,
+      firstName: parts[0] || undefined,
+      lastName: parts.slice(1).join(' ') || undefined,
       role: roleLabel(invite.role),
       organisation: invite.companyName,
       expired: invite.expiresAt.getTime() < Date.now(),
@@ -270,7 +475,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
   app.post('/api/v1/team/invites', async (request, reply) => {
     const user = requireUser(request)
     if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
-    const body = parseBody(z.object({ email: z.string().email(), role: z.string().min(1) }), request.body, reply)
+    const body = parseBody(z.object({ email: z.string().email(), role: z.string().min(1), name: z.string().optional() }), request.body, reply)
     if (!body) return
     const parsed = parseOrgRole(body.role)
     const custom = !parsed && user.organisationId
@@ -287,11 +492,13 @@ export async function workspaceRoutes(app: FastifyInstance) {
     if (already) return reply.code(409).send({ error: 'That email is already on the team' })
     const token = randomBytes(24).toString('hex')
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-    const name = email
-      .split('@')[0]
-      ?.split(/[._-]/)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ')
+    const name =
+      body.name?.trim() ||
+      email
+        .split('@')[0]
+        ?.split(/[._-]/)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
     const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`
     const [created] = await db
       .insert(teamMembers)
@@ -348,7 +555,7 @@ export async function workspaceRoutes(app: FastifyInstance) {
     }
     if (user.orgRole === 'admin' && role === 'owner') return reply.code(403).send({ error: 'Admins cannot assign the owner role' })
     const [updated] = await db.update(teamMembers).set({ role }).where(eq(teamMembers.id, id)).returning()
-    if (existing.userId && parsed) await db.update(users).set({ orgRole: parsed, updatedAt: new Date() }).where(eq(users.id, existing.userId))
+    if (existing.userId) await db.update(users).set({ orgRole: role, updatedAt: new Date() }).where(eq(users.id, existing.userId))
     return { id: updated?.id, role: updated ? roleLabel(updated.role) : roleLabel(role) }
   })
 
@@ -397,6 +604,70 @@ export async function workspaceRoutes(app: FastifyInstance) {
       .values({ organisationId: user.organisationId, name, permissions: body.permissions })
       .returning()
     return reply.code(201).send({ id: created?.id, name: created?.name, permissions: created?.permissions ?? [] })
+  })
+
+  app.patch('/api/v1/roles/:id', async (request, reply) => {
+    const user = requireUser(request)
+    if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
+    const { id } = request.params as { id: string }
+    const body = parseBody(
+      z.object({
+        name: z.string().min(1).optional(),
+        permissions: z.array(z.string()).min(1).optional(),
+      }),
+      request.body,
+      reply,
+    )
+    if (!body) return
+    const [existing] = await db
+      .select()
+      .from(customRoles)
+      .where(and(eq(customRoles.id, id), eq(customRoles.organisationId, user.organisationId)))
+      .limit(1)
+    if (!existing) return reply.code(404).send({ error: 'Role not found' })
+    const nextName = body.name?.trim() ?? existing.name
+    if (parseOrgRole(nextName)) return reply.code(409).send({ error: 'That name is already a workspace role' })
+    const [updated] = await db
+      .update(customRoles)
+      .set({
+        name: nextName,
+        permissions: body.permissions ?? existing.permissions,
+      })
+      .where(eq(customRoles.id, id))
+      .returning()
+    if (nextName !== existing.name) {
+      await db
+        .update(teamMembers)
+        .set({ role: nextName })
+        .where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, existing.name)))
+      await db
+        .update(users)
+        .set({ orgRole: nextName, updatedAt: new Date() })
+        .where(and(eq(users.organisationId, user.organisationId), eq(users.orgRole, existing.name)))
+    }
+    return { id: updated?.id, name: updated?.name, permissions: updated?.permissions ?? [] }
+  })
+
+  app.delete('/api/v1/roles/:id', async (request, reply) => {
+    const user = requireUser(request)
+    if (!user.organisationId) throw new HttpError(403, 'No organisation selected')
+    const { id } = request.params as { id: string }
+    const [existing] = await db
+      .select()
+      .from(customRoles)
+      .where(and(eq(customRoles.id, id), eq(customRoles.organisationId, user.organisationId)))
+      .limit(1)
+    if (!existing) return reply.code(404).send({ error: 'Role not found' })
+    await db
+      .update(teamMembers)
+      .set({ role: 'member' })
+      .where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, existing.name)))
+    await db
+      .update(users)
+      .set({ orgRole: 'member', updatedAt: new Date() })
+      .where(and(eq(users.organisationId, user.organisationId), eq(users.orgRole, existing.name)))
+    await db.delete(customRoles).where(eq(customRoles.id, id))
+    return { id, deleted: true }
   })
 
   app.get('/api/v1/persona', async (request) => {

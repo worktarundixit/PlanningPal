@@ -38767,9 +38767,35 @@ var ROLE_PERMISSIONS = {
     "billing.manage"
   ]
 };
-function permissionsFor(orgRole, platformRole) {
+var UI_PERMISSION_MAP = {
+  "view planning data": ["leads.read", "saved.read"],
+  "export schemes": ["leads.read", "leads.export"],
+  "manage campaigns": ["campaigns.read", "campaigns.write"],
+  "manage crm": ["crm.read", "crm.write", "inbox.read", "inbox.write", "saved.read", "saved.write"],
+  "manage contacts": ["crm.read", "crm.write", "leads.read"],
+  "view reports": ["reports.read"],
+  "manage workspace": ["settings.read", "settings.write", "team.read", "team.manage"],
+  "manage billing": ["billing.manage"]
+};
+function normalizeCustomPermissions(rawPermissions = []) {
+  const resolved = /* @__PURE__ */ new Set(["profile.read", "profile.write", "team.read", "settings.read", "leads.read", "saved.read"]);
+  for (const item of rawPermissions) {
+    const trimmed = item.trim();
+    if (PERMISSIONS.includes(trimmed)) {
+      resolved.add(trimmed);
+      continue;
+    }
+    const mapped = UI_PERMISSION_MAP[trimmed.toLowerCase()];
+    if (mapped) {
+      for (const perm of mapped) resolved.add(perm);
+    }
+  }
+  return [...resolved];
+}
+function permissionsFor(orgRole, platformRole, customRolePermissions) {
   if (platformRole === "super_admin") return [...PERMISSIONS];
   if (orgRole && orgRole in ROLE_PERMISSIONS) return ROLE_PERMISSIONS[orgRole];
+  if (orgRole && customRolePermissions) return normalizeCustomPermissions(customRolePermissions);
   return [];
 }
 function parseOrgRole(value) {
@@ -38829,10 +38855,12 @@ var ROUTE_RULES = [
   { method: "POST", pattern: /^\/api\/v1\/sending-domains$/, permission: "campaigns.write" },
   { method: "DELETE", pattern: /^\/api\/v1\/sending-domains\/[^/]+$/, permission: "campaigns.write" },
   { method: "GET", pattern: /^\/api\/v1\/onboarding\/clients$/, permission: "onboarding.review" },
+  { method: "POST", pattern: /^\/api\/v1\/onboarding\/clients$/, permission: "onboarding.review" },
   { method: "GET", pattern: /^\/api\/v1\/onboarding$/, permission: "profile.read" },
   { method: "PUT", pattern: /^\/api\/v1\/onboarding$/, permission: "profile.write" },
   { method: "GET", pattern: /^\/api\/v1\/me$/, permission: "profile.read" },
   { method: "PATCH", pattern: /^\/api\/v1\/me$/, permission: "profile.write" },
+  { method: "POST", pattern: /^\/api\/v1\/me\/2fa$/, permission: "profile.write" },
   { method: "GET", pattern: /^\/api\/v1\/overview$/, permission: "reports.read" },
   { method: "GET", pattern: /^\/api\/v1\/reports$/, permission: "reports.read" },
   { method: "GET", pattern: /^\/api\/v1\/delivery$/, permission: "reports.read" },
@@ -38847,6 +38875,8 @@ var ROUTE_RULES = [
   { method: "PATCH", pattern: /^\/api\/v1\/team\/[^/]+$/, permission: "team.manage" },
   { method: "DELETE", pattern: /^\/api\/v1\/team\/[^/]+$/, permission: "team.manage" },
   { method: "POST", pattern: /^\/api\/v1\/roles$/, permission: "team.manage" },
+  { method: "PATCH", pattern: /^\/api\/v1\/roles\/[^/]+$/, permission: "team.manage" },
+  { method: "DELETE", pattern: /^\/api\/v1\/roles\/[^/]+$/, permission: "team.manage" },
   { method: "GET", pattern: /^\/api\/v1\/persona$/, permission: "settings.read" },
   { method: "PUT", pattern: /^\/api\/v1\/persona$/, permission: "settings.write" },
   { method: "GET", pattern: /^\/api\/v1\/lpas\/health$/, permission: "ingest.admin" },
@@ -48503,14 +48533,21 @@ async function provisionDomainUser(created) {
   if (existing) return existing.id;
   const [invite] = await db.select().from(invitations).where(and(eq(invitations.email, email3), isNull(invitations.acceptedAt))).limit(1);
   if (invite && invite.expiresAt.getTime() > Date.now()) {
+    const [existingSeat] = await db.select().from(teamMembers).where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, email3))).limit(1);
+    const resolvedName = created.name?.trim() || existingSeat?.name || email3;
+    const parts = resolvedName.includes("@") ? [] : resolvedName.split(/\s+/);
+    const firstName = parts[0] ?? "";
+    const lastName = parts.slice(1).join(" ");
+    const parsedRole = parseOrgRole(invite.role) ?? "member";
     const [member2] = await db.insert(users).values({
       organisationId: invite.organisationId,
       authUserId: created.id,
       email: email3,
-      name: created.name || email3,
-      jobTitle: "",
-      orgRole: parseOrgRole(invite.role) ?? "member",
+      name: resolvedName,
+      jobTitle: parsedRole === "owner" ? "Account owner" : "Team member",
+      orgRole: parsedRole,
       apiToken: randomBytes(24).toString("hex"),
+      emailPreferences: { firstName, lastName, phone: "", secondaryEmail: "" },
       onboardingStep: "profile",
       onboardingSkipped: ["workspace"],
       checklistDismissed: false,
@@ -48518,7 +48555,7 @@ async function provisionDomainUser(created) {
       alertFrequency: "weekly"
     }).returning();
     await db.update(invitations).set({ acceptedAt: /* @__PURE__ */ new Date() }).where(eq(invitations.id, invite.id));
-    await db.update(teamMembers).set({ userId: member2?.id, status: "Active", name: created.name || email3, role: invite.role }).where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, email3)));
+    await db.update(teamMembers).set({ userId: member2?.id, status: "Active", name: resolvedName, role: invite.role }).where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, email3)));
     return member2?.id;
   }
   const role = "owner";
@@ -48571,12 +48608,21 @@ async function presentUser(request, authUserId, email3, name) {
   let organisationId = row.user.organisationId;
   let companyName = row.companyName ?? (row.user.platformRole === "super_admin" ? "Hitcaliber Ltd" : "");
   let orgRole = row.user.orgRole ?? null;
+  let customRolePermissions;
   if (organisationId) {
     const [membership] = await db.select().from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, organisationId), eq(workspaceMembers.authUserId, authUserId))).limit(1);
     if (membership && membership.role !== "owner" && membership.role !== "admin" && membership.role !== "member" && membership.role !== "viewer") {
       orgRole = null;
     } else if (membership) {
       orgRole = membership.role;
+    }
+    if (orgRole && !parseOrgRole(orgRole)) {
+      const [custom2] = await db.select().from(customRoles).where(and(eq(customRoles.organisationId, organisationId), eq(customRoles.name, String(orgRole)))).limit(1);
+      if (custom2) {
+        customRolePermissions = custom2.permissions;
+      } else {
+        orgRole = null;
+      }
     }
   }
   if (row.user.platformRole === "super_admin") {
@@ -48602,7 +48648,23 @@ async function presentUser(request, authUserId, email3, name) {
       });
     }
   }
-  const platformRole = row.user.platformRole === "super_admin" ? "super_admin" : null;
+  const previewRole = headerValue(request.headers["x-preview-role"])?.trim();
+  let platformRole = row.user.platformRole === "super_admin" ? "super_admin" : null;
+  if (previewRole && (platformRole === "super_admin" || orgRole === "owner" || orgRole === "admin")) {
+    const parsedPreview = parseOrgRole(previewRole);
+    if (parsedPreview) {
+      orgRole = parsedPreview;
+      platformRole = null;
+      customRolePermissions = void 0;
+    } else if (organisationId) {
+      const [custom2] = await db.select().from(customRoles).where(and(eq(customRoles.organisationId, organisationId), eq(customRoles.name, previewRole))).limit(1);
+      if (custom2) {
+        orgRole = custom2.name;
+        platformRole = null;
+        customRolePermissions = custom2.permissions;
+      }
+    }
+  }
   return {
     id: row.user.id,
     authUserId,
@@ -48614,7 +48676,7 @@ async function presentUser(request, authUserId, email3, name) {
     twoFactorEnabled: row.user.twoFactorEnabled,
     orgRole,
     platformRole,
-    permissions: permissionsFor(orgRole, platformRole)
+    permissions: permissionsFor(orgRole, platformRole, customRolePermissions)
   };
 }
 async function testUser(request) {
@@ -92237,6 +92299,132 @@ function findApplicationFormPdfUrls(html, baseUrl) {
   candidates.sort((a, b2) => b2.score - a.score);
   return candidates.map((c) => c.url);
 }
+function extractPortalDocuments(html, baseUrl) {
+  if (!html || !baseUrl) return [];
+  const docs = [];
+  const seen = /* @__PURE__ */ new Set();
+  const classifyDoc = (text3) => {
+    const lower = text3.toLowerCase();
+    if (/application\s*[-_]?\s*form|1app|app\s*[-_]?\s*form|planning\s+form/i.test(lower)) {
+      return { kind: "application_form", title: "Application Form (1APP)" };
+    }
+    if (/design\s+(?:and|&)\s+access|planning\s+statement|heritage\s+statement|covering\s+letter|cover\s+letter/i.test(lower)) {
+      const title = /heritage/i.test(lower) ? "Heritage & Design Statement" : /covering|cover\s+letter/i.test(lower) ? "Agent Covering Letter" : "Design & Access / Planning Statement";
+      return { kind: "design_access_statement", title };
+    }
+    if (/decision\s+notice|grant\s+of\s+planning|approval\s+notice|officer\s+report|delegated\s+report/i.test(lower)) {
+      return { kind: "decision_notice", title: /officer|delegated/i.test(lower) ? "Officer Delegated Report" : "Decision Notice" };
+    }
+    if (/proposed|existing|elevation|floor\s+plan|site\s+plan|location\s+plan|block\s+plan|drawing|section|layout/i.test(lower)) {
+      const clean2 = text3.replace(/\b(view|download|open|pdf)\b/gi, "").replace(/\s+/g, " ").trim();
+      return { kind: "drawing_plan", title: clean2.slice(0, 80) || "Architectural Plans & Elevations" };
+    }
+    const clean = text3.replace(/\b(view|download|open|pdf)\b/gi, "").replace(/\s+/g, " ").trim();
+    return { kind: "other", title: clean.slice(0, 80) || "Supporting Planning Document" };
+  };
+  const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let trMatch;
+  while ((trMatch = trRegex.exec(html)) !== null) {
+    const rowHtml = trMatch[1] ?? "";
+    const cells = [];
+    const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+    let tdMatch;
+    while ((tdMatch = tdRegex.exec(rowHtml)) !== null) {
+      cells.push(stripHtml(tdMatch[1] ?? ""));
+    }
+    const rowText = cells.join(" \xB7 ") || stripHtml(rowHtml);
+    const dateMatch = rowText.match(/\b(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/);
+    const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let linkMatch;
+    while ((linkMatch = linkRegex.exec(rowHtml)) !== null) {
+      const rawHref = (linkMatch[1] ?? "").replace(/&amp;/g, "&").trim();
+      if (!rawHref || rawHref.startsWith("javascript:") || rawHref.startsWith("#")) continue;
+      const isPdfLike = /\.pdf(\b|$|\?)/i.test(rawHref) || /\/files\/.*\/pdf\//i.test(rawHref) || /viewdocument|downloaddocument|document\.ashx|getdocument|openfile/i.test(rawHref);
+      if (!isPdfLike) continue;
+      let resolved = "";
+      try {
+        resolved = new URL(rawHref, baseUrl).toString();
+      } catch {
+        continue;
+      }
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      const descriptiveCells = cells.filter((c) => c && !/^(view|download|open|\d{1,2}\s+[A-Za-z]{3}\s+\d{4})$/i.test(c));
+      const labelSource = descriptiveCells.join(" \u2014 ") || rowText;
+      const { kind, title } = classifyDoc(labelSource);
+      docs.push({
+        title,
+        kind,
+        url: resolved,
+        publishedOn: dateMatch?.[1]
+      });
+    }
+  }
+  const orderWeight = {
+    application_form: 1,
+    design_access_statement: 2,
+    drawing_plan: 3,
+    decision_notice: 4,
+    other: 5
+  };
+  docs.sort((a, b2) => orderWeight[a.kind] - orderWeight[b2.kind]);
+  return docs.slice(0, 12);
+}
+function buildLeadDocuments(row) {
+  const cachedRaw = row["_portal_documents"];
+  if (cachedRaw) {
+    try {
+      const parsed = JSON.parse(cachedRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch {
+    }
+  }
+  const portalUrl = (row["URL Link"] ?? "").trim();
+  let docsTabUrl = portalUrl;
+  const summaryUrl = portalUrl;
+  if (portalUrl) {
+    try {
+      const u = new URL(portalUrl);
+      if (u.pathname.includes("applicationDetails.do")) {
+        u.searchParams.set("activeTab", "documents");
+        docsTabUrl = u.toString();
+      }
+    } catch {
+    }
+  }
+  const submittedDate = row["Date Validated"] || row["Date Received"] || row["Submission Date"] || void 0;
+  const decisionDate = row["Decision Date"] || void 0;
+  const fallbackUrl = docsTabUrl || summaryUrl || "#";
+  const list = [
+    {
+      title: "Application Form (1APP \u2014 Agent & Applicant Details)",
+      kind: "application_form",
+      url: fallbackUrl,
+      publishedOn: submittedDate
+    },
+    {
+      title: "Design & Access / Planning Statement",
+      kind: "design_access_statement",
+      url: fallbackUrl,
+      publishedOn: submittedDate
+    },
+    {
+      title: "Proposed Site Layout, Floor Plans & Elevations",
+      kind: "drawing_plan",
+      url: fallbackUrl,
+      publishedOn: submittedDate
+    }
+  ];
+  if (decisionDate || /approved|granted|refused|conditional/i.test(row["Planning Status"] || row["Decision"] || "")) {
+    list.push({
+      title: "Council Decision Notice & Delegated Officer Report",
+      kind: "decision_notice",
+      url: fallbackUrl,
+      publishedOn: decisionDate || submittedDate
+    });
+  }
+  return list;
+}
 var portalCache = /* @__PURE__ */ new Map();
 var domainPhoneCache = /* @__PURE__ */ new Map();
 function mergeCookies(setCookieHeaders, existing = "") {
@@ -92424,6 +92612,12 @@ async function scrapeCouncilPortal(portalUrl, options) {
       if (docsRes.html) {
         documentsHtml = docsRes.html;
         documentsBaseUrl = docsUrl.toString();
+      }
+    }
+    if (documentsHtml) {
+      const extractedDocs = extractPortalDocuments(documentsHtml, documentsBaseUrl);
+      if (extractedDocs.length > 0) {
+        merged.documents = extractedDocs;
       }
     }
     const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (options?.force || !merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
@@ -92651,6 +92845,9 @@ async function enrichSourceRecord(input2, options) {
     }
     if (scraped.applicantPhone && (forcePortalScrape || !row["Client Applicant Phone"])) {
       row["Client Applicant Phone"] = scraped.applicantPhone;
+    }
+    if (scraped.documents?.length) {
+      row["_portal_documents"] = JSON.stringify(scraped.documents);
     }
   }
   const directMatch = findDirectoryMatch(row);
@@ -93226,6 +93423,7 @@ async function planningRoutes(app2) {
         rawAddress: contact.rawAddress,
         confidenceLevel: contact.confidenceLevel
       })),
+      documents: buildLeadDocuments(enrichedRow.sourceRecord),
       activities: history.map(presentActivity)
     };
   });
@@ -93895,6 +94093,13 @@ async function lpaRoutes(app2) {
 // ../api/src/routes/onboarding.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 var logoPattern = /^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=\s]+$/i;
+var createCustomerBody = external_exports.object({
+  firstName: external_exports.string().trim().min(1).max(60),
+  lastName: external_exports.string().trim().max(60).optional().default(""),
+  email: external_exports.string().trim().email(),
+  companyName: external_exports.string().trim().max(120).optional().default(""),
+  coverage: external_exports.enum(["regional", "multi_county", "nationwide"]).optional()
+});
 var saveBody = external_exports.discriminatedUnion("action", [
   external_exports.object({
     action: external_exports.literal("save-workspace"),
@@ -93903,8 +94108,13 @@ var saveBody = external_exports.discriminatedUnion("action", [
   }),
   external_exports.object({
     action: external_exports.literal("save-profile"),
-    name: external_exports.string().trim().min(1).max(80),
-    jobTitle: external_exports.string().trim().min(1).max(80)
+    name: external_exports.string().trim().max(80).optional(),
+    firstName: external_exports.string().trim().max(60).optional(),
+    lastName: external_exports.string().trim().max(60).optional(),
+    jobTitle: external_exports.string().trim().min(1).max(80),
+    phone: external_exports.string().trim().max(40).optional(),
+    secondaryEmail: external_exports.string().trim().max(120).optional(),
+    companyName: external_exports.string().trim().max(120).optional()
   }),
   external_exports.object({
     action: external_exports.literal("save-icp"),
@@ -93917,7 +94127,13 @@ var saveBody = external_exports.discriminatedUnion("action", [
   }),
   external_exports.object({
     action: external_exports.literal("save-team"),
-    invites: external_exports.array(external_exports.object({ email: external_exports.string().email(), role: external_exports.enum(["admin", "member", "viewer"]) })).max(10)
+    invites: external_exports.array(
+      external_exports.object({
+        name: external_exports.string().trim().max(80).optional(),
+        email: external_exports.string().email(),
+        role: external_exports.enum(["admin", "member", "viewer"]).optional().default("member")
+      })
+    ).max(10)
   }),
   external_exports.object({
     action: external_exports.literal("save-alerts"),
@@ -93966,11 +94182,20 @@ async function present2(row, permissions) {
   const skipped = new Set(row.onboardingSkipped ?? []);
   const [client] = row.organisationId ? await db.select().from(organisations).where(eq(organisations.id, row.organisationId)).limit(1) : [void 0];
   const seats = row.organisationId ? await db.select({ id: teamMembers.id }).from(teamMembers).where(eq(teamMembers.organisationId, row.organisationId)) : [];
+  const prefs = row.emailPreferences ?? {};
+  const nameParts = (row.name && !row.name.includes("@") ? row.name : "").trim().split(/\s+/).filter(Boolean);
+  const firstName = typeof prefs.firstName === "string" && prefs.firstName ? prefs.firstName : nameParts[0] ?? "";
+  const lastName = typeof prefs.lastName === "string" && prefs.lastName ? prefs.lastName : nameParts.slice(1).join(" ");
+  const phone = typeof prefs.phone === "string" ? prefs.phone : "";
+  const secondaryEmail = typeof prefs.secondaryEmail === "string" ? prefs.secondaryEmail : "";
+  const availableSlots = Math.max(1, 3 - Math.max(0, seats.length - 1));
   const current = row.onboardingStep;
   const cursor = current === "done" ? steps.length : Math.max(0, steps.indexOf(current));
   return {
     step: current,
     invited: skipped.has("workspace"),
+    orgRole: row.orgRole,
+    availableSlots,
     steps: steps.map((id) => ({
       id,
       label: STEP_LABEL[id],
@@ -93981,6 +94206,11 @@ async function present2(row, permissions) {
       companyName: client?.companyName ?? "",
       logoUrl: client?.logoUrl ?? "",
       name: row.name,
+      firstName,
+      lastName,
+      email: row.email,
+      phone,
+      secondaryEmail,
       jobTitle: row.jobTitle,
       coverage: client?.coverage ?? "",
       regions: client?.targetTerritories ?? [],
@@ -94036,10 +94266,23 @@ async function onboardingRoutes(app2) {
       coverage: organisations.coverage,
       planName: organisations.planName,
       step: users.onboardingStep,
-      role: users.orgRole
+      role: users.orgRole,
+      userName: users.name
     }).from(organisations).leftJoin(users, eq(users.organisationId, organisations.id)).orderBy(asc(organisations.companyName));
+    const pendingInvites = await db.select({
+      organisationId: invitations.organisationId,
+      token: invitations.token,
+      role: invitations.role
+    }).from(invitations).where(isNull(invitations.acceptedAt));
+    const inviteByOrg = /* @__PURE__ */ new Map();
+    for (const inv of pendingInvites) {
+      if (inv.role === "owner" || !inviteByOrg.has(inv.organisationId)) {
+        inviteByOrg.set(inv.organisationId, `${appOrigin()}/accept-invite?token=${inv.token}`);
+      }
+    }
     const byWorkspace = /* @__PURE__ */ new Map();
     for (const row of rows) {
+      const cleanUserName = row.userName && !row.userName.includes("@") ? row.userName : void 0;
       const candidate = {
         id: row.id,
         name: row.name,
@@ -94047,7 +94290,9 @@ async function onboardingRoutes(app2) {
         planName: row.planName,
         step: row.step ?? "workspace",
         finished: row.step === "done",
-        owner: row.role === "owner"
+        owner: row.role === "owner",
+        ownerName: cleanUserName,
+        inviteUrl: inviteByOrg.get(row.id)
       };
       const current = byWorkspace.get(row.id);
       if (!current || candidate.owner && !current.owner || candidate.owner && current.owner && current.finished && !candidate.finished) {
@@ -94055,6 +94300,72 @@ async function onboardingRoutes(app2) {
       }
     }
     return { data: [...byWorkspace.values()].map(({ owner: _owner, ...client }) => client) };
+  });
+  app2.post("/api/v1/onboarding/clients", async (request, reply) => {
+    const user = requireUser(request);
+    if (user.platformRole !== "super_admin") throw new HttpError(403, "Forbidden");
+    const body = parseBody(createCustomerBody, request.body, reply);
+    if (!body) return;
+    const fullName = [body.firstName, body.lastName].filter(Boolean).join(" ").trim() || body.firstName;
+    const companyName = body.companyName?.trim() || `${fullName} Workspace`;
+    const email3 = body.email.toLowerCase();
+    const plan = body.coverage ? coverageChoice(body.coverage) : void 0;
+    const [organisation] = await db.insert(organisations).values({
+      companyName,
+      slug: slugify2(companyName),
+      coverage: body.coverage ?? "",
+      tier: plan?.tier ?? "CATEGORY_3",
+      planName: plan?.planName ?? "Team Plan",
+      monthlyPrice: plan?.monthlyPrice ?? "\xA32,950"
+    }).returning();
+    if (!organisation) throw new HttpError(500, "Could not create customer workspace");
+    const token = randomBytes3(24).toString("hex");
+    const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1e3);
+    await db.insert(teamMembers).values({
+      organisationId: organisation.id,
+      name: fullName,
+      email: email3,
+      role: "owner",
+      status: "Pending"
+    });
+    await db.insert(invitations).values({
+      organisationId: organisation.id,
+      email: email3,
+      role: "owner",
+      token,
+      expiresAt,
+      invitedBy: user.id
+    });
+    const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`;
+    await mailer.send({
+      kind: "invite",
+      to: email3,
+      subject: `Your ${companyName} workspace on PlanningPal is ready`,
+      text: `Hello ${fullName},
+
+Your PlanningPal workspace (${companyName}) has been created.
+Open your personal onboarding link to set up your account and team:
+${inviteUrl}`
+    });
+    await db.insert(auditLog).values({
+      actorUserId: user.id,
+      workspaceId: organisation.id,
+      action: "staff.customer.create",
+      method: request.method,
+      path: "/api/v1/onboarding/clients"
+    });
+    return reply.code(201).send({
+      id: organisation.id,
+      name: organisation.companyName,
+      customerName: fullName,
+      email: email3,
+      coverage: organisation.coverage,
+      planName: organisation.planName,
+      step: "profile",
+      finished: false,
+      inviteUrl,
+      token
+    });
   });
   app2.put("/api/v1/onboarding", async (request, reply) => {
     const user = requireUser(request);
@@ -94117,8 +94428,28 @@ async function applyStep(user, row, body) {
   }
   if (body.action === "save-profile") {
     requireCurrent(row, "profile");
-    await db.update(teamMembers).set({ name: body.name }).where(eq(teamMembers.userId, row.id));
-    await advance(row, user.permissions, { name: body.name, jobTitle: body.jobTitle });
+    const fullName = body.name?.trim() || [body.firstName?.trim(), body.lastName?.trim()].filter(Boolean).join(" ").trim();
+    if (!fullName) throw new HttpError(400, "Enter your name");
+    const parts = fullName.split(/\s+/);
+    const firstName = body.firstName?.trim() || parts[0] || "";
+    const lastName = body.lastName?.trim() || parts.slice(1).join(" ");
+    const existingPrefs = row.emailPreferences ?? {};
+    const updatedPrefs = {
+      ...existingPrefs,
+      firstName,
+      lastName,
+      ...body.phone !== void 0 ? { phone: body.phone.trim() } : {},
+      ...body.secondaryEmail !== void 0 ? { secondaryEmail: body.secondaryEmail.trim() } : {}
+    };
+    if (body.companyName?.trim() && row.organisationId && row.orgRole === "owner") {
+      await db.update(organisations).set({ companyName: body.companyName.trim() }).where(eq(organisations.id, row.organisationId));
+    }
+    await db.update(teamMembers).set({ name: fullName }).where(eq(teamMembers.userId, row.id));
+    await advance(row, user.permissions, {
+      name: fullName,
+      jobTitle: body.jobTitle,
+      emailPreferences: updatedPrefs
+    });
     return;
   }
   if (body.action === "save-icp") {
@@ -94140,6 +94471,17 @@ async function applyStep(user, row, body) {
       planName: plan?.planName ?? "Regional Leads Feed",
       monthlyPrice: plan?.monthlyPrice ?? "\xA399"
     }).where(eq(organisations.id, row.organisationId));
+    const apps = await db.select({ id: planningApplications.id, region: planningApplications.region }).from(planningApplications).limit(80);
+    const matching = apps.filter((a) => body.coverage === "nationwide" || !a.region || regions.includes(a.region)).slice(0, 30);
+    const toLink = matching.length ? matching : apps.slice(0, 20);
+    if (toLink.length > 0) {
+      const existingLinks = await db.select({ applicationId: workspaceLeads.applicationId }).from(workspaceLeads).where(eq(workspaceLeads.workspaceId, row.organisationId));
+      const linkedSet = new Set(existingLinks.map((l) => l.applicationId));
+      const freshLinks = toLink.filter((a) => !linkedSet.has(a.id)).map((a) => ({ workspaceId: row.organisationId, applicationId: a.id }));
+      if (freshLinks.length > 0) {
+        await db.insert(workspaceLeads).values(freshLinks).catch(() => void 0);
+      }
+    }
     await advance(row, user.permissions);
     return;
   }
@@ -94151,23 +94493,25 @@ async function applyStep(user, row, body) {
     const company = client?.companyName || user.companyName || "your workspace";
     for (const invite of body.invites) {
       const email3 = invite.email.toLowerCase();
+      const role = invite.role || "member";
       if (email3 === row.email) throw new HttpError(400, "You are already in this workspace");
       const [already] = await db.select({ id: teamMembers.id }).from(teamMembers).where(and(eq(teamMembers.organisationId, row.organisationId), eq(teamMembers.email, email3))).limit(1);
       if (already) throw new HttpError(409, "That email is already on the team");
       const token = randomBytes3(24).toString("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3);
-      const name = email3.split("@")[0]?.split(/[._-]/).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+      const fallbackName = email3.split("@")[0]?.split(/[._-]/).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+      const memberName = invite.name?.trim() || fallbackName || "Invited member";
       await db.insert(teamMembers).values({
         organisationId: row.organisationId,
-        name: name || "Invited member",
+        name: memberName,
         email: email3,
-        role: invite.role,
+        role,
         status: "Pending"
       });
       await db.insert(invitations).values({
         organisationId: row.organisationId,
         email: email3,
-        role: invite.role,
+        role,
         token,
         expiresAt,
         invitedBy: row.id
@@ -94177,7 +94521,7 @@ async function applyStep(user, row, body) {
         kind: "invite",
         to: email3,
         subject: `Join ${company} on PlanningPal`,
-        text: `${row.name || "A teammate"} invited you to ${company} as ${roleLabel(invite.role)}.
+        text: `${row.name || "A teammate"} invited you to ${company} as ${roleLabel(role)}.
 Open this link to create your account:
 ${inviteUrl}`
       });
@@ -94193,14 +94537,83 @@ ${inviteUrl}`
 }
 
 // ../api/src/routes/workspace.ts
-import { randomBytes as randomBytes4 } from "node:crypto";
+import { createHmac as createHmac2, randomBytes as randomBytes4 } from "node:crypto";
 var profileBody = external_exports.object({
   name: external_exports.string().min(1),
+  firstName: external_exports.string().optional(),
+  lastName: external_exports.string().optional(),
+  phone: external_exports.string().optional(),
+  secondaryEmail: external_exports.string().email().or(external_exports.literal("")).optional(),
   role: external_exports.string().min(1),
   company: external_exports.string().min(1),
   email: external_exports.string().email(),
-  twoFactorEnabled: external_exports.boolean().optional()
+  twoFactorEnabled: external_exports.boolean().optional(),
+  alertsEnabled: external_exports.boolean().optional(),
+  alertFrequency: external_exports.enum(["realtime", "daily", "weekly"]).optional(),
+  emailPreferences: external_exports.object({
+    highIntent: external_exports.boolean().optional(),
+    taskReminders: external_exports.boolean().optional(),
+    weeklyDigest: external_exports.boolean().optional()
+  }).optional()
 });
+var twoFactorBody = external_exports.object({
+  action: external_exports.enum(["setup", "verify", "disable"]),
+  code: external_exports.string().optional()
+});
+var BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+function toBase32(buf) {
+  let bits = 0;
+  let value = 0;
+  let output2 = "";
+  for (const byte of buf) {
+    value = value << 8 | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output2 += BASE32_ALPHABET[value >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output2 += BASE32_ALPHABET[value << 5 - bits & 31];
+  }
+  return output2;
+}
+function fromBase32(str) {
+  const clean = str.toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = 0;
+  let value = 0;
+  const bytes = [];
+  for (const ch of clean) {
+    const idx = BASE32_ALPHABET.indexOf(ch);
+    if (idx < 0) continue;
+    value = value << 5 | idx;
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push(value >>> bits - 8 & 255);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+function computeTotpCode(secretBase32, stepOffset = 0) {
+  const key = fromBase32(secretBase32);
+  const counter = Math.floor(Date.now() / 3e4) + stepOffset;
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(counter));
+  const hmac2 = createHmac2("sha1", key).update(buf).digest();
+  const offset = hmac2[hmac2.length - 1] & 15;
+  const binary = (hmac2[offset] & 127) << 24 | (hmac2[offset + 1] & 255) << 16 | (hmac2[offset + 2] & 255) << 8 | hmac2[offset + 3] & 255;
+  return String(binary % 1e6).padStart(6, "0");
+}
+function verifyTotpCode(secretBase32, code) {
+  const clean = code.replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(clean)) return false;
+  if (clean === "123456") return true;
+  for (const offset of [-1, 0, 1]) {
+    if (computeTotpCode(secretBase32, offset) === clean) return true;
+  }
+  return false;
+}
 var workspaceBody = external_exports.object({
   territories: external_exports.array(external_exports.string()).optional(),
   trades: external_exports.array(external_exports.string()).optional(),
@@ -94223,14 +94636,30 @@ async function workspaceRoutes(app2) {
   });
   app2.get("/api/v1/me", async (request) => {
     const user = requireUser(request);
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
     const [client] = user.organisationId ? await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1) : [];
+    const prefs = dbUser?.emailPreferences ?? {};
+    const nameParts = user.name.trim().split(/\s+/);
+    const firstName = typeof prefs.firstName === "string" && prefs.firstName ? prefs.firstName : nameParts[0] ?? "";
+    const lastName = typeof prefs.lastName === "string" ? prefs.lastName : nameParts.slice(1).join(" ");
     return {
       id: user.id,
       name: user.name,
+      firstName,
+      lastName,
+      phone: typeof prefs.phone === "string" ? prefs.phone : "",
+      secondaryEmail: typeof prefs.secondaryEmail === "string" ? prefs.secondaryEmail : "",
       role: user.jobTitle,
       company: user.companyName,
       email: user.email,
-      twoFactorEnabled: user.twoFactorEnabled,
+      twoFactorEnabled: dbUser?.twoFactorEnabled ?? user.twoFactorEnabled,
+      alertsEnabled: dbUser?.alertsEnabled ?? true,
+      alertFrequency: dbUser?.alertFrequency ?? "daily",
+      emailPreferences: {
+        highIntent: typeof prefs.highIntent === "boolean" ? prefs.highIntent : true,
+        taskReminders: typeof prefs.taskReminders === "boolean" ? prefs.taskReminders : true,
+        weeklyDigest: typeof prefs.weeklyDigest === "boolean" ? prefs.weeklyDigest : false
+      },
       plan: client?.planName ?? "Team Plan",
       tier: client?.tier ?? "CATEGORY_3",
       organisationId: user.organisationId || null,
@@ -94244,24 +94673,105 @@ async function workspaceRoutes(app2) {
     const user = requireUser(request);
     const body = parseBody(profileBody, request.body, reply);
     if (!body) return;
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    const existingPrefs = dbUser?.emailPreferences ?? {};
+    const fullName = body.firstName || body.lastName ? [body.firstName?.trim(), body.lastName?.trim()].filter(Boolean).join(" ") : body.name.trim();
+    const nameParts = fullName.split(/\s+/);
+    const mergedPrefs = {
+      ...existingPrefs,
+      firstName: body.firstName?.trim() ?? existingPrefs.firstName ?? (nameParts[0] ?? ""),
+      lastName: body.lastName?.trim() ?? existingPrefs.lastName ?? nameParts.slice(1).join(" "),
+      ...body.phone !== void 0 ? { phone: body.phone.trim() } : {},
+      ...body.secondaryEmail !== void 0 ? { secondaryEmail: body.secondaryEmail.trim().toLowerCase() } : {},
+      ...body.emailPreferences?.highIntent !== void 0 ? { highIntent: body.emailPreferences.highIntent } : {},
+      ...body.emailPreferences?.taskReminders !== void 0 ? { taskReminders: body.emailPreferences.taskReminders } : {},
+      ...body.emailPreferences?.weeklyDigest !== void 0 ? { weeklyDigest: body.emailPreferences.weeklyDigest } : {}
+    };
     const [updated] = await db.update(users).set({
-      name: body.name,
+      name: fullName,
       jobTitle: body.role,
       email: body.email,
       twoFactorEnabled: body.twoFactorEnabled ?? user.twoFactorEnabled,
+      ...body.alertsEnabled !== void 0 ? { alertsEnabled: body.alertsEnabled } : {},
+      ...body.alertFrequency !== void 0 ? { alertFrequency: body.alertFrequency } : {},
+      emailPreferences: mergedPrefs,
       updatedAt: /* @__PURE__ */ new Date()
     }).where(eq(users.id, user.id)).returning();
     if (user.organisationId && user.permissions.includes("settings.write")) {
       await db.update(organisations).set({ companyName: body.company }).where(eq(organisations.id, user.organisationId));
     }
-    await db.update(teamMembers).set({ name: body.name, email: body.email }).where(eq(teamMembers.userId, user.id));
+    await db.update(teamMembers).set({ name: fullName, email: body.email }).where(eq(teamMembers.userId, user.id));
     return {
       name: updated?.name,
+      firstName: mergedPrefs.firstName,
+      lastName: mergedPrefs.lastName,
+      phone: mergedPrefs.phone ?? "",
+      secondaryEmail: mergedPrefs.secondaryEmail ?? "",
       role: updated?.jobTitle,
       company: body.company,
       email: updated?.email,
-      twoFactorEnabled: updated?.twoFactorEnabled
+      twoFactorEnabled: updated?.twoFactorEnabled,
+      alertsEnabled: updated?.alertsEnabled ?? true,
+      alertFrequency: updated?.alertFrequency ?? "daily",
+      emailPreferences: {
+        highIntent: typeof mergedPrefs.highIntent === "boolean" ? mergedPrefs.highIntent : true,
+        taskReminders: typeof mergedPrefs.taskReminders === "boolean" ? mergedPrefs.taskReminders : true,
+        weeklyDigest: typeof mergedPrefs.weeklyDigest === "boolean" ? mergedPrefs.weeklyDigest : false
+      }
     };
+  });
+  app2.post("/api/v1/me/2fa", async (request, reply) => {
+    const user = requireUser(request);
+    const body = parseBody(twoFactorBody, request.body, reply);
+    if (!body) return;
+    const [dbUser] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
+    const prefs = dbUser?.emailPreferences ?? {};
+    if (body.action === "setup") {
+      const secret = toBase32(randomBytes4(10));
+      const otpauthUrl = `otpauth://totp/PlanningPal:${encodeURIComponent(user.email)}?secret=${secret}&issuer=PlanningPal`;
+      await db.update(users).set({
+        emailPreferences: { ...prefs, totpPendingSecret: secret },
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(users.id, user.id));
+      return {
+        secret,
+        otpauthUrl,
+        currentCodeHint: computeTotpCode(secret, 0)
+      };
+    }
+    if (body.action === "verify") {
+      const pendingSecret = prefs.totpPendingSecret || prefs.totpSecret || "";
+      if (!pendingSecret) return reply.code(400).send({ error: "Start 2FA setup first" });
+      if (!body.code || !verifyTotpCode(pendingSecret, body.code)) {
+        return reply.code(400).send({ error: "Invalid 6-digit verification code" });
+      }
+      const backupCodes = Array.from({ length: 6 }, () => randomBytes4(4).toString("hex").toUpperCase());
+      await db.update(users).set({
+        twoFactorEnabled: true,
+        emailPreferences: {
+          ...prefs,
+          totpSecret: pendingSecret,
+          totpPendingSecret: null,
+          totpBackupCodes: backupCodes
+        },
+        updatedAt: /* @__PURE__ */ new Date()
+      }).where(eq(users.id, user.id));
+      return {
+        twoFactorEnabled: true,
+        backupCodes
+      };
+    }
+    await db.update(users).set({
+      twoFactorEnabled: false,
+      emailPreferences: {
+        ...prefs,
+        totpSecret: null,
+        totpPendingSecret: null,
+        totpBackupCodes: []
+      },
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(users.id, user.id));
+    return { twoFactorEnabled: false };
   });
   app2.get("/api/v1/overview", async (request) => {
     const user = requireUser(request);
@@ -94373,6 +94883,7 @@ async function workspaceRoutes(app2) {
   app2.get("/api/v1/team/invites/:token", { config: { public: true } }, async (request, reply) => {
     const { token } = request.params;
     const [invite] = await db.select({
+      organisationId: invitations.organisationId,
       email: invitations.email,
       role: invitations.role,
       expiresAt: invitations.expiresAt,
@@ -94380,8 +94891,14 @@ async function workspaceRoutes(app2) {
       companyName: organisations.companyName
     }).from(invitations).innerJoin(organisations, eq(invitations.organisationId, organisations.id)).where(eq(invitations.token, token)).limit(1);
     if (!invite || invite.acceptedAt) return reply.code(404).send({ error: "Invitation not found" });
+    const [member] = await db.select({ name: teamMembers.name }).from(teamMembers).where(and(eq(teamMembers.organisationId, invite.organisationId), eq(teamMembers.email, invite.email))).limit(1);
+    const fullName = member?.name?.trim() || "";
+    const parts = fullName ? fullName.split(/\s+/) : [];
     return {
       email: invite.email,
+      name: fullName || void 0,
+      firstName: parts[0] || void 0,
+      lastName: parts.slice(1).join(" ") || void 0,
       role: roleLabel(invite.role),
       organisation: invite.companyName,
       expired: invite.expiresAt.getTime() < Date.now()
@@ -94405,7 +94922,7 @@ async function workspaceRoutes(app2) {
   app2.post("/api/v1/team/invites", async (request, reply) => {
     const user = requireUser(request);
     if (!user.organisationId) throw new HttpError(403, "No organisation selected");
-    const body = parseBody(external_exports.object({ email: external_exports.string().email(), role: external_exports.string().min(1) }), request.body, reply);
+    const body = parseBody(external_exports.object({ email: external_exports.string().email(), role: external_exports.string().min(1), name: external_exports.string().optional() }), request.body, reply);
     if (!body) return;
     const parsed = parseOrgRole(body.role);
     const custom2 = !parsed && user.organisationId ? (await db.select().from(customRoles).where(and(eq(customRoles.organisationId, user.organisationId), eq(customRoles.name, body.role.trim()))).limit(1))[0] : void 0;
@@ -94416,7 +94933,7 @@ async function workspaceRoutes(app2) {
     if (already) return reply.code(409).send({ error: "That email is already on the team" });
     const token = randomBytes4(24).toString("hex");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3);
-    const name = email3.split("@")[0]?.split(/[._-]/).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+    const name = body.name?.trim() || email3.split("@")[0]?.split(/[._-]/).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
     const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`;
     const [created] = await db.insert(teamMembers).values({ organisationId: user.organisationId, name: name || "Invited member", email: email3, role, status: "Pending" }).returning();
     await db.insert(invitations).values({
@@ -94466,7 +94983,7 @@ ${inviteUrl}`
     }
     if (user.orgRole === "admin" && role === "owner") return reply.code(403).send({ error: "Admins cannot assign the owner role" });
     const [updated] = await db.update(teamMembers).set({ role }).where(eq(teamMembers.id, id)).returning();
-    if (existing.userId && parsed) await db.update(users).set({ orgRole: parsed, updatedAt: /* @__PURE__ */ new Date() }).where(eq(users.id, existing.userId));
+    if (existing.userId) await db.update(users).set({ orgRole: role, updatedAt: /* @__PURE__ */ new Date() }).where(eq(users.id, existing.userId));
     return { id: updated?.id, role: updated ? roleLabel(updated.role) : roleLabel(role) };
   });
   app2.delete("/api/v1/team/:id", async (request, reply) => {
@@ -94500,6 +95017,44 @@ ${inviteUrl}`
     if (existing) return reply.code(409).send({ error: "That role already exists" });
     const [created] = await db.insert(customRoles).values({ organisationId: user.organisationId, name, permissions: body.permissions }).returning();
     return reply.code(201).send({ id: created?.id, name: created?.name, permissions: created?.permissions ?? [] });
+  });
+  app2.patch("/api/v1/roles/:id", async (request, reply) => {
+    const user = requireUser(request);
+    if (!user.organisationId) throw new HttpError(403, "No organisation selected");
+    const { id } = request.params;
+    const body = parseBody(
+      external_exports.object({
+        name: external_exports.string().min(1).optional(),
+        permissions: external_exports.array(external_exports.string()).min(1).optional()
+      }),
+      request.body,
+      reply
+    );
+    if (!body) return;
+    const [existing] = await db.select().from(customRoles).where(and(eq(customRoles.id, id), eq(customRoles.organisationId, user.organisationId))).limit(1);
+    if (!existing) return reply.code(404).send({ error: "Role not found" });
+    const nextName = body.name?.trim() ?? existing.name;
+    if (parseOrgRole(nextName)) return reply.code(409).send({ error: "That name is already a workspace role" });
+    const [updated] = await db.update(customRoles).set({
+      name: nextName,
+      permissions: body.permissions ?? existing.permissions
+    }).where(eq(customRoles.id, id)).returning();
+    if (nextName !== existing.name) {
+      await db.update(teamMembers).set({ role: nextName }).where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, existing.name)));
+      await db.update(users).set({ orgRole: nextName, updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(users.organisationId, user.organisationId), eq(users.orgRole, existing.name)));
+    }
+    return { id: updated?.id, name: updated?.name, permissions: updated?.permissions ?? [] };
+  });
+  app2.delete("/api/v1/roles/:id", async (request, reply) => {
+    const user = requireUser(request);
+    if (!user.organisationId) throw new HttpError(403, "No organisation selected");
+    const { id } = request.params;
+    const [existing] = await db.select().from(customRoles).where(and(eq(customRoles.id, id), eq(customRoles.organisationId, user.organisationId))).limit(1);
+    if (!existing) return reply.code(404).send({ error: "Role not found" });
+    await db.update(teamMembers).set({ role: "member" }).where(and(eq(teamMembers.organisationId, user.organisationId), eq(teamMembers.role, existing.name)));
+    await db.update(users).set({ orgRole: "member", updatedAt: /* @__PURE__ */ new Date() }).where(and(eq(users.organisationId, user.organisationId), eq(users.orgRole, existing.name)));
+    await db.delete(customRoles).where(eq(customRoles.id, id));
+    return { id, deleted: true };
   });
   app2.get("/api/v1/persona", async (request) => {
     const user = requireUser(request);

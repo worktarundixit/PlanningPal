@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusScreen } from './components/StatusScreen'
 import { AcceptInvitePage, ForgotPasswordPage, ResetPasswordPage, SignInPage, SignUpPage } from './pages/AuthScreens'
 import { CommandCentre } from './pages/CommandCentre'
+import { SuperAdminDashboard } from './pages/SuperAdminDashboard'
 import { OnboardingPage } from './pages/Onboarding'
 import { Landing } from './pages/Landing'
 import './index.css'
@@ -19,6 +20,7 @@ function screenFor(path: string) {
   if (path === '/reset-password') return <ResetPasswordPage />
   if (path === '/accept-invite') return <AcceptInvitePage />
   if (path === '/onboarding') return <OnboardingPage />
+  if (path === '/app/admin') return <SuperAdminDashboard />
   return <CommandCentre />
 }
 

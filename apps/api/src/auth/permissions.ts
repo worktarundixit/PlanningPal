@@ -67,9 +67,41 @@ export const ROLE_PERMISSIONS: Record<OrgRole, Permission[]> = {
   ],
 }
 
-export function permissionsFor(orgRole: string | null | undefined, platformRole: string | null | undefined): Permission[] {
+const UI_PERMISSION_MAP: Record<string, Permission[]> = {
+  'view planning data': ['leads.read', 'saved.read'],
+  'export schemes': ['leads.read', 'leads.export'],
+  'manage campaigns': ['campaigns.read', 'campaigns.write'],
+  'manage crm': ['crm.read', 'crm.write', 'inbox.read', 'inbox.write', 'saved.read', 'saved.write'],
+  'manage contacts': ['crm.read', 'crm.write', 'leads.read'],
+  'view reports': ['reports.read'],
+  'manage workspace': ['settings.read', 'settings.write', 'team.read', 'team.manage'],
+  'manage billing': ['billing.manage'],
+}
+
+export function normalizeCustomPermissions(rawPermissions: string[] = []): Permission[] {
+  const resolved = new Set<Permission>(['profile.read', 'profile.write', 'team.read', 'settings.read', 'leads.read', 'saved.read'])
+  for (const item of rawPermissions) {
+    const trimmed = item.trim()
+    if ((PERMISSIONS as readonly string[]).includes(trimmed)) {
+      resolved.add(trimmed as Permission)
+      continue
+    }
+    const mapped = UI_PERMISSION_MAP[trimmed.toLowerCase()]
+    if (mapped) {
+      for (const perm of mapped) resolved.add(perm)
+    }
+  }
+  return [...resolved]
+}
+
+export function permissionsFor(
+  orgRole: string | null | undefined,
+  platformRole: string | null | undefined,
+  customRolePermissions?: string[],
+): Permission[] {
   if (platformRole === 'super_admin') return [...PERMISSIONS]
   if (orgRole && orgRole in ROLE_PERMISSIONS) return ROLE_PERMISSIONS[orgRole as OrgRole]
+  if (orgRole && customRolePermissions) return normalizeCustomPermissions(customRolePermissions)
   return []
 }
 
@@ -147,11 +179,13 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'DELETE', pattern: /^\/api\/v1\/sending-domains\/[^/]+$/, permission: 'campaigns.write' },
 
   { method: 'GET', pattern: /^\/api\/v1\/onboarding\/clients$/, permission: 'onboarding.review' },
+  { method: 'POST', pattern: /^\/api\/v1\/onboarding\/clients$/, permission: 'onboarding.review' },
   { method: 'GET', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.read' },
   { method: 'PUT', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.write' },
 
   { method: 'GET', pattern: /^\/api\/v1\/me$/, permission: 'profile.read' },
   { method: 'PATCH', pattern: /^\/api\/v1\/me$/, permission: 'profile.write' },
+  { method: 'POST', pattern: /^\/api\/v1\/me\/2fa$/, permission: 'profile.write' },
   { method: 'GET', pattern: /^\/api\/v1\/overview$/, permission: 'reports.read' },
   { method: 'GET', pattern: /^\/api\/v1\/reports$/, permission: 'reports.read' },
   { method: 'GET', pattern: /^\/api\/v1\/delivery$/, permission: 'reports.read' },
@@ -166,6 +200,8 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'PATCH', pattern: /^\/api\/v1\/team\/[^/]+$/, permission: 'team.manage' },
   { method: 'DELETE', pattern: /^\/api\/v1\/team\/[^/]+$/, permission: 'team.manage' },
   { method: 'POST', pattern: /^\/api\/v1\/roles$/, permission: 'team.manage' },
+  { method: 'PATCH', pattern: /^\/api\/v1\/roles\/[^/]+$/, permission: 'team.manage' },
+  { method: 'DELETE', pattern: /^\/api\/v1\/roles\/[^/]+$/, permission: 'team.manage' },
   { method: 'GET', pattern: /^\/api\/v1\/persona$/, permission: 'settings.read' },
   { method: 'PUT', pattern: /^\/api\/v1\/persona$/, permission: 'settings.write' },
 
