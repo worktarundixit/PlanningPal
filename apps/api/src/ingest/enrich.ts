@@ -11,6 +11,8 @@ import {
 } from '@planningpal/ingest'
 import { MASTER_COLUMNS, type SourceRecord } from '@planningpal/shared'
 import { createHash } from 'node:crypto'
+import http from 'node:http'
+import https from 'node:https'
 import { VERIFIED_BY_REF, VERIFIED_PRACTICES, type DirectoryContact } from './directoryData.ts'
 
 export type PortalScrapedContacts = {
@@ -256,7 +258,7 @@ export function findApplicationFormPdfUrls(html: string, baseUrl: string): strin
 const portalCache = new Map<string, Promise<Partial<PortalScrapedContacts>>>()
 const domainPhoneCache = new Map<string, Promise<string>>()
 
-function extractCookies(response: Response, existing = ''): string {
+function mergeCookies(setCookieHeaders: string[], existing = ''): string {
   const map = new Map<string, string>()
   if (existing) {
     for (const part of existing.split(';')) {
@@ -264,13 +266,7 @@ function extractCookies(response: Response, existing = ''): string {
       if (eqIdx > 0) map.set(part.slice(0, eqIdx).trim(), part.slice(eqIdx + 1).trim())
     }
   }
-  const headersWithSetCookie = response.headers as unknown as { getSetCookie?: () => string[] }
-  const rawList =
-    typeof headersWithSetCookie.getSetCookie === 'function'
-      ? headersWithSetCookie.getSetCookie()
-      : (response.headers.get('set-cookie') ?? '').split(/,(?=\s*[A-Za-z0-9_-]+=)/)
-
-  for (const raw of rawList) {
+  for (const raw of setCookieHeaders) {
     const firstPair = raw.split(';')[0]?.trim() ?? ''
     const eqIdx = firstPair.indexOf('=')
     if (eqIdx > 0) {
@@ -280,73 +276,147 @@ function extractCookies(response: Response, existing = ''): string {
   return [...map.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
 }
 
-async function fetchHtmlWithSession(
-  url: string,
-  options?: { cookie?: string; referer?: string; timeoutMs?: number },
-): Promise<{ html: string; cookie: string }> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2500)
-  try {
+function requestBufferWithSession(
+  targetUrl: string,
+  options?: {
+    cookie?: string
+    referer?: string
+    accept?: string
+    timeoutMs?: number
+    maxBytes?: number
+    redirectsLeft?: number
+  },
+): Promise<{ status: number; buffer: Buffer; cookie: string }> {
+  const timeoutMs = options?.timeoutMs ?? 6000
+  const maxBytes = options?.maxBytes ?? 4_500_000
+  const redirectsLeft = options?.redirectsLeft ?? 4
+
+  return new Promise((resolve) => {
+    let parsed: URL
+    try {
+      parsed = new URL(targetUrl)
+    } catch {
+      resolve({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? '' })
+      return
+    }
+
     const headers: Record<string, string> = {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      Accept: options?.accept ?? 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-GB,en;q=0.9',
       'User-Agent': PLANIT_USER_AGENT,
     }
     if (options?.cookie) headers.Cookie = options.cookie
     if (options?.referer) headers.Referer = options.referer
 
-    const response = await fetch(url, {
-      headers,
-      signal: controller.signal,
-      redirect: 'follow',
+    const isHttps = parsed.protocol === 'https:'
+    const client = isHttps ? https : http
+    let settled = false
+    const finish = (result: { status: number; buffer: Buffer; cookie: string }) => {
+      if (settled) return
+      settled = true
+      resolve(result)
+    }
+
+    const req = client.get(
+      parsed,
+      {
+        headers,
+        ...(isHttps ? { rejectUnauthorized: false } : {}),
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0
+        const setCookie = Array.isArray(res.headers['set-cookie'])
+          ? res.headers['set-cookie']
+          : res.headers['set-cookie']
+            ? [String(res.headers['set-cookie'])]
+            : []
+        const cookie = mergeCookies(setCookie, options?.cookie)
+
+        if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume()
+          try {
+            const nextUrl = new URL(res.headers.location, parsed).toString()
+            void requestBufferWithSession(nextUrl, {
+              ...options,
+              cookie,
+              redirectsLeft: redirectsLeft - 1,
+            }).then(finish)
+            return
+          } catch {
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie })
+            return
+          }
+        }
+
+        const contentLength = Number(res.headers['content-length'] || 0)
+        if (contentLength > maxBytes) {
+          res.destroy()
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie })
+          return
+        }
+
+        const chunks: Buffer[] = []
+        let total = 0
+        res.on('data', (chunk: Buffer) => {
+          total += chunk.length
+          if (total > maxBytes) {
+            res.destroy()
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie })
+            return
+          }
+          chunks.push(chunk)
+        })
+        res.on('end', () => {
+          finish({ status, buffer: Buffer.concat(chunks), cookie })
+        })
+        res.on('error', () => {
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie })
+        })
+      },
+    )
+
+    req.on('timeout', () => {
+      req.destroy()
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? '' })
     })
-    const cookie = extractCookies(response, options?.cookie)
-    if (!response.ok) return { html: '', cookie }
-    const html = await response.text()
-    return { html, cookie }
-  } catch {
-    return { html: '', cookie: options?.cookie ?? '' }
-  } finally {
-    clearTimeout(timer)
+    req.on('error', () => {
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? '' })
+    })
+  })
+}
+
+async function fetchHtmlWithSession(
+  url: string,
+  options?: { cookie?: string; referer?: string; timeoutMs?: number },
+): Promise<{ html: string; cookie: string }> {
+  const res = await requestBufferWithSession(url, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    timeoutMs: options?.timeoutMs ?? 6000,
+    maxBytes: 1_500_000,
+  })
+  if (res.status < 200 || res.status >= 300 || res.buffer.length === 0) {
+    return { html: '', cookie: res.cookie }
   }
+  return { html: res.buffer.toString('utf8'), cookie: res.cookie }
 }
 
 async function fetchPdfBufferWithSession(
   url: string,
   options?: { cookie?: string; referer?: string; timeoutMs?: number; maxBytes?: number },
 ): Promise<Buffer | null> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3500)
-  try {
-    const headers: Record<string, string> = {
-      Accept: 'application/pdf,application/octet-stream,*/*',
-      'User-Agent': PLANIT_USER_AGENT,
-    }
-    if (options?.cookie) headers.Cookie = options.cookie
-    if (options?.referer) headers.Referer = options.referer
-
-    const response = await fetch(url, {
-      headers,
-      signal: controller.signal,
-      redirect: 'follow',
-    })
-    if (!response.ok) return null
-    const maxBytes = options?.maxBytes ?? 4_500_000
-    const contentLength = Number(response.headers.get('content-length') || 0)
-    if (contentLength > maxBytes) return null
-
-    const arrayBuffer = await response.arrayBuffer()
-    if (arrayBuffer.byteLength > maxBytes || arrayBuffer.byteLength < 16) return null
-    const buf = Buffer.from(arrayBuffer)
-    // Verify %PDF- header within first 32 bytes
-    const head = buf.subarray(0, 32).toString('latin1')
-    if (!head.includes('%PDF-')) return null
-    return buf
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
+  const res = await requestBufferWithSession(url, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    accept: 'application/pdf,application/octet-stream,*/*',
+    timeoutMs: options?.timeoutMs ?? 7000,
+    maxBytes: options?.maxBytes ?? 4_500_000,
+  })
+  if (res.status < 200 || res.status >= 300 || res.buffer.length < 16) return null
+  const head = res.buffer.subarray(0, 32).toString('latin1')
+  if (!head.includes('%PDF-')) return null
+  return res.buffer
 }
 
 function mergeScraped(target: Partial<PortalScrapedContacts>, source: Partial<PortalScrapedContacts>) {
@@ -393,7 +463,8 @@ export async function scrapeCouncilPortal(
     const isIdox = parsedUrl.pathname.includes('applicationDetails.do') && parsedUrl.searchParams.has('keyVal')
 
     // Step 1: Initial summary request to establish session cookies (e.g. Idox JSESSIONID)
-    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: 2500 })
+    const stepTimeout = options?.force ? 7500 : 5500
+    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: stepTimeout })
     let sessionCookie = entry.cookie
     if (entry.html) {
       mergeScraped(merged, parsePortalHtmlContacts(entry.html))
@@ -412,9 +483,9 @@ export async function scrapeCouncilPortal(
       docsUrl.searchParams.set('activeTab', 'documents')
 
       const [detailsRes, contactsRes, docsRes] = await Promise.all([
-        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
+        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
       ])
 
       sessionCookie = docsRes.cookie || detailsRes.cookie || contactsRes.cookie || sessionCookie
@@ -430,7 +501,7 @@ export async function scrapeCouncilPortal(
     const shouldDownloadPdf =
       options?.downloadPdf !== false &&
       Boolean(documentsHtml) &&
-      (!merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany)
+      (options?.force || !merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany)
 
     if (shouldDownloadPdf) {
       const pdfUrls = findApplicationFormPdfUrls(documentsHtml, documentsBaseUrl)
@@ -438,7 +509,7 @@ export async function scrapeCouncilPortal(
         const pdfBuf = await fetchPdfBufferWithSession(pdfUrl, {
           cookie: sessionCookie,
           referer: documentsBaseUrl,
-          timeoutMs: 3500,
+          timeoutMs: options?.force ? 8500 : 6500,
         })
         if (!pdfBuf) continue
         const pdfText = extractTextFromPdfBuffer(pdfBuf)

@@ -2710,9 +2710,9 @@ var require_promise = __commonJS({
 var require_server = __commonJS({
   "../../node_modules/.pnpm/fastify@5.12.7/node_modules/fastify/lib/server.js"(exports, module) {
     "use strict";
-    var http = __require("node:http");
-    var https = __require("node:https");
-    var http2 = __require("node:http2");
+    var http2 = __require("node:http");
+    var https2 = __require("node:https");
+    var http22 = __require("node:http2");
     var dns = __require("node:dns");
     var os2 = __require("node:os");
     var { kState, kOptions, kServerBindings, kHttp2ServerSessions } = require_symbols2();
@@ -2955,7 +2955,7 @@ var require_server = __commonJS({
       }
       const httpsOptions = options.https === true ? {} : options.https;
       if (options.http2) {
-        const server2 = typeof httpsOptions === "object" ? http2.createSecureServer(httpsOptions, httpHandler) : http2.createServer(options.http, httpHandler);
+        const server2 = typeof httpsOptions === "object" ? http22.createSecureServer(httpsOptions, httpHandler) : http22.createServer(options.http, httpHandler);
         server2.on("session", (session) => session.setTimeout(options.http2SessionTimeout, () => {
           session.close();
         }));
@@ -2965,7 +2965,7 @@ var require_server = __commonJS({
         server2.setTimeout(options.connectionTimeout);
         return server2;
       }
-      const server = httpsOptions ? https.createServer(httpsOptions, httpHandler) : http.createServer(options.http, httpHandler);
+      const server = httpsOptions ? https2.createServer(httpsOptions, httpHandler) : http2.createServer(options.http, httpHandler);
       server.keepAliveTimeout = options.keepAliveTimeout;
       server.requestTimeout = options.requestTimeout;
       server.setTimeout(options.connectionTimeout);
@@ -17951,7 +17951,7 @@ var require_schemes = __commonJS({
       urnComponent.nss = (uuidComponent.uuid || "").toLowerCase();
       return urnComponent;
     }
-    var http = (
+    var http2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "http",
@@ -17960,11 +17960,11 @@ var require_schemes = __commonJS({
         serialize: httpSerialize
       }
     );
-    var https = (
+    var https2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "https",
-        domainHost: http.domainHost,
+        domainHost: http2.domainHost,
         parse: httpParse,
         serialize: httpSerialize
       }
@@ -18008,8 +18008,8 @@ var require_schemes = __commonJS({
     var SCHEMES = (
       /** @type {Record<SchemeName, SchemeHandler>} */
       {
-        http,
-        https,
+        http: http2,
+        https: https2,
         ws,
         wss,
         urn,
@@ -23529,7 +23529,7 @@ var require_schemes2 = __commonJS({
       urnComponent.nss = (uuidComponent.uuid || "").toLowerCase();
       return urnComponent;
     }
-    var http = (
+    var http2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "http",
@@ -23538,11 +23538,11 @@ var require_schemes2 = __commonJS({
         serialize: httpSerialize
       }
     );
-    var https = (
+    var https2 = (
       /** @type {SchemeHandler} */
       {
         scheme: "https",
-        domainHost: http.domainHost,
+        domainHost: http2.domainHost,
         parse: httpParse,
         serialize: httpSerialize
       }
@@ -23835,8 +23835,8 @@ var require_schemes2 = __commonJS({
     var SCHEMES = (
       /** @type {Record<SchemeName, SchemeHandler>} */
       {
-        http,
-        https,
+        http: http2,
+        https: https2,
         ws,
         wss,
         urn,
@@ -36531,12 +36531,12 @@ var require_set_cookie = __commonJS({
 var require_response = __commonJS({
   "../../node_modules/.pnpm/light-my-request@6.8.0/node_modules/light-my-request/lib/response.js"(exports, module) {
     "use strict";
-    var http = __require("node:http");
+    var http2 = __require("node:http");
     var { Writable, Readable, addAbortSignal } = __require("node:stream");
     var util = __require("node:util");
     var setCookie = require_set_cookie();
     function Response(req, onEnd, reject) {
-      http.ServerResponse.call(this, req);
+      http2.ServerResponse.call(this, req);
       this.isLightMyRequest = true;
       if (req._lightMyRequest?.payloadAsStream) {
         const read = this.emit.bind(this, "drain");
@@ -36602,7 +36602,7 @@ var require_response = __commonJS({
       this.once("error", onEndFailure);
       this.once("close", onEndFailure);
     }
-    util.inherits(Response, http.ServerResponse);
+    util.inherits(Response, http2.ServerResponse);
     Response.prototype.setTimeout = function(msecs, callback) {
       this.timeoutHandle = setTimeout(() => {
         this.emit("timeout");
@@ -36611,7 +36611,7 @@ var require_response = __commonJS({
       return this;
     };
     Response.prototype.writeHead = function() {
-      const result = http.ServerResponse.prototype.writeHead.apply(this, arguments);
+      const result = http2.ServerResponse.prototype.writeHead.apply(this, arguments);
       copyHeaders(this);
       if (this._lightMyRequest.stream) {
         this._lightMyRequest.onEndSuccess(generatePayload(this));
@@ -36622,7 +36622,7 @@ var require_response = __commonJS({
       if (this.timeoutHandle) {
         clearTimeout(this.timeoutHandle);
       }
-      http.ServerResponse.prototype.write.call(this, data, encoding, callback);
+      http2.ServerResponse.prototype.write.call(this, data, encoding, callback);
       if (this._lightMyRequest.stream) {
         return this._lightMyRequest.stream.push(Buffer.from(data, encoding));
       } else {
@@ -36634,7 +36634,7 @@ var require_response = __commonJS({
       if (data) {
         this.write(data, encoding);
       }
-      http.ServerResponse.prototype.end.call(this, callback);
+      http2.ServerResponse.prototype.end.call(this, callback);
       this.emit("finish");
       this.destroy();
     };
@@ -37873,7 +37873,7 @@ var require_fastify = __commonJS({
     "use strict";
     var VERSION = "5.12.7";
     var Avvio = require_avvio();
-    var http = __require("node:http");
+    var http2 = __require("node:http");
     var diagnostics = __require("node:diagnostics_channel");
     var lightMyRequest;
     var {
@@ -38560,7 +38560,7 @@ var require_fastify = __commonJS({
         return this;
       }
       function addHttpMethod(method, { hasBody = false, overrideExisting = false } = {}) {
-        if (typeof method !== "string" || http.METHODS.indexOf(method) === -1) {
+        if (typeof method !== "string" || http2.METHODS.indexOf(method) === -1) {
           throw new FST_ERR_ROUTE_METHOD_INVALID();
         }
         const alreadyExists = this[kSupportedHTTPMethods].bodyless.has(method) || this[kSupportedHTTPMethods].bodywith.has(method);
@@ -38663,17 +38663,17 @@ var require_fastify = __commonJS({
       let body, errorCode, errorStatus, errorLabel;
       if (err.code === "ERR_HTTP_REQUEST_TIMEOUT") {
         errorCode = "408";
-        errorStatus = http.STATUS_CODES[errorCode];
+        errorStatus = http2.STATUS_CODES[errorCode];
         body = `{"error":"${errorStatus}","message":"Client Timeout","statusCode":408}`;
         errorLabel = "timeout";
       } else if (err.code === "HPE_HEADER_OVERFLOW") {
         errorCode = "431";
-        errorStatus = http.STATUS_CODES[errorCode];
+        errorStatus = http2.STATUS_CODES[errorCode];
         body = `{"error":"${errorStatus}","message":"Exceeded maximum allowed HTTP header size","statusCode":431}`;
         errorLabel = "header_overflow";
       } else {
         errorCode = "400";
-        errorStatus = http.STATUS_CODES[errorCode];
+        errorStatus = http2.STATUS_CODES[errorCode];
         body = `{"error":"${errorStatus}","message":"Client Error","statusCode":400}`;
         errorLabel = "error";
       }
@@ -81884,7 +81884,7 @@ function matchLabelValue(section, labelPattern) {
   const match = labelPattern.exec(section);
   if (!match?.[1]) return "";
   const val = blank(match[1].replace(/^[:\s-]+/, "").trim());
-  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a|redacted|withheld)/i.test(val)) {
+  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a)/i.test(val) || /\b(redacted|withheld)\b|\*{3,}/i.test(val)) {
     return "";
   }
   return val;
@@ -82081,6 +82081,8 @@ function recordsToCsv(rows) {
 
 // ../api/src/ingest/enrich.ts
 import { createHash as createHash2 } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 
 // ../api/src/ingest/directoryData.ts
 var VERIFIED_PRACTICES = [
@@ -92237,7 +92239,7 @@ function findApplicationFormPdfUrls(html, baseUrl) {
 }
 var portalCache = /* @__PURE__ */ new Map();
 var domainPhoneCache = /* @__PURE__ */ new Map();
-function extractCookies(response, existing = "") {
+function mergeCookies(setCookieHeaders, existing = "") {
   const map2 = /* @__PURE__ */ new Map();
   if (existing) {
     for (const part of existing.split(";")) {
@@ -92245,9 +92247,7 @@ function extractCookies(response, existing = "") {
       if (eqIdx > 0) map2.set(part.slice(0, eqIdx).trim(), part.slice(eqIdx + 1).trim());
     }
   }
-  const headersWithSetCookie = response.headers;
-  const rawList = typeof headersWithSetCookie.getSetCookie === "function" ? headersWithSetCookie.getSetCookie() : (response.headers.get("set-cookie") ?? "").split(/,(?=\s*[A-Za-z0-9_-]+=)/);
-  for (const raw of rawList) {
+  for (const raw of setCookieHeaders) {
     const firstPair = raw.split(";")[0]?.trim() ?? "";
     const eqIdx = firstPair.indexOf("=");
     if (eqIdx > 0) {
@@ -92256,62 +92256,117 @@ function extractCookies(response, existing = "") {
   }
   return [...map2.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
-async function fetchHtmlWithSession(url2, options) {
-  const controller = new AbortController();
-  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2500);
-  try {
+function requestBufferWithSession(targetUrl, options) {
+  const timeoutMs = options?.timeoutMs ?? 6e3;
+  const maxBytes = options?.maxBytes ?? 45e5;
+  const redirectsLeft = options?.redirectsLeft ?? 4;
+  return new Promise((resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      resolve({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
+      return;
+    }
     const headers = {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Accept: options?.accept ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-GB,en;q=0.9",
       "User-Agent": PLANIT_USER_AGENT
     };
     if (options?.cookie) headers.Cookie = options.cookie;
     if (options?.referer) headers.Referer = options.referer;
-    const response = await fetch(url2, {
-      headers,
-      signal: controller.signal,
-      redirect: "follow"
+    const isHttps = parsed.protocol === "https:";
+    const client = isHttps ? https : http;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const req = client.get(
+      parsed,
+      {
+        headers,
+        ...isHttps ? { rejectUnauthorized: false } : {},
+        timeout: timeoutMs
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const setCookie = Array.isArray(res.headers["set-cookie"]) ? res.headers["set-cookie"] : res.headers["set-cookie"] ? [String(res.headers["set-cookie"])] : [];
+        const cookie = mergeCookies(setCookie, options?.cookie);
+        if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          try {
+            const nextUrl = new URL(res.headers.location, parsed).toString();
+            void requestBufferWithSession(nextUrl, {
+              ...options,
+              cookie,
+              redirectsLeft: redirectsLeft - 1
+            }).then(finish);
+            return;
+          } catch {
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+            return;
+          }
+        }
+        const contentLength = Number(res.headers["content-length"] || 0);
+        if (contentLength > maxBytes) {
+          res.destroy();
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+          return;
+        }
+        const chunks = [];
+        let total = 0;
+        res.on("data", (chunk) => {
+          total += chunk.length;
+          if (total > maxBytes) {
+            res.destroy();
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          finish({ status, buffer: Buffer.concat(chunks), cookie });
+        });
+        res.on("error", () => {
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+        });
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
     });
-    const cookie = extractCookies(response, options?.cookie);
-    if (!response.ok) return { html: "", cookie };
-    const html = await response.text();
-    return { html, cookie };
-  } catch {
-    return { html: "", cookie: options?.cookie ?? "" };
-  } finally {
-    clearTimeout(timer2);
+    req.on("error", () => {
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
+    });
+  });
+}
+async function fetchHtmlWithSession(url2, options) {
+  const res = await requestBufferWithSession(url2, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    timeoutMs: options?.timeoutMs ?? 6e3,
+    maxBytes: 15e5
+  });
+  if (res.status < 200 || res.status >= 300 || res.buffer.length === 0) {
+    return { html: "", cookie: res.cookie };
   }
+  return { html: res.buffer.toString("utf8"), cookie: res.cookie };
 }
 async function fetchPdfBufferWithSession(url2, options) {
-  const controller = new AbortController();
-  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3500);
-  try {
-    const headers = {
-      Accept: "application/pdf,application/octet-stream,*/*",
-      "User-Agent": PLANIT_USER_AGENT
-    };
-    if (options?.cookie) headers.Cookie = options.cookie;
-    if (options?.referer) headers.Referer = options.referer;
-    const response = await fetch(url2, {
-      headers,
-      signal: controller.signal,
-      redirect: "follow"
-    });
-    if (!response.ok) return null;
-    const maxBytes = options?.maxBytes ?? 45e5;
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    if (contentLength > maxBytes) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    if (arrayBuffer.byteLength > maxBytes || arrayBuffer.byteLength < 16) return null;
-    const buf = Buffer.from(arrayBuffer);
-    const head = buf.subarray(0, 32).toString("latin1");
-    if (!head.includes("%PDF-")) return null;
-    return buf;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer2);
-  }
+  const res = await requestBufferWithSession(url2, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    accept: "application/pdf,application/octet-stream,*/*",
+    timeoutMs: options?.timeoutMs ?? 7e3,
+    maxBytes: options?.maxBytes ?? 45e5
+  });
+  if (res.status < 200 || res.status >= 300 || res.buffer.length < 16) return null;
+  const head = res.buffer.subarray(0, 32).toString("latin1");
+  if (!head.includes("%PDF-")) return null;
+  return res.buffer;
 }
 function mergeScraped(target, source) {
   if (source.agentName && !target.agentName) target.agentName = source.agentName;
@@ -92343,7 +92398,8 @@ async function scrapeCouncilPortal(portalUrl, options) {
   const job = (async () => {
     const merged = {};
     const isIdox = parsedUrl.pathname.includes("applicationDetails.do") && parsedUrl.searchParams.has("keyVal");
-    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: 2500 });
+    const stepTimeout = options?.force ? 7500 : 5500;
+    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: stepTimeout });
     let sessionCookie = entry.cookie;
     if (entry.html) {
       mergeScraped(merged, parsePortalHtmlContacts(entry.html));
@@ -92358,9 +92414,9 @@ async function scrapeCouncilPortal(portalUrl, options) {
       const docsUrl = new URL(parsedUrl.toString());
       docsUrl.searchParams.set("activeTab", "documents");
       const [detailsRes, contactsRes, docsRes] = await Promise.all([
-        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 })
+        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout })
       ]);
       sessionCookie = docsRes.cookie || detailsRes.cookie || contactsRes.cookie || sessionCookie;
       if (detailsRes.html) mergeScraped(merged, parsePortalHtmlContacts(detailsRes.html));
@@ -92370,14 +92426,14 @@ async function scrapeCouncilPortal(portalUrl, options) {
         documentsBaseUrl = docsUrl.toString();
       }
     }
-    const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (!merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
+    const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (options?.force || !merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
     if (shouldDownloadPdf) {
       const pdfUrls = findApplicationFormPdfUrls(documentsHtml, documentsBaseUrl);
       for (const pdfUrl of pdfUrls.slice(0, 2)) {
         const pdfBuf = await fetchPdfBufferWithSession(pdfUrl, {
           cookie: sessionCookie,
           referer: documentsBaseUrl,
-          timeoutMs: 3500
+          timeoutMs: options?.force ? 8500 : 6500
         });
         if (!pdfBuf) continue;
         const pdfText = extractTextFromPdfBuffer(pdfBuf);

@@ -267,7 +267,10 @@ function matchLabelValue(section: string, labelPattern: RegExp): string {
   const match = labelPattern.exec(section)
   if (!match?.[1]) return ''
   const val = blank(match[1].replace(/^[:\s-]+/, '').trim())
-  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a|redacted|withheld)/i.test(val)) {
+  if (
+    /^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a)/i.test(val) ||
+    /\b(redacted|withheld)\b|\*{3,}/i.test(val)
+  ) {
     return ''
   }
   return val

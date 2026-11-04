@@ -22118,7 +22118,7 @@ function matchLabelValue(section, labelPattern) {
   const match = labelPattern.exec(section);
   if (!match?.[1]) return "";
   const val = blank(match[1].replace(/^[:\s-]+/, "").trim());
-  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a|redacted|withheld)/i.test(val)) {
+  if (/^(title|first name|last name|surname|company name|address|line 1|line 2|line 3|town|city|postcode|country|telephone|primary number|secondary number|mobile|fax|email|agent|applicant|none|n\/a)/i.test(val) || /\b(redacted|withheld)\b|\*{3,}/i.test(val)) {
     return "";
   }
   return val;
@@ -22384,6 +22384,8 @@ async function notifyNewLeads(inserted, titles) {
 
 // ../api/src/ingest/enrich.ts
 import { createHash } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 
 // ../api/src/ingest/directoryData.ts
 var VERIFIED_PRACTICES = [
@@ -32540,7 +32542,7 @@ function findApplicationFormPdfUrls(html, baseUrl) {
 }
 var portalCache = /* @__PURE__ */ new Map();
 var domainPhoneCache = /* @__PURE__ */ new Map();
-function extractCookies(response, existing = "") {
+function mergeCookies(setCookieHeaders, existing = "") {
   const map = /* @__PURE__ */ new Map();
   if (existing) {
     for (const part of existing.split(";")) {
@@ -32548,9 +32550,7 @@ function extractCookies(response, existing = "") {
       if (eqIdx > 0) map.set(part.slice(0, eqIdx).trim(), part.slice(eqIdx + 1).trim());
     }
   }
-  const headersWithSetCookie = response.headers;
-  const rawList = typeof headersWithSetCookie.getSetCookie === "function" ? headersWithSetCookie.getSetCookie() : (response.headers.get("set-cookie") ?? "").split(/,(?=\s*[A-Za-z0-9_-]+=)/);
-  for (const raw of rawList) {
+  for (const raw of setCookieHeaders) {
     const firstPair = raw.split(";")[0]?.trim() ?? "";
     const eqIdx = firstPair.indexOf("=");
     if (eqIdx > 0) {
@@ -32559,62 +32559,117 @@ function extractCookies(response, existing = "") {
   }
   return [...map.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
-async function fetchHtmlWithSession(url, options) {
-  const controller = new AbortController();
-  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 2500);
-  try {
+function requestBufferWithSession(targetUrl, options) {
+  const timeoutMs = options?.timeoutMs ?? 6e3;
+  const maxBytes = options?.maxBytes ?? 45e5;
+  const redirectsLeft = options?.redirectsLeft ?? 4;
+  return new Promise((resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      resolve({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
+      return;
+    }
     const headers = {
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      Accept: options?.accept ?? "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-GB,en;q=0.9",
       "User-Agent": PLANIT_USER_AGENT
     };
     if (options?.cookie) headers.Cookie = options.cookie;
     if (options?.referer) headers.Referer = options.referer;
-    const response = await fetch(url, {
-      headers,
-      signal: controller.signal,
-      redirect: "follow"
+    const isHttps = parsed.protocol === "https:";
+    const client = isHttps ? https : http;
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    const req = client.get(
+      parsed,
+      {
+        headers,
+        ...isHttps ? { rejectUnauthorized: false } : {},
+        timeout: timeoutMs
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const setCookie = Array.isArray(res.headers["set-cookie"]) ? res.headers["set-cookie"] : res.headers["set-cookie"] ? [String(res.headers["set-cookie"])] : [];
+        const cookie = mergeCookies(setCookie, options?.cookie);
+        if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
+          res.resume();
+          try {
+            const nextUrl = new URL(res.headers.location, parsed).toString();
+            void requestBufferWithSession(nextUrl, {
+              ...options,
+              cookie,
+              redirectsLeft: redirectsLeft - 1
+            }).then(finish);
+            return;
+          } catch {
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+            return;
+          }
+        }
+        const contentLength = Number(res.headers["content-length"] || 0);
+        if (contentLength > maxBytes) {
+          res.destroy();
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+          return;
+        }
+        const chunks = [];
+        let total = 0;
+        res.on("data", (chunk) => {
+          total += chunk.length;
+          if (total > maxBytes) {
+            res.destroy();
+            finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on("end", () => {
+          finish({ status, buffer: Buffer.concat(chunks), cookie });
+        });
+        res.on("error", () => {
+          finish({ status: 0, buffer: Buffer.alloc(0), cookie });
+        });
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy();
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
     });
-    const cookie = extractCookies(response, options?.cookie);
-    if (!response.ok) return { html: "", cookie };
-    const html = await response.text();
-    return { html, cookie };
-  } catch {
-    return { html: "", cookie: options?.cookie ?? "" };
-  } finally {
-    clearTimeout(timer2);
+    req.on("error", () => {
+      finish({ status: 0, buffer: Buffer.alloc(0), cookie: options?.cookie ?? "" });
+    });
+  });
+}
+async function fetchHtmlWithSession(url, options) {
+  const res = await requestBufferWithSession(url, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    timeoutMs: options?.timeoutMs ?? 6e3,
+    maxBytes: 15e5
+  });
+  if (res.status < 200 || res.status >= 300 || res.buffer.length === 0) {
+    return { html: "", cookie: res.cookie };
   }
+  return { html: res.buffer.toString("utf8"), cookie: res.cookie };
 }
 async function fetchPdfBufferWithSession(url, options) {
-  const controller = new AbortController();
-  const timer2 = setTimeout(() => controller.abort(), options?.timeoutMs ?? 3500);
-  try {
-    const headers = {
-      Accept: "application/pdf,application/octet-stream,*/*",
-      "User-Agent": PLANIT_USER_AGENT
-    };
-    if (options?.cookie) headers.Cookie = options.cookie;
-    if (options?.referer) headers.Referer = options.referer;
-    const response = await fetch(url, {
-      headers,
-      signal: controller.signal,
-      redirect: "follow"
-    });
-    if (!response.ok) return null;
-    const maxBytes = options?.maxBytes ?? 45e5;
-    const contentLength = Number(response.headers.get("content-length") || 0);
-    if (contentLength > maxBytes) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    if (arrayBuffer.byteLength > maxBytes || arrayBuffer.byteLength < 16) return null;
-    const buf = Buffer.from(arrayBuffer);
-    const head = buf.subarray(0, 32).toString("latin1");
-    if (!head.includes("%PDF-")) return null;
-    return buf;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer2);
-  }
+  const res = await requestBufferWithSession(url, {
+    cookie: options?.cookie,
+    referer: options?.referer,
+    accept: "application/pdf,application/octet-stream,*/*",
+    timeoutMs: options?.timeoutMs ?? 7e3,
+    maxBytes: options?.maxBytes ?? 45e5
+  });
+  if (res.status < 200 || res.status >= 300 || res.buffer.length < 16) return null;
+  const head = res.buffer.subarray(0, 32).toString("latin1");
+  if (!head.includes("%PDF-")) return null;
+  return res.buffer;
 }
 function mergeScraped(target, source) {
   if (source.agentName && !target.agentName) target.agentName = source.agentName;
@@ -32646,7 +32701,8 @@ async function scrapeCouncilPortal(portalUrl, options) {
   const job = (async () => {
     const merged = {};
     const isIdox = parsedUrl.pathname.includes("applicationDetails.do") && parsedUrl.searchParams.has("keyVal");
-    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: 2500 });
+    const stepTimeout = options?.force ? 7500 : 5500;
+    const entry = await fetchHtmlWithSession(parsedUrl.toString(), { timeoutMs: stepTimeout });
     let sessionCookie = entry.cookie;
     if (entry.html) {
       mergeScraped(merged, parsePortalHtmlContacts(entry.html));
@@ -32661,9 +32717,9 @@ async function scrapeCouncilPortal(portalUrl, options) {
       const docsUrl = new URL(parsedUrl.toString());
       docsUrl.searchParams.set("activeTab", "documents");
       const [detailsRes, contactsRes, docsRes] = await Promise.all([
-        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 }),
-        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: 2500 })
+        fetchHtmlWithSession(detailsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(contactsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout }),
+        fetchHtmlWithSession(docsUrl.toString(), { cookie: sessionCookie, referer: parsedUrl.toString(), timeoutMs: stepTimeout })
       ]);
       sessionCookie = docsRes.cookie || detailsRes.cookie || contactsRes.cookie || sessionCookie;
       if (detailsRes.html) mergeScraped(merged, parsePortalHtmlContacts(detailsRes.html));
@@ -32673,14 +32729,14 @@ async function scrapeCouncilPortal(portalUrl, options) {
         documentsBaseUrl = docsUrl.toString();
       }
     }
-    const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (!merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
+    const shouldDownloadPdf = options?.downloadPdf !== false && Boolean(documentsHtml) && (options?.force || !merged.agentPhone || !merged.agentEmail || !merged.agentName || !merged.agentCompany);
     if (shouldDownloadPdf) {
       const pdfUrls = findApplicationFormPdfUrls(documentsHtml, documentsBaseUrl);
       for (const pdfUrl of pdfUrls.slice(0, 2)) {
         const pdfBuf = await fetchPdfBufferWithSession(pdfUrl, {
           cookie: sessionCookie,
           referer: documentsBaseUrl,
-          timeoutMs: 3500
+          timeoutMs: options?.force ? 8500 : 6500
         });
         if (!pdfBuf) continue;
         const pdfText = extractTextFromPdfBuffer(pdfBuf);
