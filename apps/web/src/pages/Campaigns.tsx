@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import type { Scheme } from '@planningpal/shared'
 import { EmptyState, LoadingBlock } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
-import { api, type Campaign } from '../lib/api'
+import { api, type Campaign, type ContactGroup } from '../lib/api'
 import { notify } from '../lib/notify'
 
 function presentStatus(status: string) {
@@ -42,7 +43,19 @@ function parseLeadLines(raw: string) {
   return results
 }
 
-export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrite = true }: { settingsOpen: boolean; setSettingsOpen: (open: boolean) => void; createSignal: number; canWrite?: boolean }) {
+export function Campaigns({
+  settingsOpen,
+  setSettingsOpen,
+  createSignal,
+  canWrite = true,
+  data = [],
+}: {
+  settingsOpen: boolean
+  setSettingsOpen: (open: boolean) => void
+  createSignal: number
+  canWrite?: boolean
+  data?: Scheme[]
+}) {
   const [campaigns, setCampaigns] = useState<(Campaign & { status: string })[]>([])
   const [editor, setEditor] = useState<number | null>(null)
   const [campaignName, setCampaignName] = useState('')
@@ -59,18 +72,61 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
   const [trackingDomain, setTrackingDomain] = useState('click.micraft-pipeline.co.uk')
   const [leadText, setLeadText] = useState('')
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
+
+  // Contact addition sub-modes
+  const [contactMode, setContactMode] = useState<'group' | 'schemes' | 'csv'>('group')
+  const [contactGroups, setContactGroups] = useState<ContactGroup[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<string>('')
+  const [isSubmittingLeads, setIsSubmittingLeads] = useState(false)
+  const [schemeSearch, setSchemeSearch] = useState('')
+  const [selectedSchemeEmails, setSelectedSchemeEmails] = useState<Set<string>>(new Set())
+
   useEffect(() => {
-    void Promise.all([api.campaigns(), api.domains(), api.campaignSettings()]).then(([campaignRows, domainRows, settings]) => {
-      setCampaigns(campaignRows.data.map((campaign) => ({ ...campaign, status: presentStatus(campaign.status) })))
-      setDomains(domainRows.data)
-      setDailyLimit(settings.dailyLimit)
-      setWarmup(settings.warmup)
-      setTrackingDomain(settings.trackingDomain)
-      setLoadState('ready')
-    }).catch(() => setLoadState('error'))
+    void Promise.all([api.campaigns(), api.domains(), api.campaignSettings(), api.contactGroups().catch(() => ({ data: [] }))])
+      .then(([campaignRows, domainRows, settings, groupsRes]) => {
+        setCampaigns(campaignRows.data.map((campaign) => ({ ...campaign, status: presentStatus(campaign.status) })))
+        setDomains(domainRows.data)
+        setDailyLimit(settings.dailyLimit)
+        setWarmup(settings.warmup)
+        setTrackingDomain(settings.trackingDomain)
+        setContactGroups(groupsRes.data)
+        if (groupsRes.data.length > 0) {
+          setSelectedGroupId(groupsRes.data[0].id)
+        }
+        setLoadState('ready')
+      })
+      .catch(() => setLoadState('error'))
   }, [])
+
   const lookalikeDomains = ['micraft-design.co.uk', 'micraft-studio.co.uk', 'get-micraftdesign.co.uk', 'micraft-projects.com']
   const activeInboxes = domains.reduce((total, domain) => total + domain.inboxes, 0)
+
+  // Extract unique contacts from schemes
+  const schemeContacts = useMemo(() => {
+    const map = new Map<string, { email: string; name: string; practice: string; schemeTitle: string; council: string }>()
+    for (const item of data) {
+      const email = item.email?.trim().toLowerCase()
+      if (email && email.includes('@') && !map.has(email)) {
+        map.set(email, {
+          email,
+          name: item.architect && item.architect !== 'Contact not published' ? item.architect : item.applicant || 'Contact',
+          practice: item.practice || '',
+          schemeTitle: item.title || '',
+          council: item.council || '',
+        })
+      }
+    }
+    return Array.from(map.values())
+  }, [data])
+
+  const filteredSchemeContacts = useMemo(() => {
+    if (!schemeSearch.trim()) return schemeContacts.slice(0, 50)
+    const q = schemeSearch.toLowerCase()
+    return schemeContacts
+      .filter((c) => c.name.toLowerCase().includes(q) || c.practice.toLowerCase().includes(q) || c.email.toLowerCase().includes(q) || c.council.toLowerCase().includes(q))
+      .slice(0, 50)
+  }, [schemeContacts, schemeSearch])
+
   const openEditor = (index: number) => {
     setEditor(index)
     setCampaignName(index >= 0 ? campaigns[index].name : '')
@@ -81,7 +137,17 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       setDelayDays(2)
       setStopOnReply(true)
     }
+    setLeadText('')
+    setSelectedSchemeEmails(new Set())
+    // Refresh contact groups when opening campaign editor
+    void api.contactGroups().then((res) => {
+      setContactGroups(res.data)
+      if (res.data.length > 0 && !selectedGroupId) {
+        setSelectedGroupId(res.data[0].id)
+      }
+    }).catch(() => {})
   }
+
   const saveCampaign = () => {
     if (!canWrite || !campaignName.trim()) return
     const payload = {
@@ -92,11 +158,8 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       delayDays,
       stopOnReply,
     }
-    const persist = editor === -1
-      ? api.createCampaign(payload)
-      : editor !== null ? api.updateCampaign(campaigns[editor].id, payload) : Promise.resolve(null)
-    void persist.then((saved) => {
-      if (!saved) return
+    const action = editor === -1 ? api.createCampaign(payload) : api.updateCampaign(campaigns[editor!].id, payload)
+    void action.then((saved) => {
       const next = { ...saved, status: presentStatus(saved.status) }
       if (editor === -1) setCampaigns((items) => [...items, next])
       else setCampaigns((items) => items.map((item, index) => index === editor ? next : item))
@@ -104,6 +167,77 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       setEditor(null)
     }).catch(() => notify('Could not save the campaign'))
   }
+
+  const handleAddCsvLeads = async () => {
+    if (editor === null || editor < 0) return
+    const campaign = campaigns[editor]
+    if (!campaign) return
+    const leads = parseLeadLines(leadText)
+    if (!leads.length) {
+      notify('Please enter or paste at least one valid email address.')
+      return
+    }
+    setIsSubmittingLeads(true)
+    try {
+      const result = await api.addCampaignLeads(campaign.id, leads)
+      setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...item, contacts: item.contacts + result.added } : item))
+      notify(`${result.added} contact${result.added === 1 ? '' : 's'} added to campaign!`)
+      setLeadText('')
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : 'Could not add contacts to campaign')
+    } finally {
+      setIsSubmittingLeads(false)
+    }
+  }
+
+  const handleImportGroup = async () => {
+    if (editor === null || editor < 0 || !selectedGroupId) return
+    const campaign = campaigns[editor]
+    if (!campaign) return
+    setIsSubmittingLeads(true)
+    try {
+      const result = await api.importGroupToCampaign(campaign.id, selectedGroupId)
+      setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...item, contacts: item.contacts + result.added } : item))
+      notify(`${result.added} contact${result.added === 1 ? '' : 's'} imported from "${result.groupName}"!`)
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : 'Could not import contact group')
+    } finally {
+      setIsSubmittingLeads(false)
+    }
+  }
+
+  const handleAddSelectedSchemeContacts = async () => {
+    if (editor === null || editor < 0) return
+    const campaign = campaigns[editor]
+    if (!campaign || selectedSchemeEmails.size === 0) {
+      notify('Please select at least one contact.')
+      return
+    }
+    const selectedLeads = schemeContacts
+      .filter((c) => selectedSchemeEmails.has(c.email))
+      .map((c) => {
+        const parts = c.name.split(' ')
+        return {
+          email: c.email,
+          firstName: parts[0] || undefined,
+          lastName: parts.slice(1).join(' ') || undefined,
+          company: c.practice || undefined,
+          title: 'Planning Contact',
+        }
+      })
+    setIsSubmittingLeads(true)
+    try {
+      const result = await api.addCampaignLeads(campaign.id, selectedLeads)
+      setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...item, contacts: item.contacts + result.added } : item))
+      notify(`${result.added} contact${result.added === 1 ? '' : 's'} from PlanningPal added to campaign!`)
+      setSelectedSchemeEmails(new Set())
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : 'Could not add contacts')
+    } finally {
+      setIsSubmittingLeads(false)
+    }
+  }
+
   const addOwnedDomain = (event: FormEvent) => {
     event.preventDefault()
     const domain = ownedDomain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')
@@ -115,6 +249,7 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       notify(`${domain} added for DNS verification`)
     }).catch(() => notify('Could not add that domain'))
   }
+
   const buyDomain = (domain: string) => {
     void api.addDomain({ name: domain, inboxes: 0, health: 'Setup', status: 'Provisioning' }).then((created) => {
       setDomains((items) => [...items, created])
@@ -122,12 +257,16 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
       notify(`${domain} purchased and provisioning started`)
     }).catch(() => notify('Could not provision that domain'))
   }
+
   const lastCreateSignal = useRef(createSignal)
   useEffect(() => {
     if (!canWrite || lastCreateSignal.current === createSignal) return
     lastCreateSignal.current = createSignal
     openEditor(-1)
   }, [createSignal])
+
+  const parsedCsvCount = useMemo(() => parseLeadLines(leadText).length, [leadText])
+
   return (
     <>
       <PageIntro eyebrow="PlanningPal Campaigns" title="Campaigns" description="Coordinate RIBA-timed outreach through the PlanningPal campaign engine, across isolated sending domains." />
@@ -198,18 +337,180 @@ export function Campaigns({ settingsOpen, setSettingsOpen, createSignal, canWrit
             <button type="button" onClick={() => setStopOnReply((enabled) => !enabled)} className={`flex items-center justify-between rounded-lg p-2.5 text-left ${stopOnReply ? 'bg-[#ECFDF5] text-[#047857]' : 'bg-[#F1F5F9] text-[#64748B]'}`}><div><div className="text-[8px] font-bold uppercase tracking-wider">Stop on reply</div><div className="mt-1 text-[8px] opacity-75">Pause sequence when prospect replies</div></div><span className="text-[8px] font-bold">{stopOnReply ? 'ON' : 'OFF'}</span></button>
           </div>
           <div className="mt-3 rounded-lg bg-[#F8FAFD] px-3 py-2 text-[8px] text-[#64748B]">Schedule: Weekdays 09:00–17:00 UK time · {dailyLimit}/day per inbox · Open & link tracking enabled</div>
-          {editor !== null && editor >= 0 && <label className="mt-4 block text-[9px] font-bold uppercase tracking-wider text-[#64748B]">Add contacts (email or CSV: email, firstName, lastName, company, title)<textarea value={leadText} onChange={(event) => setLeadText(event.target.value)} rows={3} className="mt-2 w-full resize-none rounded-lg border border-[#DCE4F0] p-3 text-[10px] font-normal normal-case tracking-normal outline-none" placeholder="maya@studio.co.uk, Maya, Patel, Northbank Studio, Project Architect" /></label>}
-          {editor !== null && editor >= 0 && <button type="button" onClick={() => {
-            const leads = parseLeadLines(leadText)
-            const campaign = campaigns[editor]
-            if (!campaign || !leads.length) return
-            void api.addCampaignLeads(campaign.id, leads).then((result) => {
-              setCampaigns((items) => items.map((item) => item.id === campaign.id ? { ...item, contacts: item.contacts + result.added } : item))
-              notify(`${result.added} contact${result.added === 1 ? '' : 's'} added`)
-              setLeadText('')
-            }).catch((error: unknown) => notify(error instanceof Error ? error.message : 'Could not add contacts'))
-          }} className="mt-2.5 w-full rounded-lg border border-[#DCE4F0] py-2.5 text-[9px] font-semibold text-[#172554]">Add contacts to this campaign</button>}
-          <div className="mt-5 flex gap-3"><button type="button" onClick={() => setEditor(null)} className="flex-1 rounded-lg border border-[#DCE4F0] py-3 text-[9px] font-semibold text-[#64748B]">Cancel</button><button type="submit" className="flex-1 rounded-lg bg-[#172554] py-3 text-[9px] font-semibold text-white">{editor === -1 ? 'Create campaign' : 'Save changes'}</button></div>
+
+          {/* Add Contacts Section */}
+          {editor !== null && editor >= 0 && (
+            <div className="mt-5 rounded-xl border border-[#DCE4F0] bg-[#FAFBFD] p-4">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2.5">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-[#172554]">Add contacts to campaign</span>
+                <div className="flex rounded-lg border border-[#DCE4F0] bg-white p-0.5 text-[8px]">
+                  <button
+                    type="button"
+                    onClick={() => setContactMode('group')}
+                    className={`rounded px-2.5 py-1 font-semibold ${contactMode === 'group' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+                  >
+                    From Group
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContactMode('schemes')}
+                    className={`rounded px-2.5 py-1 font-semibold ${contactMode === 'schemes' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+                  >
+                    PlanningPal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContactMode('csv')}
+                    className={`rounded px-2.5 py-1 font-semibold ${contactMode === 'csv' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+                  >
+                    CSV / Text
+                  </button>
+                </div>
+              </div>
+
+              {contactMode === 'group' && (
+                <div className="mt-3">
+                  <div className="text-[8px] text-[#64748B]">Select an organized contact group to add in bulk:</div>
+                  {contactGroups.length === 0 ? (
+                    <div className="mt-2 rounded-lg border border-dashed border-[#CBD5E1] p-3 text-center text-[9px] text-[#94A3B8]">
+                      No contact groups created yet. You can create groups in the Contacts tab or import via CSV/Schemes.
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex flex-col gap-2">
+                      <select
+                        value={selectedGroupId}
+                        onChange={(e) => setSelectedGroupId(e.target.value)}
+                        className="w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2 text-[10px] text-[#1E293B] outline-none"
+                      >
+                        {contactGroups.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name} ({group.memberCount} contact{group.memberCount === 1 ? '' : 's'})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={isSubmittingLeads || !selectedGroupId}
+                        onClick={handleImportGroup}
+                        className="mt-1 flex items-center justify-center gap-1.5 rounded-lg bg-[#172554] py-2.5 text-[9px] font-semibold text-white disabled:opacity-50"
+                      >
+                        {isSubmittingLeads ? 'Importing contacts...' : 'Import group contacts into campaign'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {contactMode === 'schemes' && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-[8px] text-[#64748B]">
+                    <span>Select contacts from approved schemes ({schemeContacts.length} found):</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedSchemeEmails.size === filteredSchemeContacts.length) {
+                          setSelectedSchemeEmails(new Set())
+                        } else {
+                          setSelectedSchemeEmails(new Set(filteredSchemeContacts.map((c) => c.email)))
+                        }
+                      }}
+                      className="text-[#2563EB] hover:underline"
+                    >
+                      {selectedSchemeEmails.size === filteredSchemeContacts.length ? 'Deselect all' : 'Select all shown'}
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={schemeSearch}
+                    onChange={(e) => setSchemeSearch(e.target.value)}
+                    placeholder="Search by architect, firm, email or council..."
+                    className="mt-1.5 w-full rounded border border-[#DCE4F0] bg-white px-2.5 py-1.5 text-[9px] outline-none"
+                  />
+                  <div className="mt-2 max-h-36 overflow-y-auto rounded border border-[#E2E8F0] bg-white">
+                    {filteredSchemeContacts.length === 0 ? (
+                      <div className="p-3 text-center text-[8px] text-[#94A3B8]">No contacts match your search.</div>
+                    ) : (
+                      filteredSchemeContacts.map((contact) => {
+                        const isChecked = selectedSchemeEmails.has(contact.email)
+                        return (
+                          <label
+                            key={contact.email}
+                            className={`flex cursor-pointer items-center justify-between border-b border-[#F1F5F9] px-2.5 py-1.5 text-[9px] hover:bg-[#F8FAFD] ${isChecked ? 'bg-[#EFF6FF]' : ''}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => {
+                                  setSelectedSchemeEmails((prev) => {
+                                    const next = new Set(prev)
+                                    if (next.has(contact.email)) next.delete(contact.email)
+                                    else next.add(contact.email)
+                                    return next
+                                  })
+                                }}
+                                className="h-3.5 w-3.5 rounded border-[#CBD5E1] text-[#2563EB]"
+                              />
+                              <div>
+                                <div className="font-semibold text-[#1E293B]">{contact.name}</div>
+                                <div className="text-[8px] text-[#64748B]">{contact.practice || contact.email} {contact.council ? `· ${contact.council}` : ''}</div>
+                              </div>
+                            </div>
+                            <span className="text-[8px] text-[#94A3B8]">{contact.email}</span>
+                          </label>
+                        )
+                      })
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isSubmittingLeads || selectedSchemeEmails.size === 0}
+                    onClick={handleAddSelectedSchemeContacts}
+                    className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white disabled:opacity-50"
+                  >
+                    {isSubmittingLeads ? 'Adding contacts...' : `Add ${selectedSchemeEmails.size} selected contact${selectedSchemeEmails.size === 1 ? '' : 's'}`}
+                  </button>
+                </div>
+              )}
+
+              {contactMode === 'csv' && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between text-[8px] text-[#64748B]">
+                    <span>Paste emails or CSV rows: email, firstName, lastName, company, title</span>
+                    {parsedCsvCount > 0 && (
+                      <span className="rounded bg-[#ECFDF5] px-1.5 py-0.5 font-bold text-[#15803D]">
+                        {parsedCsvCount} valid email{parsedCsvCount === 1 ? '' : 's'} detected
+                      </span>
+                    )}
+                  </div>
+                  <textarea
+                    value={leadText}
+                    onChange={(event) => setLeadText(event.target.value)}
+                    rows={3}
+                    className="mt-1.5 w-full resize-none rounded-lg border border-[#DCE4F0] bg-white p-2.5 text-[10px] font-normal normal-case tracking-normal outline-none focus:border-[#2563EB]"
+                    placeholder="maya@studio.co.uk, Maya, Patel, Northbank Studio, Project Architect"
+                  />
+                  <button
+                    type="button"
+                    disabled={isSubmittingLeads}
+                    onClick={handleAddCsvLeads}
+                    className="mt-2 w-full rounded-lg border border-[#172554] bg-[#172554] py-2.5 text-[9px] font-semibold text-white transition hover:bg-[#1E3A8A] disabled:opacity-50"
+                  >
+                    {isSubmittingLeads ? 'Adding contacts...' : 'Add contacts to this campaign'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-5 flex gap-3">
+            <button type="button" onClick={() => setEditor(null)} className="flex-1 rounded-lg border border-[#DCE4F0] py-3 text-[9px] font-semibold text-[#64748B]">
+              Cancel
+            </button>
+            <button type="submit" className="flex-1 rounded-lg bg-[#172554] py-3 text-[9px] font-semibold text-white">
+              {editor === -1 ? 'Create campaign' : 'Save changes'}
+            </button>
+          </div>
         </form>
       </div>}
     </>

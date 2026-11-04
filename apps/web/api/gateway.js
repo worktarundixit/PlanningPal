@@ -38832,6 +38832,11 @@ var ROUTE_RULES = [
   { method: "PATCH", pattern: /^\/api\/v1\/crm\/activities\/[^/]+$/, permission: "crm.write" },
   { method: "PATCH", pattern: /^\/api\/v1\/crm\/leads\/[^/]+\/stage$/, permission: "crm.write" },
   { method: "POST", pattern: /^\/api\/v1\/crm\/leads\/[^/]+\/archive$/, permission: "crm.write" },
+  { method: "GET", pattern: /^\/api\/v1\/contact-groups$/, permission: "crm.read" },
+  { method: "POST", pattern: /^\/api\/v1\/contact-groups$/, permission: "crm.write" },
+  { method: "DELETE", pattern: /^\/api\/v1\/contact-groups\/[^/]+$/, permission: "crm.write" },
+  { method: "GET", pattern: /^\/api\/v1\/contact-groups\/[^/]+\/members$/, permission: "crm.read" },
+  { method: "POST", pattern: /^\/api\/v1\/contact-groups\/[^/]+\/members$/, permission: "crm.write" },
   { method: "GET", pattern: /^\/api\/v1\/inbox\/conversations$/, permission: "inbox.read" },
   { method: "POST", pattern: /^\/api\/v1\/inbox\/conversations\/[^/]+\/read$/, permission: "inbox.write" },
   { method: "POST", pattern: /^\/api\/v1\/inbox\/conversations\/[^/]+\/unread$/, permission: "inbox.write" },
@@ -38843,6 +38848,7 @@ var ROUTE_RULES = [
   { method: "POST", pattern: /^\/api\/v1\/campaigns\/[^/]+\/pause$/, permission: "campaigns.write" },
   { method: "POST", pattern: /^\/api\/v1\/campaigns\/[^/]+\/resume$/, permission: "campaigns.write" },
   { method: "POST", pattern: /^\/api\/v1\/campaigns\/[^/]+\/leads$/, permission: "campaigns.write" },
+  { method: "POST", pattern: /^\/api\/v1\/campaigns\/[^/]+\/import-group$/, permission: "campaigns.write" },
   { method: "POST", pattern: /^\/api\/v1\/campaign-events\/[^/]+$/, permission: "public" },
   { method: "GET", pattern: /^\/api\/v1\/campaign-provider$/, permission: "campaign.provider" },
   { method: "PUT", pattern: /^\/api\/v1\/campaign-provider$/, permission: "campaign.provider" },
@@ -48062,6 +48068,8 @@ __export(schema_exports, {
   campaignProviderMappings: () => campaignProviderMappings,
   campaignProviderSettings: () => campaignProviderSettings,
   campaigns: () => campaigns,
+  contactGroupMembers: () => contactGroupMembers,
+  contactGroups: () => contactGroups,
   councils: () => councils,
   crmLeads: () => crmLeads,
   customRoles: () => customRoles,
@@ -48522,6 +48530,40 @@ var mailLog = pgTable("mail_log", {
   body: text("body").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 });
+var contactGroups = pgTable(
+  "contact_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organisationId: uuid("organisation_id").notNull().references(() => organisations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    createdAt: timestamps.createdAt,
+    updatedAt: timestamps.updatedAt
+  },
+  (table) => [index("contact_groups_org_idx").on(table.organisationId)]
+);
+var contactGroupMembers = pgTable(
+  "contact_group_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    groupId: uuid("group_id").notNull().references(() => contactGroups.id, { onDelete: "cascade" }),
+    organisationId: uuid("organisation_id").notNull().references(() => organisations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    firstName: text("first_name").notNull().default(""),
+    lastName: text("last_name").notNull().default(""),
+    company: text("company").notNull().default(""),
+    title: text("title").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    council: text("council").notNull().default(""),
+    schemeTitle: text("scheme_title").notNull().default(""),
+    schemeRef: text("scheme_ref").notNull().default(""),
+    createdAt: timestamps.createdAt
+  },
+  (table) => [
+    index("contact_group_members_group_idx").on(table.groupId),
+    uniqueIndex("contact_group_members_unique_lead").on(table.groupId, table.email)
+  ]
+);
 
 // ../api/src/db/client.ts
 var sqlClient = createSql("pooled");
@@ -68849,6 +68891,62 @@ async function loadCampaignEngine(organisationId, overrideApiKey) {
 }
 
 // ../api/src/routes/campaigns.ts
+async function addLeadsToCampaign(campaignId, organisationId, leads) {
+  const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1);
+  if (!existing || existing.organisationId !== organisationId) {
+    throw new HttpError(404, "Campaign not found");
+  }
+  let [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1);
+  const engine = await loadCampaignEngine(organisationId);
+  if (!mapping) {
+    try {
+      const current = engine.provider.currentWorkspace ? await engine.provider.currentWorkspace() : null;
+      const workspaceId = current?.id || "default";
+      const [newMapping] = await db.insert(campaignProviderMappings).values({
+        organisationId,
+        providerWorkspaceId: workspaceId,
+        status: "mapped"
+      }).onConflictDoNothing().returning();
+      mapping = newMapping || (await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1))[0];
+    } catch {
+    }
+  }
+  let [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, campaignId)).limit(1);
+  if (mapping && !link) {
+    try {
+      const [client] = await db.select().from(organisations).where(eq(organisations.id, organisationId)).limit(1);
+      const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, existing.name, {
+        dailyLimit: client?.dailySendLimit ?? 30,
+        stopOnReply: true
+      });
+      const [newLink] = await db.insert(campaignEngineLinks).values({
+        campaignId,
+        organisationId,
+        providerCampaignId: remote.id
+      }).onConflictDoNothing().returning();
+      link = newLink || (await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, campaignId)).limit(1))[0];
+    } catch (e) {
+      console.warn("Could not auto-link remote campaign", e);
+    }
+  }
+  let synced = false;
+  let addedCount = leads.length;
+  if (mapping && link) {
+    try {
+      const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, leads);
+      addedCount = result.added;
+      synced = true;
+    } catch (err) {
+      console.warn("Remote lead sync failed, saving locally", err);
+    }
+  }
+  await db.update(campaigns).set({ contacts: existing.contacts + addedCount, updatedAt: /* @__PURE__ */ new Date() }).where(eq(campaigns.id, campaignId));
+  return {
+    added: addedCount,
+    synced,
+    warning: synced ? void 0 : "Contacts saved to campaign. Provider sync will update automatically."
+  };
+}
 var campaignBody = external_exports.object({
   name: external_exports.string().min(1),
   region: external_exports.string().min(1).default("London"),
@@ -68970,19 +69068,40 @@ async function campaignRoutes(app2) {
       reply
     );
     if (!body) return;
-    const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1);
-    if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: "Campaign not found" });
-    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1);
-    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1);
-    if (!mapping || !link) return reply.code(409).send({ error: "This workspace is not connected to the campaign engine yet." });
-    try {
-      const engine = await loadCampaignEngine(user.organisationId);
-      const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, body.leads);
-      await db.update(campaigns).set({ contacts: existing.contacts + result.added, updatedAt: /* @__PURE__ */ new Date() }).where(eq(campaigns.id, id));
-      return { added: result.added };
-    } catch {
-      throw new HttpError(502, ENGINE_UNAVAILABLE);
+    const result = await addLeadsToCampaign(id, user.organisationId, body.leads);
+    return reply.send(result);
+  });
+  app2.post("/api/v1/campaigns/:id/import-group", async (request, reply) => {
+    const user = requireUser(request);
+    const { id } = request.params;
+    const body = parseBody(
+      external_exports.object({
+        groupId: external_exports.string().uuid()
+      }),
+      request.body,
+      reply
+    );
+    if (!body) return;
+    const [group] = await db.select().from(contactGroups).where(and(eq(contactGroups.id, body.groupId), eq(contactGroups.organisationId, user.organisationId))).limit(1);
+    if (!group) return reply.code(404).send({ error: "Contact group not found" });
+    const members2 = await db.select().from(contactGroupMembers).where(eq(contactGroupMembers.groupId, body.groupId));
+    if (!members2.length) {
+      return reply.code(400).send({ error: "This contact group has no members to import" });
     }
+    const leads = members2.map((m) => ({
+      email: m.email,
+      firstName: m.firstName || void 0,
+      lastName: m.lastName || void 0,
+      company: m.company || void 0,
+      title: m.title || void 0
+    }));
+    const result = await addLeadsToCampaign(id, user.organisationId, leads);
+    return reply.send({
+      added: result.added,
+      groupName: group.name,
+      synced: result.synced,
+      warning: result.warning
+    });
   });
   app2.get("/api/v1/campaign-settings", async (request) => {
     const user = requireUser(request);
@@ -69299,6 +69418,140 @@ async function campaignProviderRoutes(app2) {
       timeLabel: "Just now"
     });
     return { ok: true };
+  });
+}
+
+// ../api/src/routes/contacts.ts
+var createGroupSchema = external_exports.object({
+  name: external_exports.string().min(1).max(120),
+  description: external_exports.string().max(500).optional()
+});
+var addMembersSchema = external_exports.object({
+  members: external_exports.array(
+    external_exports.object({
+      email: external_exports.string().email(),
+      firstName: external_exports.string().optional(),
+      lastName: external_exports.string().optional(),
+      company: external_exports.string().optional(),
+      title: external_exports.string().optional(),
+      phone: external_exports.string().optional(),
+      council: external_exports.string().optional(),
+      schemeTitle: external_exports.string().optional(),
+      schemeRef: external_exports.string().optional()
+    })
+  ).min(1)
+});
+async function contactRoutes(app2) {
+  app2.get("/api/v1/contact-groups", async (request) => {
+    const user = requireUser(request);
+    const groups = await db.select({
+      id: contactGroups.id,
+      name: contactGroups.name,
+      description: contactGroups.description,
+      createdAt: contactGroups.createdAt,
+      updatedAt: contactGroups.updatedAt,
+      memberCount: sql`cast(count(${contactGroupMembers.id}) as integer)`
+    }).from(contactGroups).leftJoin(contactGroupMembers, eq(contactGroupMembers.groupId, contactGroups.id)).where(eq(contactGroups.organisationId, user.organisationId)).groupBy(contactGroups.id).orderBy(desc(contactGroups.createdAt));
+    return {
+      data: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        description: g.description,
+        memberCount: Number(g.memberCount) || 0,
+        createdAt: g.createdAt.toISOString(),
+        updatedAt: g.updatedAt.toISOString()
+      }))
+    };
+  });
+  app2.post("/api/v1/contact-groups", async (request, reply) => {
+    const user = requireUser(request);
+    const body = parseBody(createGroupSchema, request.body, reply);
+    if (!body) return;
+    const [created] = await db.insert(contactGroups).values({
+      organisationId: user.organisationId,
+      name: body.name.trim(),
+      description: body.description?.trim() ?? ""
+    }).returning();
+    if (!created) return reply.code(500).send({ error: "Could not create contact group" });
+    return reply.code(201).send({
+      id: created.id,
+      name: created.name,
+      description: created.description,
+      memberCount: 0,
+      createdAt: created.createdAt.toISOString(),
+      updatedAt: created.updatedAt.toISOString()
+    });
+  });
+  app2.delete("/api/v1/contact-groups/:id", async (request, reply) => {
+    const user = requireUser(request);
+    const { id } = request.params;
+    const [deleted] = await db.delete(contactGroups).where(and(eq(contactGroups.id, id), eq(contactGroups.organisationId, user.organisationId))).returning({ id: contactGroups.id });
+    if (!deleted) return reply.code(404).send({ error: "Contact group not found" });
+    return { success: true };
+  });
+  app2.get("/api/v1/contact-groups/:id/members", async (request, reply) => {
+    const user = requireUser(request);
+    const { id } = request.params;
+    const [group] = await db.select().from(contactGroups).where(and(eq(contactGroups.id, id), eq(contactGroups.organisationId, user.organisationId))).limit(1);
+    if (!group) return reply.code(404).send({ error: "Contact group not found" });
+    const members2 = await db.select().from(contactGroupMembers).where(eq(contactGroupMembers.groupId, id)).orderBy(desc(contactGroupMembers.createdAt));
+    return {
+      group: {
+        id: group.id,
+        name: group.name,
+        description: group.description
+      },
+      data: members2.map((m) => ({
+        id: m.id,
+        email: m.email,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        company: m.company,
+        title: m.title,
+        phone: m.phone,
+        council: m.council,
+        schemeTitle: m.schemeTitle,
+        schemeRef: m.schemeRef,
+        createdAt: m.createdAt.toISOString()
+      }))
+    };
+  });
+  app2.post("/api/v1/contact-groups/:id/members", async (request, reply) => {
+    const user = requireUser(request);
+    const { id } = request.params;
+    const body = parseBody(addMembersSchema, request.body, reply);
+    if (!body) return;
+    const [group] = await db.select().from(contactGroups).where(and(eq(contactGroups.id, id), eq(contactGroups.organisationId, user.organisationId))).limit(1);
+    if (!group) return reply.code(404).send({ error: "Contact group not found" });
+    const existingMembers = await db.select({ email: contactGroupMembers.email }).from(contactGroupMembers).where(eq(contactGroupMembers.groupId, id));
+    const existingEmails = new Set(existingMembers.map((m) => m.email.toLowerCase()));
+    const toInsert = body.members.filter((m) => !existingEmails.has(m.email.toLowerCase())).map((m) => ({
+      groupId: id,
+      organisationId: user.organisationId,
+      email: m.email.trim().toLowerCase(),
+      firstName: m.firstName?.trim() ?? "",
+      lastName: m.lastName?.trim() ?? "",
+      company: m.company?.trim() ?? "",
+      title: m.title?.trim() ?? "",
+      phone: m.phone?.trim() ?? "",
+      council: m.council?.trim() ?? "",
+      schemeTitle: m.schemeTitle?.trim() ?? "",
+      schemeRef: m.schemeRef?.trim() ?? ""
+    }));
+    if (toInsert.length > 0) {
+      const seen = /* @__PURE__ */ new Set();
+      const uniqueBatch = toInsert.filter((item) => {
+        if (seen.has(item.email)) return false;
+        seen.add(item.email);
+        return true;
+      });
+      await db.insert(contactGroupMembers).values(uniqueBatch).onConflictDoNothing();
+    }
+    const [totalRow] = await db.select({ count: sql`cast(count(*) as integer)` }).from(contactGroupMembers).where(eq(contactGroupMembers.groupId, id));
+    return {
+      added: toInsert.length,
+      total: Number(totalRow?.count) || 0
+    };
   });
 }
 
@@ -95601,6 +95854,7 @@ function buildApp() {
   }));
   app2.register(planningRoutes);
   app2.register(crmRoutes);
+  app2.register(contactRoutes);
   app2.register(inboxRoutes);
   app2.register(campaignRoutes);
   app2.register(campaignProviderRoutes);

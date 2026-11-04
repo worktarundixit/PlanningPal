@@ -3,6 +3,7 @@ import type { Scheme } from '@planningpal/shared'
 import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
+import { api, type Campaign, type ContactGroup } from '../lib/api'
 import { exportSchemes, notify } from '../lib/notify'
 
 export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, canExport = true, canCampaign = true, onNavigate }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; canExport?: boolean; canCampaign?: boolean; onNavigate?: (screen: string) => void }) {
@@ -20,6 +21,17 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
   const [sortKey, setSortKey] = useState<'title' | 'category' | 'council' | 'value' | 'stage' | 'contact' | 'score'>('score')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // Campaign & Contact Group modal state
+  const [campaignModalOpen, setCampaignModalOpen] = useState(false)
+  const [campaignsList, setCampaignsList] = useState<Campaign[]>([])
+  const [contactGroupsList, setContactGroupsList] = useState<ContactGroup[]>([])
+  const [targetCampaignId, setTargetCampaignId] = useState('')
+  const [modalMode, setModalMode] = useState<'campaign' | 'new_group' | 'existing_group'>('campaign')
+  const [targetGroupId, setTargetGroupId] = useState('')
+  const [newGroupName, setNewGroupName] = useState('')
+  const [newGroupDescription, setNewGroupDescription] = useState('')
+  const [isSubmittingToCampaign, setIsSubmittingToCampaign] = useState(false)
 
   const filteredResults = useMemo(() => {
     return data.filter((scheme) => {
@@ -70,6 +82,112 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
   const bulkSave = () => {
     selectedIds.filter((id) => !saved.includes(id)).forEach(onSave)
     notify(`${selectedIds.length} schemes saved`)
+  }
+
+  const extractedContacts = useMemo(() => {
+    const list: Array<{
+      email: string
+      firstName: string
+      lastName: string
+      company: string
+      title: string
+      phone: string
+      council: string
+      schemeTitle: string
+      schemeRef: string
+    }> = []
+    const seen = new Set<string>()
+    for (const scheme of selectedSchemes) {
+      const email = scheme.email?.trim().toLowerCase()
+      if (email && email.includes('@') && !seen.has(email)) {
+        seen.add(email)
+        const rawName = scheme.architect && scheme.architect !== 'Contact not published' ? scheme.architect : scheme.applicant || ''
+        const parts = rawName.split(' ')
+        list.push({
+          email,
+          firstName: parts[0] || '',
+          lastName: parts.slice(1).join(' ') || '',
+          company: scheme.practice || '',
+          title: 'Planning Contact',
+          phone: scheme.phone || '',
+          council: scheme.council || '',
+          schemeTitle: scheme.title || '',
+          schemeRef: scheme.id || '',
+        })
+      }
+    }
+    return list
+  }, [selectedSchemes])
+
+  const openCampaignModal = async () => {
+    if (selectedIds.length === 0) return
+    setIsSubmittingToCampaign(true)
+    try {
+      const [campaignsRes, groupsRes] = await Promise.all([
+        api.campaigns(),
+        api.contactGroups().catch(() => ({ data: [] })),
+      ])
+      setCampaignsList(campaignsRes.data)
+      setContactGroupsList(groupsRes.data)
+      if (campaignsRes.data.length > 0) setTargetCampaignId(campaignsRes.data[0].id)
+      if (groupsRes.data.length > 0) setTargetGroupId(groupsRes.data[0].id)
+      setNewGroupName(`Selected Approved Schemes (${new Date().toLocaleDateString('en-GB')})`)
+      setCampaignModalOpen(true)
+    } catch {
+      notify('Could not load campaigns or groups')
+    } finally {
+      setIsSubmittingToCampaign(false)
+    }
+  }
+
+  const handleExecuteCampaignOrGroup = async () => {
+    if (extractedContacts.length === 0) {
+      notify('No valid contact emails found in the selected schemes.')
+      return
+    }
+    setIsSubmittingToCampaign(true)
+    try {
+      if (modalMode === 'campaign') {
+        if (!targetCampaignId) {
+          notify('Please select a campaign')
+          return
+        }
+        const leads = extractedContacts.map((c) => ({
+          email: c.email,
+          firstName: c.firstName || undefined,
+          lastName: c.lastName || undefined,
+          company: c.company || undefined,
+          title: c.title || undefined,
+        }))
+        const result = await api.addCampaignLeads(targetCampaignId, leads)
+        notify(`${result.added} contact${result.added === 1 ? '' : 's'} added to campaign!`)
+      } else if (modalMode === 'existing_group') {
+        if (!targetGroupId) {
+          notify('Please select a contact group')
+          return
+        }
+        const result = await api.addContactGroupMembers(targetGroupId, extractedContacts)
+        const group = contactGroupsList.find((g) => g.id === targetGroupId)
+        notify(`Added ${result.added} contact${result.added === 1 ? '' : 's'} to "${group?.name || 'group'}"!`)
+      } else if (modalMode === 'new_group') {
+        if (!newGroupName.trim()) {
+          notify('Please enter a group name')
+          return
+        }
+        const created = await api.createContactGroup({
+          name: newGroupName.trim(),
+          description: newGroupDescription.trim(),
+        })
+        const result = await api.addContactGroupMembers(created.id, extractedContacts)
+        notify(`Created group "${created.name}" with ${result.added} contact${result.added === 1 ? '' : 's'}!`)
+      }
+      setSelectedIds([])
+      setCampaignModalOpen(false)
+    } catch (err: unknown) {
+      notify(err instanceof Error ? err.message : 'Action failed')
+    } finally {
+      setIsSubmittingToCampaign(false)
+    }
   }
   const sortColumn = (key: typeof sortKey) => {
     if (sortKey === key) setSortDirection((direction) => direction === 'asc' ? 'desc' : 'asc')
@@ -136,7 +254,7 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
         {selectedIds.length > 0 && <div className="flex flex-wrap items-center gap-2 border-b border-[#BFDBFE] bg-[#EFF6FF] px-5 py-3">
           <div className="mr-auto flex items-center gap-2 text-[10px] font-semibold text-[#1D4ED8]"><span className="grid h-5 min-w-5 place-items-center rounded-full bg-[#2563EB] px-1 text-[8px] text-white">{selectedIds.length}</span> selected</div>
           <button disabled={!canSave} onClick={bulkSave} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm disabled:cursor-not-allowed disabled:opacity-40"><Icon name="building" size={11} /> Save</button>
-          <button disabled={!canCampaign} onClick={() => { notify(`${selectedIds.length} schemes added to a campaign draft`); setSelectedIds([]) }} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm disabled:cursor-not-allowed disabled:opacity-40"><Icon name="send" size={11} /> Add to campaign</button>
+          <button disabled={!canCampaign || isSubmittingToCampaign} onClick={openCampaignModal} className="flex items-center gap-1.5 rounded-md bg-white px-3 py-2 text-[8px] font-semibold text-[#52627A] shadow-sm disabled:cursor-not-allowed disabled:opacity-40"><Icon name="send" size={11} /> {isSubmittingToCampaign ? 'Loading...' : 'Add to campaign / group'}</button>
           <button disabled={!canExport} onClick={() => exportSchemes(selectedSchemes)} className="flex items-center gap-1.5 rounded-md bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Icon name="download" size={11} /> Export</button>
           <button onClick={() => setSelectedIds([])} className="grid h-7 w-7 place-items-center rounded-md text-[#64748B] hover:bg-white" aria-label="Clear selection"><Icon name="close" size={12} /></button>
         </div>}
@@ -170,6 +288,141 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
         </div>
         <div className="flex items-center justify-between border-t border-[#E8EDF5] px-5 py-4 text-[9px] text-[#94A3B8]"><span>Showing {(currentPage - 1) * pageSize + (results.length ? 1 : 0)}–{(currentPage - 1) * pageSize + results.length} of {filteredResults.length}</span><div className="flex gap-1.5"><button disabled={currentPage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="grid h-8 min-w-8 place-items-center rounded-md border border-[#E2E8F0] px-2 text-[#64748B] disabled:opacity-30">‹</button>{Array.from({ length: Math.min(totalPages, 5) }, (_, index) => index + 1).map((pageNumber) => <button key={pageNumber} onClick={() => setPage(pageNumber)} className={`grid h-8 min-w-8 place-items-center rounded-md px-2 ${pageNumber === currentPage ? 'bg-[#172554] text-white' : 'border border-[#E2E8F0] text-[#64748B]'}`}>{pageNumber}</button>)}<button disabled={currentPage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))} className="grid h-8 min-w-8 place-items-center rounded-md border border-[#E2E8F0] px-2 text-[#64748B] disabled:opacity-30">›</button></div></div>
       </div>
+
+      {/* Add to Campaign or Group Modal */}
+      {campaignModalOpen && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-[#0F172A]/55 p-4" onMouseDown={() => setCampaignModalOpen(false)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">Lead Outreach & Contact Groups</div>
+                <h3 className="mt-1 font-display text-lg font-semibold">
+                  Add {extractedContacts.length} Contact{extractedContacts.length === 1 ? '' : 's'} from {selectedIds.length} Schemes
+                </h3>
+                <p className="mt-1 text-[8px] text-[#64748B]">
+                  Direct and verified decision-maker emails found across your selected planning applications.
+                </p>
+              </div>
+              <button onClick={() => setCampaignModalOpen(false)} className="text-[#94A3B8]">
+                <Icon name="close" size={14} />
+              </button>
+            </div>
+
+            <div className="mt-4 flex rounded-lg border border-[#DCE4F0] bg-[#F8FAFD] p-1">
+              <button
+                type="button"
+                onClick={() => setModalMode('campaign')}
+                className={`flex-1 rounded-md py-1.5 text-[9px] font-semibold transition ${modalMode === 'campaign' ? 'bg-[#172554] text-white shadow-sm' : 'text-[#64748B]'}`}
+              >
+                Add to Campaign
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalMode('new_group')}
+                className={`flex-1 rounded-md py-1.5 text-[9px] font-semibold transition ${modalMode === 'new_group' ? 'bg-[#172554] text-white shadow-sm' : 'text-[#64748B]'}`}
+              >
+                Create New Group
+              </button>
+              {contactGroupsList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setModalMode('existing_group')}
+                  className={`flex-1 rounded-md py-1.5 text-[9px] font-semibold transition ${modalMode === 'existing_group' ? 'bg-[#172554] text-white shadow-sm' : 'text-[#64748B]'}`}
+                >
+                  Add to Group
+                </button>
+              )}
+            </div>
+
+            {modalMode === 'campaign' && (
+              <div className="mt-4">
+                {campaignsList.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-[#CBD5E1] p-4 text-center text-[9px] text-[#64748B]">
+                    No campaigns created yet. Please create a campaign in the Campaigns screen first.
+                  </div>
+                ) : (
+                  <label className="block text-[8px] font-bold uppercase text-[#64748B]">
+                    Choose Campaign
+                    <select
+                      value={targetCampaignId}
+                      onChange={(e) => setTargetCampaignId(e.target.value)}
+                      className="mt-1.5 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2 text-[10px] outline-none"
+                    >
+                      {campaignsList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.contacts} contacts · {c.status})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
+
+            {modalMode === 'new_group' && (
+              <div className="mt-4 flex flex-col gap-3">
+                <label className="block text-[8px] font-bold uppercase text-[#64748B]">
+                  Group Name
+                  <input
+                    type="text"
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    placeholder="e.g. Southwark Approved Schemes Nov 2026"
+                    className="mt-1 w-full rounded-lg border border-[#DCE4F0] px-3 py-2 text-[10px] outline-none"
+                  />
+                </label>
+                <label className="block text-[8px] font-bold uppercase text-[#64748B]">
+                  Description (optional)
+                  <input
+                    type="text"
+                    value={newGroupDescription}
+                    onChange={(e) => setNewGroupDescription(e.target.value)}
+                    placeholder="e.g. Architect and agent contacts from recent explorer search"
+                    className="mt-1 w-full rounded-lg border border-[#DCE4F0] px-3 py-2 text-[10px] outline-none"
+                  />
+                </label>
+              </div>
+            )}
+
+            {modalMode === 'existing_group' && (
+              <div className="mt-4">
+                <label className="block text-[8px] font-bold uppercase text-[#64748B]">
+                  Choose Contact Group
+                  <select
+                    value={targetGroupId}
+                    onChange={(e) => setTargetGroupId(e.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-[#DCE4F0] bg-white px-3 py-2 text-[10px] outline-none"
+                  >
+                    {contactGroupsList.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} ({g.memberCount} members)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setCampaignModalOpen(false)}
+                className="flex-1 rounded-lg border border-[#DCE4F0] py-2 text-[9px] font-semibold text-[#64748B]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingToCampaign || extractedContacts.length === 0}
+                onClick={handleExecuteCampaignOrGroup}
+                className="flex-1 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white disabled:opacity-50 hover:bg-[#1E3A8A]"
+              >
+                {isSubmittingToCampaign ? 'Saving...' : modalMode === 'campaign' ? 'Add to Campaign' : 'Save to Group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

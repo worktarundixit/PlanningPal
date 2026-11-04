@@ -65,7 +65,7 @@ export function WorkspaceView({ active, data, crmTab, setCrmTab, setInboxUnread,
       )}
       {visited.has('Campaigns') && (
         <div className={active === 'Campaigns' ? '' : 'hidden'}>
-          <Campaigns settingsOpen={campaignSettingsOpen} setSettingsOpen={setCampaignSettingsOpen} createSignal={campaignCreateSignal} canWrite={canCampaign} />
+          <Campaigns settingsOpen={campaignSettingsOpen} setSettingsOpen={setCampaignSettingsOpen} createSignal={campaignCreateSignal} canWrite={canCampaign} data={data} />
         </div>
       )}
       {visited.has('CRM & intent') && (

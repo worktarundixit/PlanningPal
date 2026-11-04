@@ -180,6 +180,29 @@ export type Campaign = {
   meetings: number
 }
 
+export type ContactGroup = {
+  id: string
+  name: string
+  description: string
+  memberCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type ContactGroupMember = {
+  id: string
+  email: string
+  firstName: string
+  lastName: string
+  company: string
+  title: string
+  phone: string
+  council: string
+  schemeTitle: string
+  schemeRef: string
+  createdAt: string
+}
+
 export type Domain = { id: string; name: string; inboxes: number; health: string; status: string }
 
 export type SessionProfile = UserProfile & {
@@ -324,7 +347,33 @@ export const api = {
   saveCampaignMapping: (body: { organisationId: string; providerWorkspaceId: string; trackingDomain: string; workspaceApiKey?: string }) =>
     request<CampaignMapping>('/api/v1/campaign-provider/mappings', { method: 'PUT', body: JSON.stringify(body) }),
   addCampaignLeads: (id: string, leads: { email: string; firstName?: string; lastName?: string; company?: string; title?: string }[]) =>
-    request<{ added: number }>(`/api/v1/campaigns/${id}/leads`, { method: 'POST', body: JSON.stringify({ leads }) }),
+    request<{ added: number; synced?: boolean; warning?: string }>(`/api/v1/campaigns/${id}/leads`, { method: 'POST', body: JSON.stringify({ leads }) }),
+  contactGroups: () => request<{ data: ContactGroup[] }>('/api/v1/contact-groups'),
+  createContactGroup: (body: { name: string; description?: string }) =>
+    request<ContactGroup>('/api/v1/contact-groups', { method: 'POST', body: JSON.stringify(body) }),
+  deleteContactGroup: (id: string) => request<{ success: boolean }>(`/api/v1/contact-groups/${id}`, { method: 'DELETE' }),
+  contactGroupMembers: (id: string) =>
+    request<{ group: { id: string; name: string; description: string }; data: ContactGroupMember[] }>(`/api/v1/contact-groups/${id}/members`),
+  addContactGroupMembers: (
+    id: string,
+    members: Array<{
+      email: string
+      firstName?: string
+      lastName?: string
+      company?: string
+      title?: string
+      phone?: string
+      council?: string
+      schemeTitle?: string
+      schemeRef?: string
+    }>,
+  ) =>
+    request<{ added: number; total: number }>(`/api/v1/contact-groups/${id}/members`, { method: 'POST', body: JSON.stringify({ members }) }),
+  importGroupToCampaign: (campaignId: string, groupId: string) =>
+    request<{ added: number; groupName: string; synced?: boolean; warning?: string }>(`/api/v1/campaigns/${campaignId}/import-group`, {
+      method: 'POST',
+      body: JSON.stringify({ groupId }),
+    }),
   ingestRuns: () => request<{ data: IngestRun[] }>('/api/v1/ingest/runs'),
   startIngest: (body: { recent?: number; from?: string; to?: string; authority?: string; maxPages?: number; source?: 'planit' | 'london-datahub' | 'auto' }) =>
     request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),

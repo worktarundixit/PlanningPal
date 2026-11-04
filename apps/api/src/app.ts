@@ -5,6 +5,7 @@ import { HttpError } from './lib/http.ts'
 import { allowRequest } from './lib/rateLimit.ts'
 import { campaignRoutes } from './routes/campaigns.ts'
 import { campaignProviderRoutes } from './routes/campaignProvider.ts'
+import { contactRoutes } from './routes/contacts.ts'
 import { crmRoutes } from './routes/crm.ts'
 import { inboxRoutes } from './routes/inbox.ts'
 import { planningRoutes } from './routes/planning.ts'
@@ -127,6 +128,7 @@ export function buildApp(): FastifyInstance {
 
   app.register(planningRoutes)
   app.register(crmRoutes)
+  app.register(contactRoutes)
   app.register(inboxRoutes)
   app.register(campaignRoutes)
   app.register(campaignProviderRoutes)

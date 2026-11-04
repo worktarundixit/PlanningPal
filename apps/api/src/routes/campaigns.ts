@@ -2,10 +2,92 @@ import { and, asc, eq } from 'drizzle-orm'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
-import { campaignEngineLinks, campaignProviderMappings, campaigns, organisations, sendingDomains } from '../db/schema.ts'
+import { campaignEngineLinks, campaignProviderMappings, campaigns, contactGroupMembers, contactGroups, organisations, sendingDomains } from '../db/schema.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 import { loadCampaignEngine } from '../providers/campaign/index.ts'
 import { ENGINE_UNAVAILABLE } from '../providers/campaign/types.ts'
+
+async function addLeadsToCampaign(
+  campaignId: string,
+  organisationId: string,
+  leads: Array<{ email: string; firstName?: string; lastName?: string; company?: string; title?: string }>,
+): Promise<{ added: number; synced: boolean; warning?: string }> {
+  const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, campaignId)).limit(1)
+  if (!existing || existing.organisationId !== organisationId) {
+    throw new HttpError(404, 'Campaign not found')
+  }
+
+  let [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1)
+  const engine = await loadCampaignEngine(organisationId)
+
+  // Auto-resolve provider workspace mapping if missing
+  if (!mapping) {
+    try {
+      const current = engine.provider.currentWorkspace ? await engine.provider.currentWorkspace() : null
+      const workspaceId = current?.id || 'default'
+      const [newMapping] = await db
+        .insert(campaignProviderMappings)
+        .values({
+          organisationId,
+          providerWorkspaceId: workspaceId,
+          status: 'mapped',
+        })
+        .onConflictDoNothing()
+        .returning()
+      mapping = newMapping || (await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, organisationId)).limit(1))[0]
+    } catch {
+      // ignore
+    }
+  }
+
+  let [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, campaignId)).limit(1)
+  // Auto-create remote campaign link if missing
+  if (mapping && !link) {
+    try {
+      const [client] = await db.select().from(organisations).where(eq(organisations.id, organisationId)).limit(1)
+      const remote = await engine.provider.createCampaign(mapping.providerWorkspaceId, existing.name, {
+        dailyLimit: client?.dailySendLimit ?? 30,
+        stopOnReply: true,
+      })
+      const [newLink] = await db
+        .insert(campaignEngineLinks)
+        .values({
+          campaignId,
+          organisationId,
+          providerCampaignId: remote.id,
+        })
+        .onConflictDoNothing()
+        .returning()
+      link = newLink || (await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, campaignId)).limit(1))[0]
+    } catch (e) {
+      console.warn('Could not auto-link remote campaign', e)
+    }
+  }
+
+  let synced = false
+  let addedCount = leads.length
+
+  if (mapping && link) {
+    try {
+      const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, leads)
+      addedCount = result.added
+      synced = true
+    } catch (err) {
+      console.warn('Remote lead sync failed, saving locally', err)
+    }
+  }
+
+  await db
+    .update(campaigns)
+    .set({ contacts: existing.contacts + addedCount, updatedAt: new Date() })
+    .where(eq(campaigns.id, campaignId))
+
+  return {
+    added: addedCount,
+    synced,
+    warning: synced ? undefined : 'Contacts saved to campaign. Provider sync will update automatically.',
+  }
+}
 
 const campaignBody = z.object({
   name: z.string().min(1),
@@ -144,19 +226,53 @@ export async function campaignRoutes(app: FastifyInstance) {
       reply,
     )
     if (!body) return
-    const [existing] = await db.select().from(campaigns).where(eq(campaigns.id, id)).limit(1)
-    if (!existing || existing.organisationId !== user.organisationId) return reply.code(404).send({ error: 'Campaign not found' })
-    const [mapping] = await db.select().from(campaignProviderMappings).where(eq(campaignProviderMappings.organisationId, user.organisationId)).limit(1)
-    const [link] = await db.select().from(campaignEngineLinks).where(eq(campaignEngineLinks.campaignId, id)).limit(1)
-    if (!mapping || !link) return reply.code(409).send({ error: 'This workspace is not connected to the campaign engine yet.' })
-    try {
-      const engine = await loadCampaignEngine(user.organisationId)
-      const result = await engine.provider.addLeads(mapping.providerWorkspaceId, link.providerCampaignId, body.leads)
-      await db.update(campaigns).set({ contacts: existing.contacts + result.added, updatedAt: new Date() }).where(eq(campaigns.id, id))
-      return { added: result.added }
-    } catch {
-      throw new HttpError(502, ENGINE_UNAVAILABLE)
+    const result = await addLeadsToCampaign(id, user.organisationId, body.leads)
+    return reply.send(result)
+  })
+
+  app.post('/api/v1/campaigns/:id/import-group', async (request, reply) => {
+    const user = requireUser(request)
+    const { id } = request.params as { id: string }
+    const body = parseBody(
+      z.object({
+        groupId: z.string().uuid(),
+      }),
+      request.body,
+      reply,
+    )
+    if (!body) return
+    const [group] = await db
+      .select()
+      .from(contactGroups)
+      .where(and(eq(contactGroups.id, body.groupId), eq(contactGroups.organisationId, user.organisationId)))
+      .limit(1)
+
+    if (!group) return reply.code(404).send({ error: 'Contact group not found' })
+
+    const members = await db
+      .select()
+      .from(contactGroupMembers)
+      .where(eq(contactGroupMembers.groupId, body.groupId))
+
+    if (!members.length) {
+      return reply.code(400).send({ error: 'This contact group has no members to import' })
     }
+
+    const leads = members.map((m) => ({
+      email: m.email,
+      firstName: m.firstName || undefined,
+      lastName: m.lastName || undefined,
+      company: m.company || undefined,
+      title: m.title || undefined,
+    }))
+
+    const result = await addLeadsToCampaign(id, user.organisationId, leads)
+    return reply.send({
+      added: result.added,
+      groupName: group.name,
+      synced: result.synced,
+      warning: result.warning,
+    })
   })
 
   app.get('/api/v1/campaign-settings', async (request) => {

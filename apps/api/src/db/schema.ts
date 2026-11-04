@@ -529,3 +529,46 @@ export const mailLog = pgTable('mail_log', {
   body: text('body').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+export const contactGroups = pgTable(
+  'contact_groups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organisationId: uuid('organisation_id')
+      .notNull()
+      .references(() => organisations.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    createdAt: timestamps.createdAt,
+    updatedAt: timestamps.updatedAt,
+  },
+  (table) => [index('contact_groups_org_idx').on(table.organisationId)],
+)
+
+export const contactGroupMembers = pgTable(
+  'contact_group_members',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => contactGroups.id, { onDelete: 'cascade' }),
+    organisationId: uuid('organisation_id')
+      .notNull()
+      .references(() => organisations.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    firstName: text('first_name').notNull().default(''),
+    lastName: text('last_name').notNull().default(''),
+    company: text('company').notNull().default(''),
+    title: text('title').notNull().default(''),
+    phone: text('phone').notNull().default(''),
+    council: text('council').notNull().default(''),
+    schemeTitle: text('scheme_title').notNull().default(''),
+    schemeRef: text('scheme_ref').notNull().default(''),
+    createdAt: timestamps.createdAt,
+  },
+  (table) => [
+    index('contact_group_members_group_idx').on(table.groupId),
+    uniqueIndex('contact_group_members_unique_lead').on(table.groupId, table.email),
+  ],
+)
+
