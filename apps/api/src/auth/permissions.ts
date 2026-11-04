@@ -211,6 +211,7 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/ingest\/runs$/, permission: 'ingest.admin' },
   { method: 'GET', pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: 'ingest.admin' },
   { method: 'POST', pattern: /^\/api\/v1\/ingest\/runs$/, permission: 'ingest.admin' },
+  { method: 'POST', pattern: /^\/api\/v1\/ingest\/enrich$/, permission: 'ingest.admin' },
 ]
 
 export function permissionFor(method: string, url: string): Permission | 'public' | 'deny' {

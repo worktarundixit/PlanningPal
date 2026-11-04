@@ -38883,7 +38883,8 @@ var ROUTE_RULES = [
   { method: "GET", pattern: /^\/api\/v1\/lpas$/, permission: "settings.read" },
   { method: "GET", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" },
   { method: "GET", pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: "ingest.admin" },
-  { method: "POST", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" }
+  { method: "POST", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" },
+  { method: "POST", pattern: /^\/api\/v1\/ingest\/enrich$/, permission: "ingest.admin" }
 ];
 function permissionFor(method, url2) {
   const path2 = url2.split("?")[0] || url2;
@@ -81376,6 +81377,173 @@ function extractRecordContacts(record2) {
   };
 }
 
+// ../../packages/ingest/src/planit.ts
+var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; mailto:alerts@aecpipeline.co.uk; +https://aecpipeline.co.uk)";
+var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+var sharedLastRequestAt = 0;
+function parseRetryAfterMs(header, fallbackMs, maxWaitMs = 65e3, nowMs = Date.now()) {
+  if (!header) return Math.min(fallbackMs, maxWaitMs);
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(Math.max(1e3, Math.round(seconds * 1e3)), maxWaitMs);
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) {
+    const delta = dateMs - nowMs;
+    return Math.min(Math.max(1e3, delta), maxWaitMs);
+  }
+  return Math.min(fallbackMs, maxWaitMs);
+}
+function planItUrl(query, index2) {
+  const params = new URLSearchParams();
+  params.set("pg_sz", String(query.pageSize ?? 300));
+  params.set("index", String(index2));
+  params.set("compress", "on");
+  if (query.from) params.set("start_date", query.from);
+  if (query.to) params.set("end_date", query.to);
+  if (!query.from && !query.to && query.recentDays) params.set("recent", String(query.recentDays));
+  if (query.authority) params.set("auth", query.authority);
+  return `${ENDPOINT}?${params.toString()}`;
+}
+async function getJson(url2, fetchImpl, maxRetryWaitMs) {
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const response = await fetchImpl(url2, {
+        headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
+      });
+      if (response.status === 429) {
+        const retryAfter = response.headers?.get?.("retry-after") ?? null;
+        const waitMs = parseRetryAfterMs(retryAfter, 15e3 * 2 ** attempt, maxRetryWaitMs);
+        const err = new Error(`PlanIt responded 429${retryAfter ? ` (Retry-After: ${retryAfter}s)` : ""}`);
+        err.retryAfterMs = waitMs;
+        err.status = 429;
+        throw err;
+      }
+      if (response.status >= 500) {
+        throw new Error(`PlanIt responded ${response.status}`);
+      }
+      if (!response.ok) throw new Error(`PlanIt responded ${response.status}`);
+      return await response.json();
+    } catch (error62) {
+      lastError = error62;
+      if (attempt === 3) break;
+      const customWait = error62 instanceof Error && "retryAfterMs" in error62 && typeof error62.retryAfterMs === "number" ? error62.retryAfterMs : Math.min(1e3 * 2 ** attempt, maxRetryWaitMs);
+      await sleep(customWait);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("PlanIt request failed");
+}
+function createPlanItSource(options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const envInterval = process.env.PLANIT_MIN_INTERVAL_MS ? Number(process.env.PLANIT_MIN_INTERVAL_MS) : void 0;
+  const interval2 = options.minIntervalMs ?? (Number.isFinite(envInterval) ? envInterval : 2e3);
+  const maxRetryWaitMs = options.maxRetryWaitMs ?? 3e4;
+  const now = options.now ?? Date.now;
+  return {
+    id: "planit",
+    async *fetchPages(query) {
+      const pageSize = query.pageSize ?? 300;
+      const maxPages = query.maxPages ?? 40;
+      let index2 = 0;
+      let total = null;
+      for (let page = 0; page < maxPages; page += 1) {
+        const wait = interval2 - (now() - sharedLastRequestAt);
+        if (sharedLastRequestAt && wait > 0) await sleep(wait);
+        const url2 = planItUrl(query, index2);
+        sharedLastRequestAt = now();
+        const body = await getJson(url2, fetchImpl, maxRetryWaitMs);
+        const records = Array.isArray(body.records) ? body.records : [];
+        total = typeof body.total === "number" ? body.total : total;
+        const raw = { url: url2, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
+        yield raw;
+        if (records.length === 0) return;
+        index2 += records.length;
+        if (total !== null && index2 >= total) return;
+        if (records.length < pageSize) return;
+      }
+    }
+  };
+}
+
+// ../../packages/ingest/src/enrichIdox.ts
+function cleanCell(raw) {
+  if (!raw) return "";
+  const text3 = raw.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&#39;|&apos;/gi, "'").replace(/&quot;/gi, '"').replace(/\s+/g, " ").trim();
+  if (/^(not available|n\/a|none|see source|-|unknown)$/i.test(text3)) return "";
+  return text3;
+}
+function idoxDetailsUrl(portalUrl) {
+  if (!portalUrl || !/applicationDetails\.do/i.test(portalUrl)) return null;
+  try {
+    const parsed = new URL(portalUrl);
+    parsed.searchParams.set("activeTab", "details");
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+function parseIdoxDetailsHtml(html) {
+  const rows = /* @__PURE__ */ new Map();
+  const pattern = /<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/gi;
+  let match;
+  while ((match = pattern.exec(html)) !== null) {
+    const label = cleanCell(match[1]).toLowerCase();
+    const value = cleanCell(match[2]);
+    if (label && value) {
+      rows.set(label, value);
+    }
+  }
+  const get = (...keys) => {
+    for (const key of keys) {
+      const found = rows.get(key.toLowerCase());
+      if (found) return found;
+    }
+    return "";
+  };
+  return {
+    applicantName: get("applicant name", "applicant"),
+    applicantCompany: get("applicant company name", "company name"),
+    applicantAddress: get("applicant address"),
+    agentName: get("agent name", "agent"),
+    agentCompany: get("agent company name", "agent company"),
+    agentAddress: get("agent address"),
+    agentPhone: get("agent phone number", "phone number", "telephone number"),
+    agentEmail: get("agent email", "email", "email address")
+  };
+}
+async function fetchIdoxContacts(portalUrl, options = {}) {
+  const detailsUrl = idoxDetailsUrl(portalUrl);
+  if (!detailsUrl) return null;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer2 = setTimeout(() => controller.abort(), options.timeoutMs ?? 12e3);
+  try {
+    const response = await fetchImpl(detailsUrl, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": PLANIT_USER_AGENT
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const parsed = parseIdoxDetailsHtml(html);
+    const hasData = Boolean(
+      parsed.applicantName || parsed.applicantCompany || parsed.agentName || parsed.agentCompany || parsed.agentEmail
+    );
+    return hasData ? parsed : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer2);
+  }
+}
+
 // ../../packages/ingest/src/filter.ts
 var DEFAULT_FILTER = {
   dropTypes: ["Trees", "Conditions", "Advertising", "Telecoms", "Amendment"],
@@ -81553,6 +81721,181 @@ var AUTHORITIES = {
 function lookupAuthority(areaName) {
   const key = areaName.trim().toLowerCase().replace(/\s+/g, " ");
   return AUTHORITIES[key] ?? { name: areaName.trim(), county: "", region: "" };
+}
+
+// ../../packages/ingest/src/londonDatahub.ts
+var LONDON_DATAHUB_ENDPOINT = "https://planningdata.london.gov.uk/api-guest/applications/_search";
+var LONDON_ALLOW_HEADER = "be2rmRnt&";
+function parseUkDateToIso(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const slash = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slash?.[1] && slash[2] && slash[3]) {
+    const year = Number(slash[3]);
+    if (year < 2e3 || year > 2100) return null;
+    return `${slash[3]}-${slash[2]}-${slash[1]}`;
+  }
+  const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso?.[1] && iso[2] && iso[3]) {
+    const year = Number(iso[1]);
+    if (year < 2e3 || year > 2100) return null;
+    return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  }
+  return null;
+}
+function buildAddress(source) {
+  const parts = [
+    source.site_name ? String(source.site_name).trim() : "",
+    [source.site_number ? String(source.site_number).trim() : "", source.street_name ? String(source.street_name).trim() : ""].filter(Boolean).join(" "),
+    source.locality ? String(source.locality).trim() : "London",
+    source.postcode ? String(source.postcode).trim() : ""
+  ].filter(Boolean);
+  const deduped = [];
+  for (const part of parts) {
+    if (!deduped.some((existing) => existing.toLowerCase().includes(part.toLowerCase()))) {
+      deduped.push(part);
+    }
+  }
+  return deduped.join(", ");
+}
+function mapLondonDatahubHit(source) {
+  const area = (source.lpa_name || source.borough || "").replace(/^London Borough of\s+/i, "").trim();
+  const uid2 = (source.lpa_app_no || "").trim();
+  if (!area || !uid2) return null;
+  const details = source.application_details && typeof source.application_details === "object" ? source.application_details : {};
+  const applicant = String(
+    details.lead_developer_company_name ?? details.applicant_company ?? details.applicant_name ?? ""
+  ).trim();
+  const agentCompany = String(details.agent_company ?? details.agent_company_name ?? "").trim();
+  const agentName = String(details.agent_name ?? "").trim();
+  const agentAddress = String(details.agent_address ?? "").trim();
+  const startDate = parseUkDateToIso(source.valid_date) ?? (source.last_updated ? source.last_updated.slice(0, 10) : null);
+  const decidedDate = parseUkDateToIso(source.decision_date);
+  const state = (source.decision || source.status || "Undecided").trim();
+  const fullType = (source.application_type_full || source.application_type || "Full").trim();
+  const lat = typeof source.centroid?.lat === "number" ? source.centroid.lat : null;
+  const lon = typeof source.centroid?.lon === "number" ? source.centroid.lon : null;
+  return {
+    name: `${area}/${uid2}`,
+    uid: uid2,
+    reference: uid2,
+    area_name: area,
+    address: buildAddress(source),
+    postcode: source.postcode ? String(source.postcode).trim() : null,
+    description: source.description ?? "",
+    app_type: fullType,
+    app_size: String(details.development_scale ?? "Medium"),
+    app_state: state,
+    start_date: startDate,
+    decided_date: decidedDate,
+    url: source.url_planning_app ?? null,
+    link: source.url_planning_app ?? null,
+    last_different: source.last_updated ?? source.last_synced ?? null,
+    last_changed: source.last_updated ?? null,
+    location_x: lon,
+    location_y: lat,
+    other_fields: {
+      application_type: fullType,
+      date_validated: startDate ?? "",
+      applicant_name: applicant,
+      agent_name: agentName,
+      agent_company: agentCompany,
+      agent_address: agentAddress
+    }
+  };
+}
+function buildLondonDatahubBody(query, fromIndex) {
+  const size2 = Math.min(query.pageSize ?? 200, 500);
+  const must = [];
+  if (query.authority) {
+    must.push({
+      multi_match: {
+        query: query.authority,
+        fields: ["lpa_name", "borough"]
+      }
+    });
+  }
+  const now = Date.now();
+  const sinceIso = query.from ? `${query.from}T00:00:00Z` : query.recentDays ? new Date(now - query.recentDays * 864e5).toISOString() : new Date(now - 7 * 864e5).toISOString();
+  const range = { gte: sinceIso };
+  if (query.to) range.lte = `${query.to}T23:59:59Z`;
+  must.push({ range: { last_updated: range } });
+  return {
+    from: fromIndex,
+    size: size2,
+    sort: [{ last_updated: { order: "desc" } }],
+    query: { bool: { must } }
+  };
+}
+function createLondonDatahubSource(options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return {
+    id: "london-datahub",
+    async *fetchPages(query) {
+      const pageSize = Math.min(query.pageSize ?? 200, 500);
+      const maxPages = query.maxPages ?? 15;
+      let index2 = 0;
+      for (let page = 0; page < maxPages; page += 1) {
+        const payload = buildLondonDatahubBody(query, index2);
+        const response = await fetchImpl(LONDON_DATAHUB_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": PLANIT_USER_AGENT,
+            "X-API-AllowRequest": LONDON_ALLOW_HEADER
+          },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          throw new Error(`London Datahub responded ${response.status}`);
+        }
+        const json3 = await response.json();
+        const rawHits = json3.hits?.hits ?? [];
+        const total = typeof json3.hits?.total === "number" ? json3.hits.total : typeof json3.hits?.total?.value === "number" ? json3.hits.total.value : null;
+        const records = rawHits.map((hit) => hit._source ? mapLondonDatahubHit(hit._source) : null).filter((item) => item !== null);
+        const raw = {
+          url: `${LONDON_DATAHUB_ENDPOINT}?from=${index2}&size=${pageSize}`,
+          body: json3,
+          records,
+          total,
+          from: index2
+        };
+        yield raw;
+        if (rawHits.length === 0) return;
+        index2 += rawHits.length;
+        if (total !== null && index2 >= total) return;
+        if (rawHits.length < pageSize) return;
+      }
+    }
+  };
+}
+function createHybridPlanningSource(options = {}) {
+  const planit = createPlanItSource(options);
+  const london = createLondonDatahubSource({ fetchImpl: options.fetchImpl });
+  return {
+    id: "auto",
+    async *fetchPages(query) {
+      if (query.source === "london-datahub") {
+        yield* london.fetchPages(query);
+        return;
+      }
+      if (query.source === "planit") {
+        yield* planit.fetchPages(query);
+        return;
+      }
+      try {
+        yield* planit.fetchPages(query);
+      } catch (error62) {
+        const message = error62 instanceof Error ? error62.message : "";
+        if (/429|rate|5\d\d|fetch/i.test(message)) {
+          yield* london.fetchPages(query);
+          return;
+        }
+        throw error62;
+      }
+    }
+  };
 }
 
 // ../../packages/ingest/src/value.ts
@@ -82035,72 +82378,6 @@ function parseApplicationFormContacts(pdfText) {
   if (result.agentCompany && !result.agentName) result.agentName = result.agentCompany;
   if (result.agentName && !result.agentCompany) result.agentCompany = result.agentName;
   return result;
-}
-
-// ../../packages/ingest/src/planit.ts
-var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; +https://aecpipeline.co.uk)";
-var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function planItUrl(query, index2) {
-  const params = new URLSearchParams();
-  params.set("pg_sz", String(query.pageSize ?? 300));
-  params.set("index", String(index2));
-  if (query.from) params.set("start_date", query.from);
-  if (query.to) params.set("end_date", query.to);
-  if (!query.from && !query.to && query.recentDays) params.set("recent", String(query.recentDays));
-  if (query.authority) params.set("auth", query.authority);
-  return `${ENDPOINT}?${params.toString()}`;
-}
-async function getJson(url2, fetchImpl) {
-  let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    try {
-      const response = await fetchImpl(url2, {
-        headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
-      });
-      if (response.status === 429 || response.status >= 500) {
-        throw new Error(`PlanIt responded ${response.status}`);
-      }
-      if (!response.ok) throw new Error(`PlanIt responded ${response.status}`);
-      return await response.json();
-    } catch (error62) {
-      lastError = error62;
-      if (attempt === 3) break;
-      await sleep(1e3 * 2 ** attempt);
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("PlanIt request failed");
-}
-function createPlanItSource(options = {}) {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const interval2 = options.minIntervalMs ?? 2e3;
-  let lastRequest = 0;
-  return {
-    id: "planit",
-    async *fetchPages(query) {
-      const pageSize = query.pageSize ?? 300;
-      const maxPages = query.maxPages ?? 40;
-      let index2 = 0;
-      let total = null;
-      for (let page = 0; page < maxPages; page += 1) {
-        const wait = interval2 - (Date.now() - lastRequest);
-        if (lastRequest && wait > 0) await sleep(wait);
-        const url2 = planItUrl(query, index2);
-        lastRequest = Date.now();
-        const body = await getJson(url2, fetchImpl);
-        const records = Array.isArray(body.records) ? body.records : [];
-        total = typeof body.total === "number" ? body.total : total;
-        const raw = { url: url2, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
-        yield raw;
-        if (records.length === 0) return;
-        index2 += records.length;
-        if (total !== null && index2 >= total) return;
-        if (records.length < pageSize) return;
-      }
-    }
-  };
 }
 
 // ../../packages/ingest/src/transform.ts
@@ -93011,6 +93288,11 @@ async function notifyNewLeads(inserted, titles) {
 
 // ../api/src/ingest/run.ts
 var dataRoot = process.env.VERCEL ? "/tmp/planningpal" : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../data");
+function sourceFor(sourceId) {
+  if (sourceId === "london-datahub") return createLondonDatahubSource();
+  if (sourceId === "auto") return createHybridPlanningSource();
+  return createPlanItSource();
+}
 function hashFor(authority, reference) {
   return createHash3("sha256").update(`${councilCode(authority)}|${reference}`).digest("hex");
 }
@@ -93044,32 +93326,34 @@ async function startIngestRun(options) {
     error62.statusCode = 409;
     throw error62;
   }
-  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, "planit")).limit(1);
+  const sourceId = options.source ?? "planit";
+  const cursorKey = sourceId === "london-datahub" ? "london-datahub" : "planit";
+  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1);
   const since = options.since ?? (options.from || options.to || options.authority ? void 0 : cursor?.lastDifferent || void 0);
-  const query = { ...options, since };
+  const query = { ...options, source: sourceId, since };
   const [run] = await db.insert(pipelineRuns).values({
-    source: "planit",
+    source: sourceId,
     status: "running",
     cursorBefore: since ?? "",
     options: query
   }).returning();
   if (!run) throw new Error("Could not start pipeline run");
-  active = executeRun(run.id, query).finally(() => {
+  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => {
     active = null;
   });
   return { id: run.id, status: "running", done: active };
 }
-async function executeRun(runId, query) {
-  const source = createPlanItSource();
+async function executeRun(runId, sourceId, cursorKey, query) {
+  const source = sourceFor(sourceId);
   const rawRecords = [];
   try {
     let pageNumber = 0;
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records);
-      const rawDir = path.join(dataRoot, "raw", "planit", runId);
+      const rawDir = path.join(dataRoot, "raw", sourceId, runId);
       await mkdir(rawDir, { recursive: true });
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, "0")}.json`), JSON.stringify(page.body));
-      await db.insert(rawPayloads).values({ runId, source: "planit", requestUrl: page.url, body: page.body });
+      await db.insert(rawPayloads).values({ runId, source: sourceId, requestUrl: page.url, body: page.body });
       pageNumber += 1;
     }
     const transformed = transformRecords(rawRecords, void 0, query.since);
@@ -93080,7 +93364,7 @@ async function executeRun(runId, query) {
     const counts = await upsertRows(enrichedRows);
     await notifyNewLeads(counts.inserted, counts.titles);
     if (transformed.cursor) {
-      await db.insert(ingestCursors).values({ source: "planit", lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
+      await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
     }
     await db.update(pipelineRuns).set({
       status: "succeeded",
@@ -93288,6 +93572,52 @@ function presentRun(run) {
     message: run.message,
     options: run.options
   };
+}
+async function enrichMissingContacts(options = {}) {
+  const limit = Math.min(Math.max(1, options.limit ?? 20), 100);
+  const candidates = await db.select().from(planningApplications).where(sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`).orderBy(desc(planningApplications.createdAt)).limit(limit);
+  let scanned = 0;
+  let enriched = 0;
+  for (const app2 of candidates) {
+    scanned += 1;
+    const details = await fetchIdoxContacts(app2.portalUrl, { fetchImpl: options.fetchImpl });
+    if (!details) continue;
+    const nextApplicant = details.applicantCompany || details.applicantName || app2.clientApplicant;
+    const nextAgent = details.agentCompany || details.agentName || app2.architectAgent;
+    const nextAgentContact = details.agentName || app2.architectAgentContact;
+    const nextAgentAddress = details.agentAddress || app2.architectAgentRawAddress;
+    const nextApplicantAddress = details.applicantAddress || app2.clientApplicantRawAddress;
+    const nextEmail = details.agentEmail || app2.architectAgentEmail;
+    const nextPhone = details.agentPhone || app2.architectAgentPhone;
+    const updatedSource = {
+      ...app2.sourceRecord,
+      "Client Applicant": nextApplicant,
+      "Client Applicant Contact": details.applicantName || app2.sourceRecord["Client Applicant Contact"] || "",
+      "Client Applicant Raw Address": nextApplicantAddress,
+      "Architect Agent": nextAgent,
+      "Architect Agent Contact": nextAgentContact,
+      "Architect Agent Raw Address": nextAgentAddress,
+      "Architect Agent Email": nextEmail,
+      "Architect Agent Phone": nextPhone,
+      "Architect Agent Postcode": splitPostcode(nextAgentAddress).postcode,
+      "Client Applicant Postcode": splitPostcode(nextApplicantAddress).postcode
+    };
+    await db.update(planningApplications).set({
+      clientApplicant: nextApplicant,
+      clientApplicantContact: details.applicantName || app2.clientApplicantContact,
+      clientApplicantRawAddress: nextApplicantAddress,
+      architectAgent: nextAgent,
+      architectAgentContact: nextAgentContact,
+      architectAgentRawAddress: nextAgentAddress,
+      architectAgentEmail: nextEmail,
+      architectAgentPhone: nextPhone,
+      sourceRecord: updatedSource,
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(planningApplications.id, app2.id));
+    await replaceContacts(app2.id, updatedSource);
+    enriched += 1;
+  }
+  return { scanned, enriched };
 }
 
 // ../api/src/routes/planning.ts
@@ -93851,7 +94181,11 @@ var runBody = external_exports.object({
   to: external_exports.string().optional(),
   authority: external_exports.string().optional(),
   recent: external_exports.number().int().positive().max(30).optional(),
-  maxPages: external_exports.number().int().positive().max(40).optional()
+  maxPages: external_exports.number().int().positive().max(40).optional(),
+  source: external_exports.enum(["planit", "london-datahub", "auto"]).optional()
+});
+var enrichBody = external_exports.object({
+  limit: external_exports.number().int().positive().max(100).optional()
 });
 async function ingestRoutes(app2) {
   app2.get("/api/v1/ingest/runs", async (request) => {
@@ -93878,7 +94212,8 @@ async function ingestRoutes(app2) {
         to: body.to,
         authority: body.authority,
         recentDays: body.recent ?? (body.from || body.to ? void 0 : 3),
-        maxPages: body.maxPages
+        maxPages: body.maxPages,
+        source: body.source
       });
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, started.id)).limit(1);
       return reply.code(202).send(run ? presentRun(run) : { id: started.id, status: "running" });
@@ -93886,6 +94221,13 @@ async function ingestRoutes(app2) {
       if (error62 instanceof Error && "statusCode" in error62) throw new HttpError(409, error62.message);
       throw error62;
     }
+  });
+  app2.post("/api/v1/ingest/enrich", async (request, reply) => {
+    requireUser(request);
+    const body = parseBody(enrichBody, request.body ?? {}, reply);
+    if (!body) return;
+    const result = await enrichMissingContacts({ limit: body.limit ?? 20 });
+    return reply.code(200).send(result);
   });
 }
 

@@ -28,9 +28,11 @@ begin
   end if;
 end $$;
 
+-- PlanIt overnight schedule (18:00–06:00 UTC, every 5 minutes = 144 requests/night,
+-- respecting PlanIt's >=60s interval and 300 requests/day cap).
 select cron.schedule(
   'planningpal-planit-ingest',
-  '0 6,13,20 * * *',
+  '*/5 18-23,0-5 * * *',
   $job$
   select net.http_post(
     url := 'https://planningpal.vercel.app/api/cron/ingest',

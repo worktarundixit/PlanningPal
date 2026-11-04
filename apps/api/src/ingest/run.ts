@@ -1,10 +1,22 @@
-import { recordsToCsv, transformRecords, createPlanItSource, type FetchQuery, type PlanItRecord } from '@planningpal/ingest'
+import {
+  createHybridPlanningSource,
+  createLondonDatahubSource,
+  createPlanItSource,
+  fetchIdoxContacts,
+  recordsToCsv,
+  splitPostcode,
+  transformRecords,
+  type FetchQuery,
+  type IngestSourceId,
+  type PlanItRecord,
+  type PlanningSource,
+} from '@planningpal/ingest'
 import { councilCode, type SourceRecord } from '@planningpal/shared'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { eq, inArray, sql } from 'drizzle-orm'
+import { desc, eq, inArray, sql } from 'drizzle-orm'
 import { notifyNewLeads } from '../auth/mailer.ts'
 import { db } from '../db/client.ts'
 import { councils, decisionMakers, ingestCursors, pipelineRuns, planningApplications, rawPayloads } from '../db/schema.ts'
@@ -14,7 +26,13 @@ const dataRoot = process.env.VERCEL
   ? '/tmp/planningpal'
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data')
 
-export type RunOptions = FetchQuery & { since?: string }
+export type RunOptions = FetchQuery & { since?: string; source?: IngestSourceId }
+
+function sourceFor(sourceId: IngestSourceId): PlanningSource {
+  if (sourceId === 'london-datahub') return createLondonDatahubSource()
+  if (sourceId === 'auto') return createHybridPlanningSource()
+  return createPlanItSource()
+}
 
 function hashFor(authority: string, reference: string) {
   return createHash('sha256').update(`${councilCode(authority)}|${reference}`).digest('hex')
@@ -55,31 +73,33 @@ export async function startIngestRun(options: RunOptions) {
     ;(error as Error & { statusCode?: number }).statusCode = 409
     throw error
   }
-  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, 'planit')).limit(1)
+  const sourceId: IngestSourceId = options.source ?? 'planit'
+  const cursorKey = sourceId === 'london-datahub' ? 'london-datahub' : 'planit'
+  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1)
   const since = options.since ?? (options.from || options.to || options.authority ? undefined : cursor?.lastDifferent || undefined)
-  const query: FetchQuery = { ...options, since }
+  const query: FetchQuery = { ...options, source: sourceId, since }
   const [run] = await db.insert(pipelineRuns).values({
-    source: 'planit',
+    source: sourceId,
     status: 'running',
     cursorBefore: since ?? '',
     options: query,
   }).returning()
   if (!run) throw new Error('Could not start pipeline run')
-  active = executeRun(run.id, query).finally(() => { active = null })
+  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => { active = null })
   return { id: run.id, status: 'running' as const, done: active }
 }
 
-async function executeRun(runId: string, query: FetchQuery) {
-  const source = createPlanItSource()
+async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: string, query: FetchQuery) {
+  const source = sourceFor(sourceId)
   const rawRecords: PlanItRecord[] = []
   try {
     let pageNumber = 0
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records)
-      const rawDir = path.join(dataRoot, 'raw', 'planit', runId)
+      const rawDir = path.join(dataRoot, 'raw', sourceId, runId)
       await mkdir(rawDir, { recursive: true })
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, '0')}.json`), JSON.stringify(page.body))
-      await db.insert(rawPayloads).values({ runId, source: 'planit', requestUrl: page.url, body: page.body as Record<string, unknown> })
+      await db.insert(rawPayloads).values({ runId, source: sourceId, requestUrl: page.url, body: page.body as Record<string, unknown> })
       pageNumber += 1
     }
     const transformed = transformRecords(rawRecords, undefined, query.since)
@@ -90,7 +110,7 @@ async function executeRun(runId: string, query: FetchQuery) {
     const counts = await upsertRows(enrichedRows)
     await notifyNewLeads(counts.inserted, counts.titles)
     if (transformed.cursor) {
-      await db.insert(ingestCursors).values({ source: 'planit', lastDifferent: transformed.cursor, updatedAt: new Date() })
+      await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: new Date() })
         .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: new Date() } })
     }
     await db.update(pipelineRuns).set({
@@ -312,4 +332,60 @@ export function presentRun(run: typeof pipelineRuns.$inferSelect) {
     message: run.message,
     options: run.options,
   }
+}
+
+export async function enrichMissingContacts(options: { limit?: number; fetchImpl?: typeof fetch } = {}) {
+  const limit = Math.min(Math.max(1, options.limit ?? 20), 100)
+  const candidates = await db
+    .select()
+    .from(planningApplications)
+    .where(sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`)
+    .orderBy(desc(planningApplications.createdAt))
+    .limit(limit)
+
+  let scanned = 0
+  let enriched = 0
+  for (const app of candidates) {
+    scanned += 1
+    const details = await fetchIdoxContacts(app.portalUrl, { fetchImpl: options.fetchImpl })
+    if (!details) continue
+    const nextApplicant = details.applicantCompany || details.applicantName || app.clientApplicant
+    const nextAgent = details.agentCompany || details.agentName || app.architectAgent
+    const nextAgentContact = details.agentName || app.architectAgentContact
+    const nextAgentAddress = details.agentAddress || app.architectAgentRawAddress
+    const nextApplicantAddress = details.applicantAddress || app.clientApplicantRawAddress
+    const nextEmail = details.agentEmail || app.architectAgentEmail
+    const nextPhone = details.agentPhone || app.architectAgentPhone
+    const updatedSource: SourceRecord = {
+      ...app.sourceRecord,
+      'Client Applicant': nextApplicant,
+      'Client Applicant Contact': details.applicantName || app.sourceRecord['Client Applicant Contact'] || '',
+      'Client Applicant Raw Address': nextApplicantAddress,
+      'Architect Agent': nextAgent,
+      'Architect Agent Contact': nextAgentContact,
+      'Architect Agent Raw Address': nextAgentAddress,
+      'Architect Agent Email': nextEmail,
+      'Architect Agent Phone': nextPhone,
+      'Architect Agent Postcode': splitPostcode(nextAgentAddress).postcode,
+      'Client Applicant Postcode': splitPostcode(nextApplicantAddress).postcode,
+    }
+    await db
+      .update(planningApplications)
+      .set({
+        clientApplicant: nextApplicant,
+        clientApplicantContact: details.applicantName || app.clientApplicantContact,
+        clientApplicantRawAddress: nextApplicantAddress,
+        architectAgent: nextAgent,
+        architectAgentContact: nextAgentContact,
+        architectAgentRawAddress: nextAgentAddress,
+        architectAgentEmail: nextEmail,
+        architectAgentPhone: nextPhone,
+        sourceRecord: updatedSource,
+        updatedAt: new Date(),
+      })
+      .where(eq(planningApplications.id, app.id))
+    await replaceContacts(app.id, updatedSource)
+    enriched += 1
+  }
+  return { scanned, enriched }
 }
