@@ -93259,7 +93259,10 @@ ${message.text}`;
 }
 var mailer = createMailer();
 function appOrigin() {
-  return (process.env.WEB_ORIGIN || "http://127.0.0.1:5173").replace(/\/$/, "");
+  if (process.env.WEB_ORIGIN) return process.env.WEB_ORIGIN.replace(/\/$/, "");
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
+  return process.env.NODE_ENV === "production" ? "https://planningpal.vercel.app" : "http://127.0.0.1:5173";
 }
 async function notifyNewLeads(inserted, titles) {
   if (inserted < 1) return;
@@ -94440,7 +94443,8 @@ var createCustomerBody = external_exports.object({
   lastName: external_exports.string().trim().max(60).optional().default(""),
   email: external_exports.string().trim().email(),
   companyName: external_exports.string().trim().max(120).optional().default(""),
-  coverage: external_exports.enum(["regional", "multi_county", "nationwide"]).optional()
+  coverage: external_exports.enum(["regional", "multi_county", "nationwide", "CATEGORY_3", "ALL_UK"]).optional(),
+  sendEmail: external_exports.boolean().optional().default(true)
 });
 var saveBody = external_exports.discriminatedUnion("action", [
   external_exports.object({
@@ -94651,12 +94655,16 @@ async function onboardingRoutes(app2) {
     const fullName = [body.firstName, body.lastName].filter(Boolean).join(" ").trim() || body.firstName;
     const companyName = body.companyName?.trim() || `${fullName} Workspace`;
     const email3 = body.email.toLowerCase();
-    const plan = body.coverage ? coverageChoice(body.coverage) : void 0;
+    let coverageKey;
+    if (body.coverage === "CATEGORY_3" || body.coverage === "regional") coverageKey = "regional";
+    else if (body.coverage === "ALL_UK" || body.coverage === "nationwide") coverageKey = "nationwide";
+    else if (body.coverage === "multi_county") coverageKey = "multi_county";
+    const plan = coverageKey ? coverageChoice(coverageKey) : void 0;
     const [organisation] = await db.insert(organisations).values({
       companyName,
       slug: slugify2(companyName),
-      coverage: body.coverage ?? "",
-      tier: plan?.tier ?? "CATEGORY_3",
+      coverage: coverageKey ?? "",
+      tier: plan?.tier ?? (coverageKey === "nationwide" ? "ALL_UK" : "CATEGORY_3"),
       planName: plan?.planName ?? "Team Plan",
       monthlyPrice: plan?.monthlyPrice ?? "\xA32,950"
     }).returning();
@@ -94678,17 +94686,22 @@ async function onboardingRoutes(app2) {
       expiresAt,
       invitedBy: user.id
     });
-    const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`;
-    await mailer.send({
-      kind: "invite",
-      to: email3,
-      subject: `Your ${companyName} workspace on PlanningPal is ready`,
-      text: `Hello ${fullName},
+    const origin = request.headers.origin || appOrigin();
+    const inviteUrl = `${origin.replace(/\/$/, "")}/accept-invite?token=${token}`;
+    let emailSent = false;
+    if (body.sendEmail !== false) {
+      await mailer.send({
+        kind: "invite",
+        to: email3,
+        subject: `Your ${companyName} workspace on PlanningPal is ready`,
+        text: `Hello ${fullName},
 
 Your PlanningPal workspace (${companyName}) has been created.
 Open your personal onboarding link to set up your account and team:
 ${inviteUrl}`
-    });
+      });
+      emailSent = true;
+    }
     await db.insert(auditLog).values({
       actorUserId: user.id,
       workspaceId: organisation.id,
@@ -94706,7 +94719,66 @@ ${inviteUrl}`
       step: "profile",
       finished: false,
       inviteUrl,
-      token
+      token,
+      inviteToken: token,
+      emailSent
+    });
+  });
+  app2.post("/api/v1/onboarding/clients/:id/resend-invite", async (request, reply) => {
+    const user = requireUser(request);
+    if (user.platformRole !== "super_admin") throw new HttpError(403, "Forbidden");
+    const { id } = request.params;
+    const [organisation] = await db.select().from(organisations).where(eq(organisations.id, id)).limit(1);
+    if (!organisation) throw new HttpError(404, "Organisation not found");
+    const pendingInvites = await db.select().from(invitations).where(and(eq(invitations.organisationId, id), isNull(invitations.acceptedAt))).orderBy(asc(invitations.createdAt));
+    const existingInvite = pendingInvites.find((i) => i.role === "owner") || pendingInvites[0];
+    let token;
+    let email3;
+    if (existingInvite && existingInvite.expiresAt.getTime() > Date.now()) {
+      token = existingInvite.token;
+      email3 = existingInvite.email;
+    } else {
+      const [member2] = await db.select().from(teamMembers).where(eq(teamMembers.organisationId, id)).limit(1);
+      email3 = existingInvite?.email || member2?.email || "";
+      if (!email3) throw new HttpError(400, "No client email found to send invite to");
+      token = randomBytes3(24).toString("hex");
+      const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1e3);
+      await db.insert(invitations).values({
+        organisationId: id,
+        email: email3,
+        role: existingInvite?.role || "owner",
+        token,
+        expiresAt,
+        invitedBy: user.id
+      });
+    }
+    const [member] = await db.select({ name: teamMembers.name }).from(teamMembers).where(and(eq(teamMembers.organisationId, id), eq(teamMembers.email, email3))).limit(1);
+    const fullName = member?.name?.trim() || organisation.companyName;
+    const origin = request.headers.origin || appOrigin();
+    const inviteUrl = `${origin.replace(/\/$/, "")}/accept-invite?token=${token}`;
+    await mailer.send({
+      kind: "invite",
+      to: email3,
+      subject: `Your ${organisation.companyName} workspace on PlanningPal is ready`,
+      text: `Hello ${fullName},
+
+Your PlanningPal workspace (${organisation.companyName}) is ready.
+Open your personal onboarding link to set up your account and team:
+${inviteUrl}`
+    });
+    await db.insert(auditLog).values({
+      actorUserId: user.id,
+      workspaceId: id,
+      action: "staff.customer.resend_invite",
+      method: request.method,
+      path: `/api/v1/onboarding/clients/${id}/resend-invite`
+    });
+    return reply.send({
+      sent: true,
+      email: email3,
+      inviteUrl,
+      token,
+      inviteToken: token
     });
   });
   app2.put("/api/v1/onboarding", async (request, reply) => {

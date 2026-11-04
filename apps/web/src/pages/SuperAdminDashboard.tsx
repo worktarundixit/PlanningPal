@@ -20,7 +20,10 @@ export function SuperAdminDashboard() {
   const [email, setEmail] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [coverage, setCoverage] = useState<'CATEGORY_3' | 'ALL_UK'>('CATEGORY_3')
+  const [sendEmail, setSendEmail] = useState(true)
+  const [emailSentStatus, setEmailSentStatus] = useState<boolean | null>(null)
   const [createdInviteUrl, setCreatedInviteUrl] = useState('')
+  const [sendingInviteId, setSendingInviteId] = useState<string | null>(null)
 
   // Global leads explorer state
   const [leads, setLeads] = useState<Scheme[]>([])
@@ -43,6 +46,18 @@ export function SuperAdminDashboard() {
       .catch(() => undefined)
   }, [])
 
+  const resetAddModal = () => {
+    setFirstName('')
+    setLastName('')
+    setEmail('')
+    setCompanyName('')
+    setCoverage('CATEGORY_3')
+    setSendEmail(true)
+    setCreatedInviteUrl('')
+    setEmailSentStatus(null)
+    setAddModalOpen(false)
+  }
+
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!firstName.trim() || !email.trim() || !companyName.trim()) return
@@ -54,15 +69,30 @@ export function SuperAdminDashboard() {
         email: email.trim().toLowerCase(),
         companyName: companyName.trim(),
         coverage,
+        sendEmail,
       })
-      const fullInvite = `${window.location.origin}/accept-invite?token=${res.inviteToken}`
+      const fullInvite = res.inviteUrl || `${window.location.origin}/accept-invite?token=${res.inviteToken || res.token}`
       setCreatedInviteUrl(fullInvite)
-      notify(`Customer workspace created for ${companyName}`)
+      setEmailSentStatus(res.emailSent)
+      notify(`Customer workspace created for ${companyName}${res.emailSent ? ' & invite email sent' : ''}`)
       loadClients()
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Could not create customer')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const handleSendInviteEmail = async (clientId: string) => {
+    setSendingInviteId(clientId)
+    try {
+      const res = await api.resendClientInvite(clientId)
+      notify(`Invitation email sent to ${res.email}`)
+      loadClients()
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not send invite email')
+    } finally {
+      setSendingInviteId(null)
     }
   }
 
@@ -213,6 +243,15 @@ export function SuperAdminDashboard() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleSendInviteEmail(client.id)}
+                            disabled={sendingInviteId === client.id}
+                            className="flex items-center gap-1.5 rounded-lg border border-[#DCE4F0] bg-white px-3 py-1.5 text-xs font-semibold text-[#2563EB] hover:bg-[#EFF6FF] disabled:opacity-50"
+                            title="Send or resend onboarding invite email via Resend"
+                          >
+                            <Icon name="mail" size={13} />
+                            {sendingInviteId === client.id ? 'Sending…' : 'Send Email'}
+                          </button>
                           {client.inviteUrl && (
                             <button
                               onClick={() => copyInvite(client.inviteUrl!)}
@@ -254,11 +293,11 @@ export function SuperAdminDashboard() {
 
       {/* Add New Customer Modal */}
       {addModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onMouseDown={() => setAddModalOpen(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onMouseDown={resetAddModal}>
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-[#EEF2F7] pb-4">
               <h3 className="text-base font-bold text-[#172554]">+ Add New Customer Workspace</h3>
-              <button onClick={() => setAddModalOpen(false)} className="text-[#94A3B8] hover:text-[#64748B]">
+              <button onClick={resetAddModal} className="text-[#94A3B8] hover:text-[#64748B]">
                 <Icon name="close" size={16} />
               </button>
             </div>
@@ -322,10 +361,20 @@ export function SuperAdminDashboard() {
                   </select>
                 </label>
 
+                <label className="flex items-center gap-2.5 pt-1 text-xs font-medium text-[#334155] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sendEmail}
+                    onChange={(e) => setSendEmail(e.target.checked)}
+                    className="h-4 w-4 rounded border-[#CBD5E1] text-[#2563EB] focus:ring-[#2563EB]"
+                  />
+                  <span>Send invitation email immediately to client email</span>
+                </label>
+
                 <div className="flex justify-end gap-3 pt-4 border-t border-[#EEF2F7]">
                   <button
                     type="button"
-                    onClick={() => setAddModalOpen(false)}
+                    onClick={resetAddModal}
                     className="rounded-lg border border-[#DCE4F0] px-4 py-2 text-xs font-semibold text-[#64748B]"
                   >
                     Cancel
@@ -344,7 +393,9 @@ export function SuperAdminDashboard() {
                 <div className="rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] p-4 text-xs text-[#166534]">
                   <p className="font-semibold">Customer workspace created successfully!</p>
                   <p className="mt-1 text-[11px] leading-relaxed">
-                    Share this invite link with <strong>{firstName} {lastName}</strong> ({email}). When they click it, their name will be pre-filled and they will be guided through their workspace onboarding checklist.
+                    {emailSentStatus
+                      ? `Invitation email has been sent to ${email}. You can also share the direct link below with ${firstName} ${lastName}:`
+                      : `Share this invite link with ${firstName} ${lastName} (${email}). When they click it, their name will be pre-filled and they will be guided through their workspace onboarding checklist.`}
                   </p>
                 </div>
 
@@ -360,10 +411,7 @@ export function SuperAdminDashboard() {
                     Copy Invite Link
                   </button>
                   <button
-                    onClick={() => {
-                      setCreatedInviteUrl('')
-                      setAddModalOpen(false)
-                    }}
+                    onClick={resetAddModal}
                     className="rounded-lg border border-[#DCE4F0] px-4 py-2 text-xs font-semibold text-[#64748B]"
                   >
                     Done

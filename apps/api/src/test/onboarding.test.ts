@@ -234,6 +234,49 @@ describe('onboarding flow', () => {
     const [staffRow] = await db.select().from(users).where(eq(users.email, 'staff@onboarding.example'))
     expect(rows.some((row) => row.actorUserId === staffRow?.id)).toBe(true)
   })
+
+  it('lets a super admin create a customer workspace with CATEGORY_3 coverage and resend invite', async () => {
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/onboarding/clients',
+      headers: { cookie: staff },
+      payload: {
+        firstName: 'David',
+        lastName: 'Miller',
+        email: 'david@millergroup.example',
+        companyName: 'Miller Group Ltd',
+        coverage: 'CATEGORY_3',
+        sendEmail: true,
+      },
+    })
+    expect(createRes.statusCode).toBe(201)
+    const created = createRes.json()
+    expect(created.id).toBeDefined()
+    expect(created.inviteUrl).toContain('/accept-invite?token=')
+    expect(created.token).toBeDefined()
+    expect(created.inviteToken).toBe(created.token)
+    expect(created.emailSent).toBe(true)
+    expect(created.coverage).toBe('regional')
+
+    const resendRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/onboarding/clients/${created.id}/resend-invite`,
+      headers: { cookie: staff },
+    })
+    expect(resendRes.statusCode).toBe(200)
+    const resent = resendRes.json()
+    expect(resent.sent).toBe(true)
+    expect(resent.email).toBe('david@millergroup.example')
+    expect(resent.inviteUrl).toContain(created.token)
+
+    // Non-staff forbidden
+    const forbidden = await app.inject({
+      method: 'POST',
+      url: `/api/v1/onboarding/clients/${created.id}/resend-invite`,
+      headers: { cookie: founder },
+    })
+    expect(forbidden.statusCode).toBe(403)
+  })
 })
 
 describe('coverage and alert frequency', () => {

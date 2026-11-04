@@ -17,7 +17,8 @@ const createCustomerBody = z.object({
   lastName: z.string().trim().max(60).optional().default(''),
   email: z.string().trim().email(),
   companyName: z.string().trim().max(120).optional().default(''),
-  coverage: z.enum(['regional', 'multi_county', 'nationwide']).optional(),
+  coverage: z.enum(['regional', 'multi_county', 'nationwide', 'CATEGORY_3', 'ALL_UK']).optional(),
+  sendEmail: z.boolean().optional().default(true),
 })
 
 const saveBody = z.discriminatedUnion('action', [
@@ -261,14 +262,20 @@ export async function onboardingRoutes(app: FastifyInstance) {
     const fullName = [body.firstName, body.lastName].filter(Boolean).join(' ').trim() || body.firstName
     const companyName = body.companyName?.trim() || `${fullName} Workspace`
     const email = body.email.toLowerCase()
-    const plan = body.coverage ? coverageChoice(body.coverage) : undefined
+
+    let coverageKey: 'regional' | 'multi_county' | 'nationwide' | undefined
+    if (body.coverage === 'CATEGORY_3' || body.coverage === 'regional') coverageKey = 'regional'
+    else if (body.coverage === 'ALL_UK' || body.coverage === 'nationwide') coverageKey = 'nationwide'
+    else if (body.coverage === 'multi_county') coverageKey = 'multi_county'
+
+    const plan = coverageKey ? coverageChoice(coverageKey) : undefined
     const [organisation] = await db
       .insert(organisations)
       .values({
         companyName,
         slug: slugify(companyName),
-        coverage: body.coverage ?? '',
-        tier: plan?.tier ?? 'CATEGORY_3',
+        coverage: coverageKey ?? '',
+        tier: plan?.tier ?? (coverageKey === 'nationwide' ? 'ALL_UK' : 'CATEGORY_3'),
         planName: plan?.planName ?? 'Team Plan',
         monthlyPrice: plan?.monthlyPrice ?? '£2,950',
       })
@@ -291,13 +298,18 @@ export async function onboardingRoutes(app: FastifyInstance) {
       expiresAt,
       invitedBy: user.id,
     })
-    const inviteUrl = `${appOrigin()}/accept-invite?token=${token}`
-    await mailer.send({
-      kind: 'invite',
-      to: email,
-      subject: `Your ${companyName} workspace on PlanningPal is ready`,
-      text: `Hello ${fullName},\n\nYour PlanningPal workspace (${companyName}) has been created.\nOpen your personal onboarding link to set up your account and team:\n${inviteUrl}`,
-    })
+    const origin = (request.headers.origin as string | undefined) || appOrigin()
+    const inviteUrl = `${origin.replace(/\/$/, '')}/accept-invite?token=${token}`
+    let emailSent = false
+    if (body.sendEmail !== false) {
+      await mailer.send({
+        kind: 'invite',
+        to: email,
+        subject: `Your ${companyName} workspace on PlanningPal is ready`,
+        text: `Hello ${fullName},\n\nYour PlanningPal workspace (${companyName}) has been created.\nOpen your personal onboarding link to set up your account and team:\n${inviteUrl}`,
+      })
+      emailSent = true
+    }
     await db.insert(auditLog).values({
       actorUserId: user.id,
       workspaceId: organisation.id,
@@ -316,6 +328,85 @@ export async function onboardingRoutes(app: FastifyInstance) {
       finished: false,
       inviteUrl,
       token,
+      inviteToken: token,
+      emailSent,
+    })
+  })
+
+  app.post('/api/v1/onboarding/clients/:id/resend-invite', async (request, reply) => {
+    const user = requireUser(request)
+    if (user.platformRole !== 'super_admin') throw new HttpError(403, 'Forbidden')
+    const { id } = request.params as { id: string }
+    const [organisation] = await db
+      .select()
+      .from(organisations)
+      .where(eq(organisations.id, id))
+      .limit(1)
+    if (!organisation) throw new HttpError(404, 'Organisation not found')
+
+    const pendingInvites = await db
+      .select()
+      .from(invitations)
+      .where(and(eq(invitations.organisationId, id), isNull(invitations.acceptedAt)))
+      .orderBy(asc(invitations.createdAt))
+    const existingInvite = pendingInvites.find((i) => i.role === 'owner') || pendingInvites[0]
+
+    let token: string
+    let email: string
+    if (existingInvite && existingInvite.expiresAt.getTime() > Date.now()) {
+      token = existingInvite.token
+      email = existingInvite.email
+    } else {
+      const [member] = await db
+        .select()
+        .from(teamMembers)
+        .where(eq(teamMembers.organisationId, id))
+        .limit(1)
+      email = existingInvite?.email || member?.email || ''
+      if (!email) throw new HttpError(400, 'No client email found to send invite to')
+      token = randomBytes(24).toString('hex')
+      const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+      await db.insert(invitations).values({
+        organisationId: id,
+        email,
+        role: existingInvite?.role || 'owner',
+        token,
+        expiresAt,
+        invitedBy: user.id,
+      })
+    }
+
+    const [member] = await db
+      .select({ name: teamMembers.name })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.organisationId, id), eq(teamMembers.email, email)))
+      .limit(1)
+    const fullName = member?.name?.trim() || organisation.companyName
+
+    const origin = (request.headers.origin as string | undefined) || appOrigin()
+    const inviteUrl = `${origin.replace(/\/$/, '')}/accept-invite?token=${token}`
+
+    await mailer.send({
+      kind: 'invite',
+      to: email,
+      subject: `Your ${organisation.companyName} workspace on PlanningPal is ready`,
+      text: `Hello ${fullName},\n\nYour PlanningPal workspace (${organisation.companyName}) is ready.\nOpen your personal onboarding link to set up your account and team:\n${inviteUrl}`,
+    })
+
+    await db.insert(auditLog).values({
+      actorUserId: user.id,
+      workspaceId: id,
+      action: 'staff.customer.resend_invite',
+      method: request.method,
+      path: `/api/v1/onboarding/clients/${id}/resend-invite`,
+    })
+
+    return reply.send({
+      sent: true,
+      email,
+      inviteUrl,
+      token,
+      inviteToken: token,
     })
   })
 

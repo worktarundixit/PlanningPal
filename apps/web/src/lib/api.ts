@@ -277,12 +277,26 @@ export const api = {
     lastName?: string
     email: string
     companyName: string
-    coverage?: 'ALL_UK' | 'CATEGORY_3'
+    coverage?: 'ALL_UK' | 'CATEGORY_3' | 'regional' | 'multi_county' | 'nationwide'
+    sendEmail?: boolean
   }) =>
-    request<ClientOnboarding & { customerName: string; inviteToken: string }>('/api/v1/onboarding/clients', {
+    request<
+      ClientOnboarding & {
+        customerName: string
+        inviteToken: string
+        token: string
+        inviteUrl: string
+        emailSent: boolean
+      }
+    >('/api/v1/onboarding/clients', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  resendClientInvite: (organisationId: string) =>
+    request<{ sent: boolean; email: string; inviteUrl: string; token: string; inviteToken: string }>(
+      `/api/v1/onboarding/clients/${organisationId}/resend-invite`,
+      { method: 'POST' },
+    ),
   downloadRunCsv: async (id: string) => {
     const csv = await request<string>(`/api/v1/ingest/runs/${id}/csv`)
     const link = document.createElement('a')

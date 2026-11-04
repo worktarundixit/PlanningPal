@@ -59,7 +59,10 @@ export function createMailer(): Mailer {
 export const mailer = createMailer()
 
 export function appOrigin() {
-  return (process.env.WEB_ORIGIN || 'http://127.0.0.1:5173').replace(/\/$/, '')
+  if (process.env.WEB_ORIGIN) return process.env.WEB_ORIGIN.replace(/\/$/, '')
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`.replace(/\/$/, '')
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, '')
+  return process.env.NODE_ENV === 'production' ? 'https://planningpal.vercel.app' : 'http://127.0.0.1:5173'
 }
 
 /** Tell owners and admins, at the frequency they chose, that new schemes were stored. */
