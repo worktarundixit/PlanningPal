@@ -180,6 +180,7 @@ const ROUTE_RULES: RouteRule[] = [
 
   { method: 'GET', pattern: /^\/api\/v1\/onboarding\/clients$/, permission: 'onboarding.review' },
   { method: 'POST', pattern: /^\/api\/v1\/onboarding\/clients$/, permission: 'onboarding.review' },
+  { method: 'POST', pattern: /^\/api\/v1\/onboarding\/clients\/[^/]+\/resend-invite$/, permission: 'onboarding.review' },
   { method: 'GET', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.read' },
   { method: 'PUT', pattern: /^\/api\/v1\/onboarding$/, permission: 'profile.write' },
 
