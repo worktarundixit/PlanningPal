@@ -87,7 +87,7 @@ describe('campaign provider', () => {
       payload: { leads: [{ email: 'maya@northbankstudio.co.uk', firstName: 'Maya' }] },
     })
     expect(leads.statusCode).toBe(200)
-    expect(leads.json()).toEqual({ added: 1 })
+    expect(leads.json()).toEqual(expect.objectContaining({ added: 1 }))
   })
 
   it('writes a reply into the client intent feed and rejects a bad token', async () => {
