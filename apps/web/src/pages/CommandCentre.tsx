@@ -84,9 +84,14 @@ export function CommandCentre() {
   const [activeWorkspaceId, setActiveWsId] = useState(getActiveWorkspaceId)
   const [previewRole, setPrvRole] = useState(getPreviewRole)
   const [notificationOpen, setNotificationOpen] = useState(false)
+  const [workspaceMounted, setWorkspaceMounted] = useState(() => active !== 'Overview')
   const [dossierContacts, setDossierContacts] = useState<DossierContact[]>([])
   const [dossierDocs, setDossierDocs] = useState<PortalDocument[]>([])
   const can = (permission: string) => permissions.includes(permission)
+
+  useEffect(() => {
+    if (active !== 'Overview' && !workspaceMounted) setWorkspaceMounted(true)
+  }, [active, workspaceMounted])
 
   const applySchemeUpdate = (updated: Scheme) => {
     setSelected((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev))
@@ -183,6 +188,24 @@ export function CommandCentre() {
         setOverview(overview)
         setLoadError('')
         setSessionReady(true)
+        // Pre-warm secondary section APIs during browser idle time for instant switching
+        const prewarm = () => {
+          void api.campaigns().catch(() => undefined)
+          void api.domains().catch(() => undefined)
+          void api.campaignSettings().catch(() => undefined)
+          void api.kanban().catch(() => undefined)
+          void api.inbox().catch(() => undefined)
+          void api.activities('task').catch(() => undefined)
+          void api.reports().catch(() => undefined)
+          void api.workspace().catch(() => undefined)
+        }
+        if (typeof window !== 'undefined') {
+          if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(prewarm, { timeout: 3000 })
+          } else {
+            setTimeout(prewarm, 1200)
+          }
+        }
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -501,175 +524,185 @@ export function CommandCentre() {
           </div>
         </header>
 
-        {loading ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><LoadingBlock label="Loading the command centre" /></div> : loadError ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><EmptyState kind="error" title="The command centre could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} /></div> : active === 'Overview' ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
-          {clients && <ClientOnboardingList clients={clients} />}
-          {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
-          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            {[
-              { label: 'Approved schemes', value: board.length.toLocaleString(), meta: board.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: board.length ? 'in your ICP' : 'no leads yet', icon: 'building' as const },
-              { label: 'Agent contacts found', value: board.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: board.length ? `${Math.round(board.filter((scheme) => scheme.email || scheme.phone).length / board.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
-              { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? String(overview?.intent.length ?? 0), meta: overview?.metrics.highIntentNew ?? (overview?.intent.length ? 'live' : '—'), note: overview?.intent.length ? 'need attention' : 'none yet', icon: 'signal' as const },
-              { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '0', meta: overview?.metrics.meetingsTarget ?? '—', note: 'of monthly target', icon: 'calendar' as const },
-            ].map((stat) => (
-              <div key={stat.label} className="rounded-xl border border-[#DCE4F0] bg-white p-4 shadow-[0_1px_2px_rgba(30,58,138,0.04)] sm:p-5">
-                <div className="flex items-start justify-between">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#74807E]">{stat.label}</span>
-                  <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#F0F3EC] text-[#5E6A68]"><Icon name={stat.icon} size={15} /></span>
-                </div>
-                <div className="mt-4 font-display text-[27px] font-semibold leading-none tracking-[-0.03em] sm:text-[31px]"><CountUp value={Number(String(stat.value).replace(/,/g, '')) || 0} text={stat.value} /></div>
-                <div className="mt-3 flex items-center gap-1.5 text-[10px]">
-                  <span className="font-bold text-[#367552]">{stat.meta}</span>
-                  <span className="text-[#8B9593]">{stat.note}</span>
-                </div>
-              </div>
-            ))}
-          </section>
-
-          <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,.75fr)]">
-            <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white shadow-[0_1px_2px_rgba(30,58,138,0.04)]">
-              <div className="flex flex-col gap-4 border-b border-[#E6E9E3] p-5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="font-display text-[17px] font-semibold tracking-[-0.01em]">Priority planning leads</h2>
-                  <p className="mt-1 text-[10px] text-[#7A8583]">Approved schemes ranked from the production export</p>
-                </div>
-                <div className="flex gap-2">
-                  <label className="flex h-9 flex-1 items-center gap-2 rounded-lg border border-[#DCE4F0] bg-[#F8FAFD] px-3 text-[#718096] sm:w-[220px]">
-                    <Icon name="search" size={14} />
-                    <input value={query} onChange={(e) => setQuery(e.target.value)} className="w-full bg-transparent text-[11px] text-[#172224] outline-none placeholder:text-[#9CA5A3]" placeholder="Search schemes..." />
-                  </label>
-                  <button onClick={() => setActive('Planning search')} className="grid h-9 w-9 place-items-center rounded-lg border border-[#DCE4F0] text-[#64748B] hover:bg-[#F0F4FA]" aria-label="Filter leads"><Icon name="filter" size={15} /></button>
-                </div>
-              </div>
-
-              {leadJob?.status === 'running' && <LeadFetchProgress job={leadJob} />}
-              {leadJob?.status === 'partial' && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#FDE68A] bg-[#FFFBEB] px-5 py-3 text-[12px] text-[#92400E]"><span>{leadJob.message} {leadJob.found} applications are already listed.</span><button type="button" onClick={() => { void api.retryLeadFetch(leadJob.id).then((next) => setLeadJob(next.job)).catch(() => notify('Could not retry the remaining councils')) }} className="rounded-lg bg-[#172554] px-3 py-2 text-[12px] font-semibold text-white">Retry failed councils</button></div>}
-              <div>
-                {board.length === 0 && leadJob?.status === 'running' ? <p className="px-5 py-8 text-center text-[13px] text-[#52627A]">Scanning your councils. Leads will appear here as they are found.</p> : board.length === 0 && leadJob?.status === 'empty' ? <div className="p-5"><EmptyState icon="search" title={leadJob.message} action={leadJob.suggest === 'widen' ? { label: 'Widen to 7 days', onClick: () => { void beginFetch(7) } } : { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } }} secondary={leadJob.suggest === 'widen' ? { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } } : undefined} /></div> : board.length === 0 ? <div className="p-5"><EmptyState icon="search" title="No planning leads in this workspace yet." action={{ label: 'Get recent applications', onClick: () => setPickerOpen(true) }} /></div> : visibleSchemes.length === 0 ? <div className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match this search." action={{ label: 'Clear search', onClick: () => setQuery('') }} /></div> : visibleSchemes.map((scheme) => (
-                  <article key={scheme.id} className={`group grid cursor-pointer gap-4 border-b border-[#ECEEEA] p-4 transition last:border-0 hover:bg-[#FAFBF8] sm:grid-cols-[42px_minmax(0,1fr)_auto] sm:p-5 ${freshIds.includes(scheme.id) ? 'animate-slide-in' : ''}`} onClick={() => setSelected(scheme)}>
-                    <div className={`grid h-10 w-10 place-items-center rounded-lg ${scheme.colour} text-[10px] font-bold text-[#172224]`}>{scheme.initials}</div>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-display text-[13px] font-semibold">{scheme.title}</h3>
-                        <span className={`rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-[0.08em] ${scheme.status === 'High fit' ? 'bg-[#E6F6D5] text-[#397047]' : 'bg-[#EEF1EC] text-[#63706D]'}`}>{scheme.status}</span>
+        {loading ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><LoadingBlock label="Loading the command centre" /></div> : loadError ? <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9"><EmptyState kind="error" title="The command centre could not be loaded." action={{ label: 'Try again', onClick: () => window.location.reload() }} /></div> : (
+          <>
+            <div className={active === 'Overview' ? '' : 'hidden'}>
+              <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
+                {clients && <ClientOnboardingList clients={clients} />}
+                {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
+                <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                  {[
+                    { label: 'Approved schemes', value: board.length.toLocaleString(), meta: board.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: board.length ? 'in your ICP' : 'no leads yet', icon: 'building' as const },
+                    { label: 'Agent contacts found', value: board.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: board.length ? `${Math.round(board.filter((scheme) => scheme.email || scheme.phone).length / board.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
+                    { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? String(overview?.intent.length ?? 0), meta: overview?.metrics.highIntentNew ?? (overview?.intent.length ? 'live' : '—'), note: overview?.intent.length ? 'need attention' : 'none yet', icon: 'signal' as const },
+                    { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '0', meta: overview?.metrics.meetingsTarget ?? '—', note: 'of monthly target', icon: 'calendar' as const },
+                  ].map((stat) => (
+                    <div key={stat.label} className="rounded-xl border border-[#DCE4F0] bg-white p-4 shadow-[0_1px_2px_rgba(30,58,138,0.04)] sm:p-5">
+                      <div className="flex items-start justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#74807E]">{stat.label}</span>
+                        <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#F0F3EC] text-[#5E6A68]"><Icon name={stat.icon} size={15} /></span>
                       </div>
-                      <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-[#7C8885]"><Icon name="map" size={11} /> {scheme.location}</div>
-                      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[9px] font-medium text-[#64706E]">
-                        <span>{scheme.type}</span><span className="text-[#B1B8B5]">•</span><span>{scheme.stage}</span><span className="text-[#B1B8B5]">•</span><span>{scheme.council}</span>
+                      <div className="mt-4 font-display text-[27px] font-semibold leading-none tracking-[-0.03em] sm:text-[31px]"><CountUp value={Number(String(stat.value).replace(/,/g, '')) || 0} text={stat.value} /></div>
+                      <div className="mt-3 flex items-center gap-1.5 text-[10px]">
+                        <span className="font-bold text-[#367552]">{stat.meta}</span>
+                        <span className="text-[#8B9593]">{stat.note}</span>
                       </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-6 sm:flex-col sm:items-end">
-                      <div className="text-left sm:text-right">
-                        <div className="font-display text-[15px] font-semibold">{scheme.value}</div>
-                        <div className="mt-1 text-[9px] text-[#8A9492]">{scheme.date}</div>
-                      </div>
-                      <button
-                        onClick={(event) => { event.stopPropagation(); void toggleSave(scheme.id) }}
-                        className={`rounded-md px-2.5 py-1.5 text-[9px] font-semibold transition ${saved.includes(scheme.id) ? 'bg-[#172554] text-white' : 'border border-[#DCE4F0] text-[#64748B] opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
-                      >
-                        {saved.includes(scheme.id) ? 'Saved' : 'Save'}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-              {visibleSchemes.length > 0 && <button onClick={() => setActive('Planning search')} className="flex w-full items-center justify-center gap-2 border-t border-[#E6E9E3] py-4 text-[10px] font-semibold text-[#4F5C5A] hover:bg-[#FAFBF8]">
-                View all {board.length} applications <Icon name="arrow" size={13} />
-              </button>}
-            </div>
-
-            <div className="space-y-5">
-              {board.length > 0 ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
-                <div className="p-5">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
-                  <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{pipelineMillions >= 1 ? `£${pipelineMillions.toFixed(1)}m` : `£${Math.round(pipelineMillions * 1000)}k`}</div>
-                  <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
-                    {pipelineBars.map((height, index) => (
-                      <div key={index} className="flex h-full flex-1 items-end">
-                        <div className={`w-full rounded-t-sm transition-all duration-500 ${index === pipelineBars.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/20'}`} style={{ height: `${height}%` }} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div> : overview?.metrics.pipelineValue ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
-                <div className="p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
-                      <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{overview.metrics.pipelineValue}</div>
-                    </div>
-                    {overview.metrics.pipelineDelta && <span className="rounded-full bg-[#38BDF8]/15 px-2.5 py-1.5 text-[9px] font-bold text-[#38BDF8]">{overview.metrics.pipelineDelta}</span>}
-                  </div>
-                  <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
-                    {(overview.metrics.pipelineChart ?? []).map((height, index, chart) => (
-                      <div key={index} className="group flex h-full flex-1 items-end">
-                        <div className={`w-full rounded-t-sm transition-all group-hover:bg-[#38BDF8] ${index === chart.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/15'}`} style={{ height: `${height}%` }} />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex justify-between text-[8px] uppercase tracking-wider text-white/30"><span>Jan</span><span>Jun</span><span>Dec</span></div>
-                </div>
-                <div className="grid grid-cols-3 border-t border-white/8 bg-white/[0.025]">
-                  {[[overview.metrics.prospects ?? '0', 'Prospects'], [overview.metrics.qualified ?? '0', 'Qualified'], [overview.metrics.negotiating ?? '0', 'Negotiating']].map(([value, label]) => (
-                    <div key={label} className="border-r border-white/8 px-4 py-3.5 last:border-0">
-                      <div className="font-display text-[16px] font-semibold">{value}</div>
-                      <div className="mt-1 text-[8px] uppercase tracking-wider text-white/35">{label}</div>
                     </div>
                   ))}
-                </div>
-              </div> : <EmptyState icon="chart" title="Pipeline value appears after the first qualified lead." action={{ label: 'Set up your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('persona') } }} sample={<SampleBars />} />}
+                </section>
 
-              <div className="rounded-xl border border-[#DCE4F0] bg-white p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="font-display text-[16px] font-semibold">Live intent</h2>
-                    <p className="mt-1 text-[9px] text-[#8A9492]">Decision-maker activity</p>
+                <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,.75fr)]">
+                  <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white shadow-[0_1px_2px_rgba(30,58,138,0.04)]">
+                    <div className="flex flex-col gap-4 border-b border-[#E6E9E3] p-5 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h2 className="font-display text-[17px] font-semibold tracking-[-0.01em]">Priority planning leads</h2>
+                        <p className="mt-1 text-[10px] text-[#7A8583]">Approved schemes ranked from the production export</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <label className="flex h-9 flex-1 items-center gap-2 rounded-lg border border-[#DCE4F0] bg-[#F8FAFD] px-3 text-[#718096] sm:w-[220px]">
+                          <Icon name="search" size={14} />
+                          <input value={query} onChange={(e) => setQuery(e.target.value)} className="w-full bg-transparent text-[11px] text-[#172224] outline-none placeholder:text-[#9CA5A3]" placeholder="Search schemes..." />
+                        </label>
+                        <button onClick={() => setActive('Planning search')} className="grid h-9 w-9 place-items-center rounded-lg border border-[#DCE4F0] text-[#64748B] hover:bg-[#F0F4FA]" aria-label="Filter leads"><Icon name="filter" size={15} /></button>
+                      </div>
+                    </div>
+
+                    {leadJob?.status === 'running' && <LeadFetchProgress job={leadJob} />}
+                    {leadJob?.status === 'partial' && <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#FDE68A] bg-[#FFFBEB] px-5 py-3 text-[12px] text-[#92400E]"><span>{leadJob.message} {leadJob.found} applications are already listed.</span><button type="button" onClick={() => { void api.retryLeadFetch(leadJob.id).then((next) => setLeadJob(next.job)).catch(() => notify('Could not retry the remaining councils')) }} className="rounded-lg bg-[#172554] px-3 py-2 text-[12px] font-semibold text-white">Retry failed councils</button></div>}
+                    <div>
+                      {board.length === 0 && leadJob?.status === 'running' ? <p className="px-5 py-8 text-center text-[13px] text-[#52627A]">Scanning your councils. Leads will appear here as they are found.</p> : board.length === 0 && leadJob?.status === 'empty' ? <div className="p-5"><EmptyState icon="search" title={leadJob.message} action={leadJob.suggest === 'widen' ? { label: 'Widen to 7 days', onClick: () => { void beginFetch(7) } } : { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } }} secondary={leadJob.suggest === 'widen' ? { label: 'Broaden your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('settings') } } : undefined} /></div> : board.length === 0 ? <div className="p-5"><EmptyState icon="search" title="No planning leads in this workspace yet." action={{ label: 'Get recent applications', onClick: () => setPickerOpen(true) }} /></div> : visibleSchemes.length === 0 ? <div className="p-5"><EmptyState kind="filtered" icon="filter" title="No schemes match this search." action={{ label: 'Clear search', onClick: () => setQuery('') }} /></div> : visibleSchemes.map((scheme) => (
+                        <article key={scheme.id} className={`group grid cursor-pointer gap-4 border-b border-[#ECEEEA] p-4 transition last:border-0 hover:bg-[#FAFBF8] sm:grid-cols-[42px_minmax(0,1fr)_auto] sm:p-5 ${freshIds.includes(scheme.id) ? 'animate-slide-in' : ''}`} onClick={() => setSelected(scheme)}>
+                          <div className={`grid h-10 w-10 place-items-center rounded-lg ${scheme.colour} text-[10px] font-bold text-[#172224]`}>{scheme.initials}</div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="font-display text-[13px] font-semibold">{scheme.title}</h3>
+                              <span className={`rounded-full px-2 py-1 text-[8px] font-bold uppercase tracking-[0.08em] ${scheme.status === 'High fit' ? 'bg-[#E6F6D5] text-[#397047]' : 'bg-[#EEF1EC] text-[#63706D]'}`}>{scheme.status}</span>
+                            </div>
+                            <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-[#7C8885]"><Icon name="map" size={11} /> {scheme.location}</div>
+                            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[9px] font-medium text-[#64706E]">
+                              <span>{scheme.type}</span><span className="text-[#B1B8B5]">•</span><span>{scheme.stage}</span><span className="text-[#B1B8B5]">•</span><span>{scheme.council}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-6 sm:flex-col sm:items-end">
+                            <div className="text-left sm:text-right">
+                              <div className="font-display text-[15px] font-semibold">{scheme.value}</div>
+                              <div className="mt-1 text-[9px] text-[#8A9492]">{scheme.date}</div>
+                            </div>
+                            <button
+                              onClick={(event) => { event.stopPropagation(); void toggleSave(scheme.id) }}
+                              className={`rounded-md px-2.5 py-1.5 text-[9px] font-semibold transition ${saved.includes(scheme.id) ? 'bg-[#172554] text-white' : 'border border-[#DCE4F0] text-[#64748B] opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+                            >
+                              {saved.includes(scheme.id) ? 'Saved' : 'Save'}
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                    {visibleSchemes.length > 0 && <button onClick={() => setActive('Planning search')} className="flex w-full items-center justify-center gap-2 border-t border-[#E6E9E3] py-4 text-[10px] font-semibold text-[#4F5C5A] hover:bg-[#FAFBF8]">
+                      View all {board.length} applications <Icon name="arrow" size={13} />
+                    </button>}
                   </div>
-                  {Boolean(overview?.intent.length) && <span className="flex items-center gap-1.5 text-[9px] font-semibold text-[#4D615C]"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#70A777]" /> LIVE</span>}
-                </div>
-                <div className="mt-4 space-y-1">
-                  {overview?.intent.length ? overview.intent.map((item) => (
-                    <button key={item.name + item.detail} onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="flex w-full items-start gap-3 rounded-lg p-2 text-left transition hover:bg-[#F5F7F2]">
-                      <div className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#EDF0EA] text-[9px] font-bold text-[#53605E]">
-                        {item.initials}{item.hot && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#E96345]" />}
+
+                  <div className="space-y-5">
+                    {board.length > 0 ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
+                      <div className="p-5">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
+                        <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{pipelineMillions >= 1 ? `£${pipelineMillions.toFixed(1)}m` : `£${Math.round(pipelineMillions * 1000)}k`}</div>
+                        <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
+                          {pipelineBars.map((height, index) => (
+                            <div key={index} className="flex h-full flex-1 items-end">
+                              <div className={`w-full rounded-t-sm transition-all duration-500 ${index === pipelineBars.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/20'}`} style={{ height: `${height}%` }} />
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1 text-[9px] leading-relaxed text-[#7B8583]">
-                        <span className="font-semibold text-[#202D2E]">{item.name}</span> {item.action}
-                        <div className="truncate text-[#9AA3A1]">{item.detail}</div>
+                    </div> : overview?.metrics.pipelineValue ? <div className="overflow-hidden rounded-xl bg-[#172554] text-white shadow-sm">
+                      <div className="p-5">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/45">Pipeline value</div>
+                            <div className="mt-2 font-display text-[29px] font-semibold tracking-[-0.03em]">{overview.metrics.pipelineValue}</div>
+                          </div>
+                          {overview.metrics.pipelineDelta && <span className="rounded-full bg-[#38BDF8]/15 px-2.5 py-1.5 text-[9px] font-bold text-[#38BDF8]">{overview.metrics.pipelineDelta}</span>}
+                        </div>
+                        <div className="mt-5 flex h-[92px] items-end gap-2 border-b border-white/10">
+                          {(overview.metrics.pipelineChart ?? []).map((height, index, chart) => (
+                            <div key={index} className="group flex h-full flex-1 items-end">
+                              <div className={`w-full rounded-t-sm transition-all group-hover:bg-[#38BDF8] ${index === chart.length - 1 ? 'bg-[#38BDF8]' : 'bg-white/15'}`} style={{ height: `${height}%` }} />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex justify-between text-[8px] uppercase tracking-wider text-white/30"><span>Jan</span><span>Jun</span><span>Dec</span></div>
                       </div>
-                      <span className="pt-0.5 text-[8px] text-[#A3ABA9]">{item.time}</span>
-                    </button>
-                  )) : <EmptyState icon="signal" title="Intent shows up when someone opens a campaign." action={{ label: 'Create a campaign', onClick: () => setActive('Campaigns') }} sample={<p className="text-[12px] text-[#334155]"><b>Maya Evans</b> opened a case study · 3m</p>} />}
-                </div>
-                {Boolean(overview?.intent.length) && <button onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>}
+                      <div className="grid grid-cols-3 border-t border-white/8 bg-white/[0.025]">
+                        {[[overview.metrics.prospects ?? '0', 'Prospects'], [overview.metrics.qualified ?? '0', 'Qualified'], [overview.metrics.negotiating ?? '0', 'Negotiating']].map(([value, label]) => (
+                          <div key={label} className="border-r border-white/8 px-4 py-3.5 last:border-0">
+                            <div className="font-display text-[16px] font-semibold">{value}</div>
+                            <div className="mt-1 text-[8px] uppercase tracking-wider text-white/35">{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div> : <EmptyState icon="chart" title="Pipeline value appears after the first qualified lead." action={{ label: 'Set up your ICP', onClick: () => { setActive('Workspace setup'); setSetupTab('persona') } }} sample={<SampleBars />} />}
+
+                    <div className="rounded-xl border border-[#DCE4F0] bg-white p-5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h2 className="font-display text-[16px] font-semibold">Live intent</h2>
+                          <p className="mt-1 text-[9px] text-[#8A9492]">Decision-maker activity</p>
+                        </div>
+                        {Boolean(overview?.intent.length) && <span className="flex items-center gap-1.5 text-[9px] font-semibold text-[#4D615C]"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#70A777]" /> LIVE</span>}
+                      </div>
+                      <div className="mt-4 space-y-1">
+                        {overview?.intent.length ? overview.intent.map((item) => (
+                          <button key={item.name + item.detail} onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="flex w-full items-start gap-3 rounded-lg p-2 text-left transition hover:bg-[#F5F7F2]">
+                            <div className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#EDF0EA] text-[9px] font-bold text-[#53605E]">
+                              {item.initials}{item.hot && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-[#E96345]" />}
+                            </div>
+                            <div className="min-w-0 flex-1 text-[9px] leading-relaxed text-[#7B8583]">
+                              <span className="font-semibold text-[#202D2E]">{item.name}</span> {item.action}
+                              <div className="truncate text-[#9AA3A1]">{item.detail}</div>
+                            </div>
+                            <span className="pt-0.5 text-[8px] text-[#A3ABA9]">{item.time}</span>
+                          </button>
+                        )) : <EmptyState icon="signal" title="Intent shows up when someone opens a campaign." action={{ label: 'Create a campaign', onClick: () => setActive('Campaigns') }} sample={<p className="text-[12px] text-[#334155]"><b>Maya Evans</b> opened a case study · 3m</p>} />}
+                      </div>
+                      {Boolean(overview?.intent.length) && <button onClick={() => { setActive('CRM & intent'); setCrmTab('intent') }} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#E0E4DD] py-2.5 text-[9px] font-semibold text-[#5F6B69] hover:bg-[#F7F8F5]">View intent centre <Icon name="arrow" size={12} /></button>}
+                    </div>
+                  </div>
+                </section>
               </div>
             </div>
-          </section>
-        </div> : (
-          <WorkspaceView
-            active={active}
-            data={filteredData}
-            crmTab={crmTab}
-            setCrmTab={setCrmTab}
-            setInboxUnread={setInboxUnread}
-            reportsTab={reportsTab}
-            setupTab={setupTab}
-            campaignSettingsOpen={campaignSettingsOpen}
-            setCampaignSettingsOpen={setCampaignSettingsOpen}
-            campaignCreateSignal={campaignCreateSignal}
-            profile={profile}
-            setProfile={(next) => { setProfile(next); void api.updateMe(next).catch(() => notify('Could not save your profile')) }}
-            saved={saved}
-            onOpen={setSelected}
-            onSave={(id) => { void toggleSave(id) }}
-            canSave={can('saved.write')}
-            canExport={can('leads.export')}
-            canCampaign={can('campaigns.write')}
-            canCrm={can('crm.write')}
-            canSettings={can('settings.write')}
-            canTeam={can('team.manage')}
-            actorRole={orgRole}
-            onNavigate={setActive}
-          />
+
+            {workspaceMounted && (
+              <div className={active !== 'Overview' ? '' : 'hidden'}>
+                <WorkspaceView
+                  active={active}
+                  data={filteredData}
+                  crmTab={crmTab}
+                  setCrmTab={setCrmTab}
+                  setInboxUnread={setInboxUnread}
+                  reportsTab={reportsTab}
+                  setupTab={setupTab}
+                  campaignSettingsOpen={campaignSettingsOpen}
+                  setCampaignSettingsOpen={setCampaignSettingsOpen}
+                  campaignCreateSignal={campaignCreateSignal}
+                  profile={profile}
+                  setProfile={(next) => { setProfile(next); void api.updateMe(next).catch(() => notify('Could not save your profile')) }}
+                  saved={saved}
+                  onOpen={setSelected}
+                  onSave={(id) => { void toggleSave(id) }}
+                  canSave={can('saved.write')}
+                  canExport={can('leads.export')}
+                  canCampaign={can('campaigns.write')}
+                  canCrm={can('crm.write')}
+                  canSettings={can('settings.write')}
+                  canTeam={can('team.manage')}
+                  actorRole={orgRole}
+                  onNavigate={setActive}
+                />
+              </div>
+            )}
+          </>
         )}
       </main>
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Scheme } from '@planningpal/shared'
 import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
@@ -21,40 +21,42 @@ export function PlanningExplorer({ data, onOpen, onSave, saved, canSave = true, 
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  const filteredResults = data.filter((scheme) => {
-    const matchesQuery = `${scheme.title} ${scheme.location} ${scheme.council} ${scheme.id} ${scheme.architect} ${scheme.practice} ${scheme.applicant}`.toLowerCase().includes(query.toLowerCase())
-    const matchesCategory = category === 'All categories' || scheme.category === category.toUpperCase()
-    const matchesCounty = county === 'All counties' || scheme.county === county
-    const matchesStage = stageFilter === 'All stages' || scheme.stage === stageFilter
-    const contactLevel = scheme.email && scheme.phone ? 'Direct contacts' : scheme.email || scheme.phone ? 'Partial contacts' : 'Missing contacts'
-    const matchesContact = contactFilter === 'All contacts' || contactLevel === contactFilter
-    const matchesAuthority = authorityFilter === 'All authorities' || scheme.council === authorityFilter
-    const matchesMinValue = !minValue || scheme.valueNum >= Number(minValue)
-    const matchesMaxValue = !maxValue || (scheme.valueFrom ?? scheme.valueNum) <= Number(maxValue)
-    const matchesQuick = !quickFilter
-      || (quickFilter === 'Schemes >£1m' && scheme.valueNum > 1)
-      || (quickFilter === 'Direct contacts' && Boolean(scheme.email && scheme.phone))
-      || (quickFilter === 'New build' && scheme.category === 'NEW BUILD')
-      || (quickFilter === 'Housing units' && scheme.category === 'HOUSING UNITS')
-      || (quickFilter === 'London' && scheme.region === 'London')
-    return matchesQuery && matchesCategory && matchesCounty && matchesStage && matchesContact && matchesAuthority && matchesMinValue && matchesMaxValue && matchesQuick
-  }).sort((first, second) => {
-    const contactScore = (scheme: Scheme) => scheme.email && scheme.phone ? 2 : scheme.email || scheme.phone ? 1 : 0
-    const values: Record<typeof sortKey, [string | number, string | number]> = {
-      title: [first.title, second.title],
-      category: [first.category || '', second.category || ''],
-      council: [first.council, second.council],
-      value: [first.valueNum, second.valueNum],
-      stage: [first.stage, second.stage],
-      contact: [contactScore(first), contactScore(second)],
-      score: [first.score, second.score],
-    }
-    const [firstValue, secondValue] = values[sortKey]
-    const comparison = typeof firstValue === 'number' && typeof secondValue === 'number'
-      ? firstValue - secondValue
-      : String(firstValue).localeCompare(String(secondValue))
-    return sortDirection === 'asc' ? comparison : -comparison
-  })
+  const filteredResults = useMemo(() => {
+    return data.filter((scheme) => {
+      const matchesQuery = `${scheme.title} ${scheme.location} ${scheme.council} ${scheme.id} ${scheme.architect} ${scheme.practice} ${scheme.applicant}`.toLowerCase().includes(query.toLowerCase())
+      const matchesCategory = category === 'All categories' || scheme.category === category.toUpperCase()
+      const matchesCounty = county === 'All counties' || scheme.county === county
+      const matchesStage = stageFilter === 'All stages' || scheme.stage === stageFilter
+      const contactLevel = scheme.email && scheme.phone ? 'Direct contacts' : scheme.email || scheme.phone ? 'Partial contacts' : 'Missing contacts'
+      const matchesContact = contactFilter === 'All contacts' || contactLevel === contactFilter
+      const matchesAuthority = authorityFilter === 'All authorities' || scheme.council === authorityFilter
+      const matchesMinValue = !minValue || scheme.valueNum >= Number(minValue)
+      const matchesMaxValue = !maxValue || (scheme.valueFrom ?? scheme.valueNum) <= Number(maxValue)
+      const matchesQuick = !quickFilter
+        || (quickFilter === 'Schemes >£1m' && scheme.valueNum > 1)
+        || (quickFilter === 'Direct contacts' && Boolean(scheme.email && scheme.phone))
+        || (quickFilter === 'New build' && scheme.category === 'NEW BUILD')
+        || (quickFilter === 'Housing units' && scheme.category === 'HOUSING UNITS')
+        || (quickFilter === 'London' && scheme.region === 'London')
+      return matchesQuery && matchesCategory && matchesCounty && matchesStage && matchesContact && matchesAuthority && matchesMinValue && matchesMaxValue && matchesQuick
+    }).sort((first, second) => {
+      const contactScore = (scheme: Scheme) => scheme.email && scheme.phone ? 2 : scheme.email || scheme.phone ? 1 : 0
+      const values: Record<typeof sortKey, [string | number, string | number]> = {
+        title: [first.title, second.title],
+        category: [first.category || '', second.category || ''],
+        council: [first.council, second.council],
+        value: [first.valueNum, second.valueNum],
+        stage: [first.stage, second.stage],
+        contact: [contactScore(first), contactScore(second)],
+        score: [first.score, second.score],
+      }
+      const [firstValue, secondValue] = values[sortKey]
+      const comparison = typeof firstValue === 'number' && typeof secondValue === 'number'
+        ? firstValue - secondValue
+        : String(firstValue).localeCompare(String(secondValue))
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [data, query, category, county, stageFilter, contactFilter, authorityFilter, minValue, maxValue, quickFilter, sortKey, sortDirection])
   const pageSize = 12
   const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize))
   const currentPage = Math.min(page, totalPages)

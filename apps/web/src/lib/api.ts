@@ -15,10 +15,34 @@ export function getActiveWorkspaceId(): string {
   }
 }
 
+type CacheEntry = {
+  data: unknown
+  timestamp: number
+}
+
+const memoryCache = new Map<string, CacheEntry>()
+const inFlightPromises = new Map<string, Promise<unknown>>()
+const DEFAULT_TTL_MS = 60_000
+
+export function clearApiCache(pathPrefix?: string) {
+  if (!pathPrefix) {
+    memoryCache.clear()
+    inFlightPromises.clear()
+    return
+  }
+  for (const key of memoryCache.keys()) {
+    if (key.includes(pathPrefix)) memoryCache.delete(key)
+  }
+  for (const key of inFlightPromises.keys()) {
+    if (key.includes(pathPrefix)) inFlightPromises.delete(key)
+  }
+}
+
 export function setActiveWorkspaceId(workspaceId: string | null) {
   try {
     if (workspaceId) localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId)
     else localStorage.removeItem(ACTIVE_WORKSPACE_KEY)
+    clearApiCache()
   } catch {
     // ignore storage errors
   }
@@ -36,6 +60,7 @@ export function setPreviewRole(role: string | null) {
   try {
     if (role) localStorage.setItem(PREVIEW_ROLE_KEY, role)
     else localStorage.removeItem(PREVIEW_ROLE_KEY)
+    clearApiCache()
   } catch {
     // ignore storage errors
   }
@@ -51,30 +76,66 @@ function safeError(status: number, payload: { error?: string }) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers)
-  if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  const token = await accessToken()
-  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
+  const method = (init?.method || 'GET').toUpperCase()
+  const isGet = method === 'GET' && !init?.body
   const activeWs = getActiveWorkspaceId()
-  if (activeWs && !headers.has('x-workspace-id')) headers.set('x-workspace-id', activeWs)
   const previewRole = getPreviewRole()
-  if (previewRole && !headers.has('x-preview-role')) headers.set('x-preview-role', previewRole)
-  let response: Response
-  try {
-    response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
-  } catch {
-    window.dispatchEvent(new Event('planningpal-offline'))
-    throw new Error('You appear to be offline. Check your connection and try again.')
+  const cacheKey = `${path}::ws=${activeWs}::role=${previewRole}`
+
+  // Return fresh cached data if available (instant 0ms render)
+  if (isGet) {
+    const cached = memoryCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < DEFAULT_TTL_MS) {
+      return cached.data as T
+    }
+    const inFlight = inFlightPromises.get(cacheKey)
+    if (inFlight) {
+      return inFlight as Promise<T>
+    }
   }
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string }
-    if (response.status === 401 && !path.includes('/team/invites/')) window.location.assign('/sign-in?expired=1')
-    throw new Error(safeError(response.status, payload))
+
+  const fetchPromise = (async () => {
+    const headers = new Headers(init?.headers)
+    if (init?.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+    const token = await accessToken()
+    if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`)
+    if (activeWs && !headers.has('x-workspace-id')) headers.set('x-workspace-id', activeWs)
+    if (previewRole && !headers.has('x-preview-role')) headers.set('x-preview-role', previewRole)
+    let response: Response
+    try {
+      response = await fetch(`${base}${path}`, { ...init, headers, credentials: 'include' })
+    } catch {
+      window.dispatchEvent(new Event('planningpal-offline'))
+      throw new Error('You appear to be offline. Check your connection and try again.')
+    }
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as { error?: string }
+      if (response.status === 401 && !path.includes('/team/invites/')) window.location.assign('/sign-in?expired=1')
+      throw new Error(safeError(response.status, payload))
+    }
+    if (response.status === 204) {
+      if (!isGet) clearApiCache()
+      return undefined as T
+    }
+    const type = response.headers.get('content-type') || ''
+    const result = type.includes('text/csv') ? ((await response.text()) as T) : ((await response.json()) as T)
+    if (isGet) {
+      memoryCache.set(cacheKey, { data: result, timestamp: Date.now() })
+    } else {
+      // Mutations clear cached query results so screens receive fresh data
+      clearApiCache()
+    }
+    return result
+  })()
+
+  if (isGet) {
+    inFlightPromises.set(cacheKey, fetchPromise)
+    fetchPromise.finally(() => {
+      inFlightPromises.delete(cacheKey)
+    })
   }
-  if (response.status === 204) return undefined as T
-  const type = response.headers.get('content-type') || ''
-  if (type.includes('text/csv')) return (await response.text()) as T
-  return response.json() as Promise<T>
+
+  return fetchPromise
 }
 
 export type Overview = {

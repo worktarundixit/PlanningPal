@@ -9,6 +9,7 @@ import { notify } from '../lib/notify'
 
 export function SuperAdminDashboard() {
   const [tab, setTab] = useState<'clients' | 'ingestion' | 'provider' | 'leads'>('clients')
+  const [visitedTabs, setVisitedTabs] = useState<Set<string>>(() => new Set(['clients']))
   const [clients, setClients] = useState<ClientOnboarding[]>([])
   const [loading, setLoading] = useState(true)
   const [addModalOpen, setAddModalOpen] = useState(false)
@@ -45,6 +46,15 @@ export function SuperAdminDashboard() {
       .then((res) => setLeads(res.data))
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    setVisitedTabs((prev) => {
+      if (prev.has(tab)) return prev
+      const next = new Set(prev)
+      next.add(tab)
+      return next
+    })
+  }, [tab])
 
   const resetAddModal = () => {
     setFirstName('')
@@ -196,8 +206,8 @@ export function SuperAdminDashboard() {
         </header>
 
         <div className="p-8">
-          {tab === 'clients' && (
-            <div className="space-y-6">
+          {visitedTabs.has('clients') && (
+            <div className={tab === 'clients' ? 'space-y-6' : 'hidden'}>
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="rounded-xl border border-[#DCE4F0] bg-white p-5 shadow-xs">
                   <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider">Total Workspaces</div>
@@ -275,18 +285,28 @@ export function SuperAdminDashboard() {
             </div>
           )}
 
-          {tab === 'ingestion' && <Ingestion />}
-          {tab === 'provider' && <CampaignProviderPage />}
-          {tab === 'leads' && (
-            <PlanningExplorer
-              data={leads}
-              onOpen={setSelectedScheme}
-              onSave={() => {}}
-              saved={[]}
-              canSave={false}
-              canExport={true}
-              canCampaign={false}
-            />
+          {visitedTabs.has('ingestion') && (
+            <div className={tab === 'ingestion' ? '' : 'hidden'}>
+              <Ingestion />
+            </div>
+          )}
+          {visitedTabs.has('provider') && (
+            <div className={tab === 'provider' ? '' : 'hidden'}>
+              <CampaignProviderPage />
+            </div>
+          )}
+          {visitedTabs.has('leads') && (
+            <div className={tab === 'leads' ? '' : 'hidden'}>
+              <PlanningExplorer
+                data={leads}
+                onOpen={setSelectedScheme}
+                onSave={() => {}}
+                saved={[]}
+                canSave={false}
+                canExport={true}
+                canCampaign={false}
+              />
+            </div>
           )}
         </div>
       </main>

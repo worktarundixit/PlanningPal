@@ -1,10 +1,11 @@
+import { useMemo } from 'react'
 import type { Scheme } from '@planningpal/shared'
 import { EmptyState } from '../components/EmptyState'
 import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
 
 export function SavedSchemes({ data, onOpen, onSave, saved, canSave = true, onNavigate }: { data: Scheme[]; onOpen: (scheme: Scheme) => void; onSave: (id: string) => void; saved: string[]; canSave?: boolean; onNavigate?: (screen: string) => void }) {
-  const items = data.filter((scheme) => saved.includes(scheme.id))
+  const items = useMemo(() => data.filter((scheme) => saved.includes(scheme.id)), [data, saved])
   return (
     <>
       <PageIntro eyebrow="Shortlist" title="Saved schemes" description="Monitor priority applications and keep the most relevant ECI opportunities close to hand." />
