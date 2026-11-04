@@ -49,3 +49,4 @@ CREATE POLICY contact_group_members_isolation ON contact_group_members FOR ALL T
 GRANT SELECT, INSERT, UPDATE, DELETE ON contact_groups TO authenticated;
 --> statement-breakpoint
 GRANT SELECT, INSERT, UPDATE, DELETE ON contact_group_members TO authenticated;
+

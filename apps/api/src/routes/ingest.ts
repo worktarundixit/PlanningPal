@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { pipelineRuns } from '../db/schema.ts'
-import { enrichMissingContacts, presentRun, readRunCsv, startIngestRun } from '../ingest/run.ts'
+import { enrichMissingContacts, presentRun, readRunCsv, startIngestRun, upsertRows } from '../ingest/run.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 
 const runBody = z.object({
@@ -17,6 +17,11 @@ const runBody = z.object({
 
 const enrichBody = z.object({
   limit: z.number().int().positive().max(100).optional(),
+})
+
+const uploadBody = z.object({
+  batchName: z.string().optional(),
+  records: z.array(z.record(z.string(), z.string())).min(1).max(5000),
 })
 
 export async function ingestRoutes(app: FastifyInstance) {
@@ -67,4 +72,47 @@ export async function ingestRoutes(app: FastifyInstance) {
     const result = await enrichMissingContacts({ limit: body.limit ?? 20 })
     return reply.code(200).send(result)
   })
+
+  app.post('/api/v1/ingest/upload', async (request, reply) => {
+    requireUser(request)
+    const body = parseBody(uploadBody, request.body, reply)
+    if (!body) return
+
+    const batchName = body.batchName?.trim() || `Upload ${new Date().toLocaleDateString('en-GB')}`
+    const rows = body.records.map((r, idx) => {
+      const cleanRow: Record<string, string> = { ...r }
+      cleanRow['Application Reference'] = String(r['Application Reference'] || r.reference || r.applicationRef || `APP-${Date.now()}-${idx + 1}`)
+      cleanRow['Local Authority'] = String(r['Local Authority'] || r.council || r.authority || 'Unknown LPA')
+      cleanRow.Heading = String(r.Heading || r.heading || r.title || 'Planning Application')
+      cleanRow.Proposal = String(r.Proposal || r.proposal || r.description || '')
+      cleanRow.Source = 'manual_upload'
+      cleanRow['Upload Batch'] = batchName
+      return cleanRow
+    })
+
+    const result = await upsertRows(rows)
+
+    // Record the upload run in pipelineRuns so admins can view upload batches separately
+    await db.insert(pipelineRuns).values({
+      source: 'manual_upload',
+      status: 'completed',
+      fetched: rows.length,
+      filteredOut: 0,
+      inserted: result.inserted,
+      updated: result.updated,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      message: `Manual batch imported: ${result.inserted} added, ${result.updated} updated (${batchName})`,
+      options: { authority: batchName },
+    })
+
+    return reply.send({
+      success: true,
+      inserted: result.inserted,
+      updated: result.updated,
+      total: rows.length,
+      batchName,
+    })
+  })
 }
+

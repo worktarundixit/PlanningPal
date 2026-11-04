@@ -21,23 +21,35 @@ export interface Mailer {
 
 async function sendWithResend(message: MailMessage) {
   const key = process.env.RESEND_API_KEY?.trim()
-  if (!key) return false
-  try {
-    const from = process.env.RESEND_FROM || 'PlanningPal <alerts@planningpal.co.uk>'
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text }),
-    })
-    if (!response.ok) {
-      console.error(`Resend rejected a ${message.kind} message (${response.status})`)
-      return false
-    }
-    return true
-  } catch (error) {
-    console.error(`Resend could not send a ${message.kind} message`, error instanceof Error ? error.message : 'request failed')
+  if (!key) {
+    console.warn(`[mail] RESEND_API_KEY is not set. Cannot send email to ${message.to}.`)
     return false
   }
+  const customFrom = process.env.RESEND_FROM?.trim()
+  // Try customFrom first if set, then fallback to onboarding@resend.dev which works on all Resend accounts without domain verification
+  const fromAddresses = [
+    ...(customFrom ? [customFrom] : []),
+    'PlanningPal <onboarding@resend.dev>',
+    'PlanningPal <alerts@planningpal.co.uk>',
+  ]
+
+  for (const from of fromAddresses) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text }),
+      })
+      if (response.ok) {
+        return true
+      }
+      const errBody = await response.text().catch(() => '')
+      console.warn(`Resend rejected attempt with from=${from} (${response.status}): ${errBody}`)
+    } catch (error) {
+      console.error(`Resend request error with from=${from}:`, error instanceof Error ? error.message : error)
+    }
+  }
+  return false
 }
 
 export function createMailer(): Mailer {

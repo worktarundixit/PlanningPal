@@ -38891,7 +38891,8 @@ var ROUTE_RULES = [
   { method: "GET", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" },
   { method: "GET", pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: "ingest.admin" },
   { method: "POST", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" },
-  { method: "POST", pattern: /^\/api\/v1\/ingest\/enrich$/, permission: "ingest.admin" }
+  { method: "POST", pattern: /^\/api\/v1\/ingest\/enrich$/, permission: "ingest.admin" },
+  { method: "POST", pattern: /^\/api\/v1\/ingest\/upload$/, permission: "ingest.admin" }
 ];
 function permissionFor(method, url2) {
   const path2 = url2.split("?")[0] || url2;
@@ -93477,23 +93478,33 @@ import { fileURLToPath } from "node:url";
 // ../api/src/auth/mailer.ts
 async function sendWithResend(message) {
   const key = process.env.RESEND_API_KEY?.trim();
-  if (!key) return false;
-  try {
-    const from = process.env.RESEND_FROM || "PlanningPal <alerts@planningpal.co.uk>";
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text })
-    });
-    if (!response.ok) {
-      console.error(`Resend rejected a ${message.kind} message (${response.status})`);
-      return false;
-    }
-    return true;
-  } catch (error62) {
-    console.error(`Resend could not send a ${message.kind} message`, error62 instanceof Error ? error62.message : "request failed");
+  if (!key) {
+    console.warn(`[mail] RESEND_API_KEY is not set. Cannot send email to ${message.to}.`);
     return false;
   }
+  const customFrom = process.env.RESEND_FROM?.trim();
+  const fromAddresses = [
+    ...customFrom ? [customFrom] : [],
+    "PlanningPal <onboarding@resend.dev>",
+    "PlanningPal <alerts@planningpal.co.uk>"
+  ];
+  for (const from of fromAddresses) {
+    try {
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: [message.to], subject: message.subject, text: message.text })
+      });
+      if (response.ok) {
+        return true;
+      }
+      const errBody = await response.text().catch(() => "");
+      console.warn(`Resend rejected attempt with from=${from} (${response.status}): ${errBody}`);
+    } catch (error62) {
+      console.error(`Resend request error with from=${from}:`, error62 instanceof Error ? error62.message : error62);
+    }
+  }
+  return false;
 }
 function createMailer() {
   return {
@@ -94444,6 +94455,10 @@ var runBody = external_exports.object({
 var enrichBody = external_exports.object({
   limit: external_exports.number().int().positive().max(100).optional()
 });
+var uploadBody = external_exports.object({
+  batchName: external_exports.string().optional(),
+  records: external_exports.array(external_exports.record(external_exports.string(), external_exports.string())).min(1).max(5e3)
+});
 async function ingestRoutes(app2) {
   app2.get("/api/v1/ingest/runs", async (request) => {
     requireUser(request);
@@ -94485,6 +94500,42 @@ async function ingestRoutes(app2) {
     if (!body) return;
     const result = await enrichMissingContacts({ limit: body.limit ?? 20 });
     return reply.code(200).send(result);
+  });
+  app2.post("/api/v1/ingest/upload", async (request, reply) => {
+    requireUser(request);
+    const body = parseBody(uploadBody, request.body, reply);
+    if (!body) return;
+    const batchName = body.batchName?.trim() || `Upload ${(/* @__PURE__ */ new Date()).toLocaleDateString("en-GB")}`;
+    const rows = body.records.map((r, idx) => {
+      const cleanRow = { ...r };
+      cleanRow["Application Reference"] = String(r["Application Reference"] || r.reference || r.applicationRef || `APP-${Date.now()}-${idx + 1}`);
+      cleanRow["Local Authority"] = String(r["Local Authority"] || r.council || r.authority || "Unknown LPA");
+      cleanRow.Heading = String(r.Heading || r.heading || r.title || "Planning Application");
+      cleanRow.Proposal = String(r.Proposal || r.proposal || r.description || "");
+      cleanRow.Source = "manual_upload";
+      cleanRow["Upload Batch"] = batchName;
+      return cleanRow;
+    });
+    const result = await upsertRows(rows);
+    await db.insert(pipelineRuns).values({
+      source: "manual_upload",
+      status: "completed",
+      fetched: rows.length,
+      filteredOut: 0,
+      inserted: result.inserted,
+      updated: result.updated,
+      startedAt: /* @__PURE__ */ new Date(),
+      finishedAt: /* @__PURE__ */ new Date(),
+      message: `Manual batch imported: ${result.inserted} added, ${result.updated} updated (${batchName})`,
+      options: { authority: batchName }
+    });
+    return reply.send({
+      success: true,
+      inserted: result.inserted,
+      updated: result.updated,
+      total: rows.length,
+      batchName
+    });
   });
 }
 

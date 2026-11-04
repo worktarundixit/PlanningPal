@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon'
 import { Ingestion } from './Ingestion'
 import { CampaignProviderPage } from './CampaignProviderPage'
 import { PlanningExplorer } from './PlanningExplorer'
+import { UploadPlanningDataModal } from '../components/UploadPlanningDataModal'
 import { api, type ClientOnboarding, setActiveWorkspaceId } from '../lib/api'
 import { notify } from '../lib/notify'
 
@@ -13,6 +14,7 @@ export function SuperAdminDashboard() {
   const [clients, setClients] = useState<ClientOnboarding[]>([])
   const [loading, setLoading] = useState(true)
   const [addModalOpen, setAddModalOpen] = useState(false)
+  const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [busy, setBusy] = useState(false)
 
   // Form state for + Add New Customer
@@ -192,17 +194,27 @@ export function SuperAdminDashboard() {
               {tab === 'leads' && 'Global Planning Database & Dossiers'}
             </h1>
           </div>
-          {tab === 'clients' && (
-            <button
-              onClick={() => {
-                setCreatedInviteUrl('')
-                setAddModalOpen(true)
-              }}
-              className="flex items-center gap-2 rounded-lg bg-[#2563EB] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#1D4ED8]"
-            >
-              <span className="text-sm leading-none">+</span> Add New Customer
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {(tab === 'ingestion' || tab === 'leads') && (
+              <button
+                onClick={() => setUploadModalOpen(true)}
+                className="flex items-center gap-1.5 rounded-lg bg-[#172554] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#1E3A8A]"
+              >
+                <Icon name="plus" size={13} /> Upload Planning Data
+              </button>
+            )}
+            {tab === 'clients' && (
+              <button
+                onClick={() => {
+                  setCreatedInviteUrl('')
+                  setAddModalOpen(true)
+                }}
+                className="flex items-center gap-2 rounded-lg bg-[#2563EB] px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-[#1D4ED8]"
+              >
+                <span className="text-sm leading-none">+</span> Add New Customer
+              </button>
+            )}
+          </div>
         </header>
 
         <div className="p-8">
@@ -442,6 +454,14 @@ export function SuperAdminDashboard() {
           </div>
         </div>
       )}
+
+      <UploadPlanningDataModal
+        isOpen={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
+        onSuccess={() => {
+          api.leads().then((res) => setLeads(res.data)).catch(() => {})
+        }}
+      />
     </div>
   )
 }

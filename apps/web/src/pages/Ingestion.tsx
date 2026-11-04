@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { EmptyState, LoadingBlock } from '../components/EmptyState'
+import { Icon } from '../components/Icon'
 import { PageIntro } from '../components/PageIntro'
+import { UploadPlanningDataModal } from '../components/UploadPlanningDataModal'
 import { api, type IngestRun, type LpaHealth } from '../lib/api'
 import { notify } from '../lib/notify'
 
@@ -11,6 +13,8 @@ export function Ingestion() {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [busy, setBusy] = useState(false)
   const [enrichBusy, setEnrichBusy] = useState(false)
+  const [uploadModalOpen, setUploadModalOpen] = useState(false)
+  const [runFilter, setRunFilter] = useState<'all' | 'scrapers' | 'uploads'>('all')
   const [authority, setAuthority] = useState('')
   const [source, setSource] = useState<IngestSourceOption>('auto')
   const [recentDays, setRecentDays] = useState(3)
@@ -56,6 +60,12 @@ export function Ingestion() {
         description="Hybrid ingestion paces PlanIt overnight (18:00–06:00, ≥60s interval, ≤300 req/day, compress=on) with automatic GLA London Datahub fallback and direct Idox portal contact enrichment."
         action={
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setUploadModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-[#2563EB] px-3.5 py-2.5 text-[10px] font-semibold text-white shadow-xs hover:bg-[#1D4ED8]"
+            >
+              <Icon name="plus" size={12} /> Upload CSV Data
+            </button>
             <button
               disabled={enrichBusy}
               onClick={runEnrich}
@@ -144,28 +154,74 @@ export function Ingestion() {
           <input value={authority} onChange={(event) => setAuthority(event.target.value)} placeholder="Camden" className="mt-2 block w-56 rounded-lg border border-[#DCE4F0] px-3 py-2.5 text-[11px] font-normal normal-case tracking-normal outline-none" />
         </label>
       </form>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex rounded-lg border border-[#DCE4F0] bg-white p-0.5 text-[9px] font-semibold">
+          <button
+            type="button"
+            onClick={() => setRunFilter('all')}
+            className={`rounded px-3 py-1.5 transition ${runFilter === 'all' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+          >
+            All Runs ({runs.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setRunFilter('scrapers')}
+            className={`rounded px-3 py-1.5 transition ${runFilter === 'scrapers' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+          >
+            Automated Feeds ({runs.filter((r) => r.source !== 'manual_upload').length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setRunFilter('uploads')}
+            className={`rounded px-3 py-1.5 transition ${runFilter === 'uploads' ? 'bg-[#172554] text-white' : 'text-[#64748B]'}`}
+          >
+            Manual Uploads ({runs.filter((r) => r.source === 'manual_upload').length})
+          </button>
+        </div>
+        <span className="text-[9px] text-[#94A3B8]">Separate inner datasets & batch logs</span>
+      </div>
+
       <div className="overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
-        <div className="grid grid-cols-[140px_90px_80px_repeat(5,minmax(65px,.6fr))_120px] bg-[#F8FAFD] px-4 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]">
-          <span>Started</span><span>Source</span><span>Status</span><span>Fetched</span><span>Filtered</span><span>New</span><span>Updated</span><span>Errors</span><span></span>
+        <div className="grid grid-cols-[140px_110px_80px_repeat(5,minmax(65px,.6fr))_120px] bg-[#F8FAFD] px-4 py-3 text-[8px] font-bold uppercase tracking-wider text-[#94A3B8]">
+          <span>Started</span><span>Source / Batch</span><span>Status</span><span>Fetched</span><span>Filtered</span><span>New</span><span>Updated</span><span>Errors</span><span></span>
         </div>
         {status === 'loading' && <div className="p-4"><LoadingBlock label="Loading ingestion runs" /></div>}
         {status === 'error' && <div className="p-4"><EmptyState kind="error" title="Ingestion runs could not be loaded." action={{ label: 'Try again', onClick: () => void load() }} /></div>}
         {status === 'ready' && runs.length === 0 && <div className="p-4"><EmptyState icon="download" title="No ingestion runs yet." action={{ label: 'Run Ingestion Now', onClick: run }} /></div>}
-        {runs.map((run) => (
-          <div key={run.id} className="grid grid-cols-[140px_90px_80px_repeat(5,minmax(65px,.6fr))_120px] items-center border-t border-[#EEF2F7] px-4 py-4 text-[10px]">
-            <span className="text-[#64748B]">{new Date(run.startedAt).toLocaleString('en-GB', { hour12: false })}</span>
-            <span className="font-medium text-[#52627A]">{run.source}</span>
-            <span className={`font-semibold ${run.status === 'succeeded' ? 'text-[#15803D]' : run.status === 'failed' ? 'text-[#B91C1C]' : 'text-[#C2410C]'}`}>{run.status}</span>
-            <span>{run.fetched}</span>
-            <span>{run.filteredOut}</span>
-            <span className="font-semibold text-[#172554]">{run.inserted}</span>
-            <span>{run.updated}</span>
-            <span>{run.errors}</span>
-            <button disabled={!run.csvPath} onClick={() => { void api.downloadRunCsv(run.id).catch(() => notify('Could not download that CSV')) }} className="justify-self-start rounded-md border border-[#DCE4F0] px-2.5 py-1.5 text-[8px] font-semibold text-[#52627A] disabled:opacity-30">Download CSV</button>
-          </div>
-        ))}
+        {runs
+          .filter((r) => runFilter === 'all' || (runFilter === 'uploads' ? r.source === 'manual_upload' : r.source !== 'manual_upload'))
+          .map((run) => {
+            const batchName = ((run.options as Record<string, string> | undefined)?.authority) || (run.source === 'manual_upload' ? 'Manual Upload' : run.source)
+            return (
+              <div key={run.id} className="grid grid-cols-[140px_110px_80px_repeat(5,minmax(65px,.6fr))_120px] items-center border-t border-[#EEF2F7] px-4 py-4 text-[10px]">
+                <span className="text-[#64748B]">{new Date(run.startedAt).toLocaleString('en-GB', { hour12: false })}</span>
+                <span className="font-medium text-[#52627A] truncate" title={batchName}>
+                  {run.source === 'manual_upload' ? (
+                    <span className="inline-flex items-center gap-1 text-[#2563EB] font-semibold">
+                      <Icon name="folder" size={10} /> {batchName}
+                    </span>
+                  ) : (
+                    run.source
+                  )}
+                </span>
+                <span className={`font-semibold ${run.status === 'succeeded' || run.status === 'completed' ? 'text-[#15803D]' : run.status === 'failed' ? 'text-[#B91C1C]' : 'text-[#C2410C]'}`}>{run.status}</span>
+                <span>{run.fetched}</span>
+                <span>{run.filteredOut}</span>
+                <span className="font-semibold text-[#172554]">{run.inserted}</span>
+                <span>{run.updated}</span>
+                <span>{run.errors}</span>
+                <button disabled={!run.csvPath} onClick={() => { void api.downloadRunCsv(run.id).catch(() => notify('Could not download that CSV')) }} className="justify-self-start rounded-md border border-[#DCE4F0] px-2.5 py-1.5 text-[8px] font-semibold text-[#52627A] disabled:opacity-30">Download CSV</button>
+              </div>
+            )
+          })}
       </div>
       {runs.some((run) => run.message) && <p className="mt-3 text-[10px] text-[#B91C1C]">{runs.find((run) => run.message)?.message}</p>}
+
+      <UploadPlanningDataModal
+        isOpen={uploadModalOpen}
+        onClose={() => setUploadModalOpen(false)}
+        onSuccess={() => void load()}
+      />
     </>
   )
 }

@@ -379,6 +379,11 @@ export const api = {
     request<IngestRun>('/api/v1/ingest/runs', { method: 'POST', body: JSON.stringify(body) }),
   enrichContacts: (limit = 25) =>
     request<{ scanned: number; enriched: number }>('/api/v1/ingest/enrich', { method: 'POST', body: JSON.stringify({ limit }) }),
+  uploadPlanningData: (body: { batchName?: string; records: Record<string, string>[] }) =>
+    request<{ success: boolean; inserted: number; updated: number; total: number; batchName: string }>(
+      '/api/v1/ingest/upload',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   onboarding: () => request<OnboardingState>('/api/v1/onboarding'),
   saveOnboarding: (body: Record<string, unknown>) => request<OnboardingState>('/api/v1/onboarding', { method: 'PUT', body: JSON.stringify(body) }),
   onboardingClients: () => request<{ data: ClientOnboarding[] }>('/api/v1/onboarding/clients'),
@@ -503,4 +508,5 @@ export type IngestRun = {
   errors: number
   message: string
   csvPath: string
+  options?: Record<string, unknown>
 }

@@ -134,7 +134,7 @@ async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: st
   }
 }
 
-async function upsertRows(rows: SourceRecord[]) {
+export async function upsertRows(rows: SourceRecord[]) {
   if (!rows.length) return { inserted: 0, updated: 0, titles: [] as string[] }
   const hashes = rows.map((row) => hashFor(row['Local Authority'] ?? '', row['Application Reference'] ?? ''))
   const existing = await db.select({ hash: planningApplications.compositeHash }).from(planningApplications).where(inArray(planningApplications.compositeHash, hashes))
