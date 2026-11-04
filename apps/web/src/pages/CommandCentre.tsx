@@ -72,6 +72,14 @@ export function CommandCentre() {
   const [orgRole, setOrgRole] = useState<string | null>(null)
   const [checklist, setChecklist] = useState<OnboardingState['checklist'] | null>(null)
   const [clients, setClients] = useState<ClientOnboarding[] | null>(null)
+  const [clientOnboardingDismissed, setClientOnboardingDismissed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.localStorage.getItem('planningpal_dismiss_client_onboarding') === 'true'
+    } catch {
+      return false
+    }
+  })
   const [workspaceLeads, setWorkspaceLeads] = useState<Scheme[]>([])
   const [leadJob, setLeadJob] = useState<LeadFetch | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -528,7 +536,19 @@ export function CommandCentre() {
           <>
             <div className={active === 'Overview' ? '' : 'hidden'}>
               <div className="mx-auto max-w-[1600px] p-4 sm:p-7 lg:p-9">
-                {clients && <ClientOnboardingList clients={clients} />}
+                {clients && !clientOnboardingDismissed && (
+                  <ClientOnboardingList
+                    clients={clients}
+                    onDismiss={() => {
+                      setClientOnboardingDismissed(true)
+                      try {
+                        window.localStorage.setItem('planningpal_dismiss_client_onboarding', 'true')
+                      } catch {
+                        // ignore storage errors
+                      }
+                    }}
+                  />
+                )}
                 {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
                 <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
                   {[

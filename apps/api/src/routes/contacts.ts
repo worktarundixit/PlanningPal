@@ -28,7 +28,53 @@ const addMembersSchema = z.object({
     .min(1),
 })
 
+let tablesEnsured = false
+async function ensureContactGroupTables() {
+  if (tablesEnsured) return
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS contact_groups (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        organisation_id uuid NOT NULL,
+        name text NOT NULL,
+        description text NOT NULL DEFAULT '',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS contact_groups_org_idx ON contact_groups (organisation_id);
+
+      CREATE TABLE IF NOT EXISTS contact_group_members (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        group_id uuid NOT NULL REFERENCES contact_groups(id) ON DELETE CASCADE,
+        organisation_id uuid NOT NULL,
+        email text NOT NULL,
+        first_name text NOT NULL DEFAULT '',
+        last_name text NOT NULL DEFAULT '',
+        company text NOT NULL DEFAULT '',
+        title text NOT NULL DEFAULT '',
+        phone text NOT NULL DEFAULT '',
+        council text NOT NULL DEFAULT '',
+        scheme_title text NOT NULL DEFAULT '',
+        scheme_ref text NOT NULL DEFAULT '',
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS contact_group_members_group_idx ON contact_group_members (group_id);
+      CREATE INDEX IF NOT EXISTS contact_group_members_org_idx ON contact_group_members (organisation_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS contact_group_members_group_email_idx ON contact_group_members (group_id, email);
+    `)
+    tablesEnsured = true
+  } catch (err) {
+    console.warn('ensureContactGroupTables warning:', err)
+  }
+}
+
 export async function contactRoutes(app: FastifyInstance) {
+  app.addHook('preHandler', async (request) => {
+    if (request.url.includes('/contact-groups')) {
+      await ensureContactGroupTables()
+    }
+  })
+
   app.get('/api/v1/contact-groups', async (request) => {
     const user = requireUser(request)
     const groups = await db

@@ -34,6 +34,8 @@ export function Contacts({
   })
   const [activeGroupMembers, setActiveGroupMembers] = useState<{ group: ContactGroup; members: ContactGroupMember[] } | null>(null)
   const [isLoadingMembers, setIsLoadingMembers] = useState(false)
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false)
+  const [isAddingToGroup, setIsAddingToGroup] = useState(false)
 
   // Campaign push modal
   const [campaignPushModal, setCampaignPushModal] = useState<{ open: boolean; groupId?: string; contacts?: Array<{ email: string; name: string; firm: string }> } | null>(null)
@@ -124,6 +126,7 @@ export function Contacts({
       notify('Please enter a group name')
       return
     }
+    setIsCreatingGroup(true)
     try {
       const created = await api.createContactGroup({
         name: newGroupModal.name.trim(),
@@ -141,6 +144,8 @@ export function Contacts({
       loadGroups()
     } catch (err: unknown) {
       notify(err instanceof Error ? err.message : 'Could not create group')
+    } finally {
+      setIsCreatingGroup(false)
     }
   }
 
@@ -151,6 +156,7 @@ export function Contacts({
     }
     const members = getSelectedContactObjects()
     if (!members.length) return
+    setIsAddingToGroup(true)
     try {
       const result = await api.addContactGroupMembers(selectedTargetGroupId, members)
       const targetGroup = groups.find((g) => g.id === selectedTargetGroupId)
@@ -160,6 +166,8 @@ export function Contacts({
       loadGroups()
     } catch (err: unknown) {
       notify(err instanceof Error ? err.message : 'Could not add contacts to group')
+    } finally {
+      setIsAddingToGroup(false)
     }
   }
 
@@ -527,6 +535,9 @@ export function Contacts({
                   autoFocus
                   value={newGroupModal.name}
                   onChange={(e) => setNewGroupModal({ ...newGroupModal, name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !isCreatingGroup) void handleCreateGroup()
+                  }}
                   placeholder="e.g. London Residential Architects, Q4 Target"
                   className="mt-1 w-full rounded-lg border border-[#DCE4F0] px-3 py-2 text-[10px] outline-none focus:border-[#2563EB]"
                 />
@@ -536,6 +547,9 @@ export function Contacts({
                 <textarea
                   value={newGroupModal.description}
                   onChange={(e) => setNewGroupModal({ ...newGroupModal, description: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !isCreatingGroup) void handleCreateGroup()
+                  }}
                   rows={2}
                   placeholder="Notes about these contacts, campaign targets, etc."
                   className="mt-1 w-full resize-none rounded-lg border border-[#DCE4F0] p-2.5 text-[10px] outline-none focus:border-[#2563EB]"
@@ -544,16 +558,18 @@ export function Contacts({
             </div>
             <div className="mt-5 flex gap-2">
               <button
+                disabled={isCreatingGroup}
                 onClick={() => setNewGroupModal({ ...newGroupModal, open: false })}
-                className="flex-1 rounded-lg border border-[#DCE4F0] py-2 text-[9px] font-semibold text-[#64748B]"
+                className="flex-1 rounded-lg border border-[#DCE4F0] py-2 text-[9px] font-semibold text-[#64748B] disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                disabled={isCreatingGroup}
                 onClick={handleCreateGroup}
-                className="flex-1 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white hover:bg-[#1E3A8A]"
+                className="flex-1 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white hover:bg-[#1E3A8A] disabled:opacity-50"
               >
-                Create Group
+                {isCreatingGroup ? 'Creating...' : 'Create Group'}
               </button>
             </div>
           </div>
@@ -591,16 +607,18 @@ export function Contacts({
             </div>
             <div className="mt-5 flex gap-2">
               <button
+                disabled={isAddingToGroup}
                 onClick={() => setAddToExistingGroupModal(false)}
-                className="flex-1 rounded-lg border border-[#DCE4F0] py-2 text-[9px] font-semibold text-[#64748B]"
+                className="flex-1 rounded-lg border border-[#DCE4F0] py-2 text-[9px] font-semibold text-[#64748B] disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                disabled={isAddingToGroup}
                 onClick={handleAddToExistingGroup}
-                className="flex-1 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white hover:bg-[#1E3A8A]"
+                className="flex-1 rounded-lg bg-[#172554] py-2 text-[9px] font-semibold text-white hover:bg-[#1E3A8A] disabled:opacity-50"
               >
-                Add Contacts
+                {isAddingToGroup ? 'Adding...' : 'Add Contacts'}
               </button>
             </div>
           </div>

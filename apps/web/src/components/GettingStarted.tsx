@@ -36,12 +36,33 @@ export function GettingStarted({
   )
 }
 
-export function ClientOnboardingList({ clients }: { clients: ClientOnboarding[] }) {
+export function ClientOnboardingList({
+  clients,
+  onDismiss,
+}: {
+  clients: ClientOnboarding[]
+  onDismiss?: () => void
+}) {
   return (
     <section className="mb-5 rounded-xl border border-[#DCE4F0] bg-white p-4 shadow-[0_1px_2px_rgba(30,58,138,0.04)] sm:p-5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#2563EB]">Hitcaliber</div>
-      <h2 className="mt-1 font-display text-[17px] font-semibold tracking-[-0.02em]">Client onboarding</h2>
-      <p className="mt-1 text-[12px] leading-relaxed text-[#52627A]">Setup progress for each workspace. This list is staff-only and every view is audited.</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#2563EB]">Hitcaliber</div>
+          <h2 className="mt-1 font-display text-[17px] font-semibold tracking-[-0.02em]">Client onboarding</h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-[#52627A]">Setup progress for each workspace. This list is staff-only and every view is audited.</p>
+        </div>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#F1F5F9] text-[#64748B] hover:bg-[#E2E8F0] hover:text-[#172033]"
+            aria-label="Dismiss client onboarding"
+            title="Dismiss from home screen"
+          >
+            <Icon name="close" size={13} />
+          </button>
+        )}
+      </div>
       <ul className="mt-4 divide-y divide-[#EEF2F7]">
         {clients.map((client) => (
           <li key={client.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -56,6 +77,17 @@ export function ClientOnboardingList({ clients }: { clients: ClientOnboarding[] 
         ))}
         {!clients.length && <li className="py-3"><EmptyState icon="building" title="No client workspaces yet." /></li>}
       </ul>
+      {onDismiss && (
+        <div className="mt-4 flex items-center justify-end border-t border-[#EEF2F7] pt-3">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#F1F5F9] px-3.5 py-1.5 text-[11px] font-semibold text-[#334155] hover:bg-[#E2E8F0]"
+          >
+            Okay, remove from home
+          </button>
+        </div>
+      )}
     </section>
   )
 }
