@@ -101,6 +101,7 @@ export type Scheme = {
   value: string
   valueNum: number
   valueFrom?: number
+  estimated?: boolean
   distance: string
   date: string
   council: string
@@ -124,6 +125,10 @@ export type Scheme = {
   projectId?: string
   category?: string
   portalUrl?: string
+  ward?: string
+  caseOfficer?: string
+  applicationType?: string
+  decisionDate?: string
   raw: SourceRecord
 }
 
@@ -223,10 +228,47 @@ export function mapRecord(record: SourceRecord, index: number): Scheme {
   const rawTo = record['£m Value To'] || record['£m Est Prop Val To'] || ''
   const valueFrom = Number(rawFrom || 0)
   const valueTo = Number(rawTo || rawFrom || 0)
-  const valueLabel = !rawFrom && !rawTo ? '—' : `£${valueFrom.toFixed(2)}m–£${valueTo.toFixed(2)}m`
+
+  let valueLabel = ''
+  let estimated = false
+  if (valueTo > 0) {
+    valueLabel = valueFrom > 0 ? `£${valueFrom.toFixed(2)}m–£${valueTo.toFixed(2)}m` : `£${valueTo.toFixed(2)}m`
+  } else {
+    // Keyword & proposal size fallback (Issue 1)
+    const text = (record.Proposal || record.Heading || '').toLowerCase()
+    if (/hotel|supermarket|mixed-use|hospital|tower|student accommodation|data centre/.test(text)) {
+      valueLabel = '£4.00m–£12.00m (est)'
+      estimated = true
+    } else if (/\b(?:major development|substantial redevelopment|multi-storey)\b/.test(text)) {
+      valueLabel = '£2.50m–£6.00m (est)'
+      estimated = true
+    } else if (/\b(?:erection of|demolition and erection|new building)\b/.test(text)) {
+      valueLabel = '£0.75m–£2.00m (est)'
+      estimated = true
+    } else if (/\b(?:extension|alteration|refurbishment|conversion|loft)\b/.test(text)) {
+      valueLabel = '£0.12m–£0.35m (est)'
+      estimated = true
+    } else {
+      valueLabel = 'Not estimated'
+      estimated = false
+    }
+  }
+
   const agent = record['Architect Agent Contact'] || record['Mail Architect Agent Contact'] || 'Contact not published'
   const practice = record['Architect Agent'] || record['Mail Architect Agent Name'] || 'Agent not published'
-  const heading = record.Heading || record['Prop Type'] || 'Planning application'
+
+  // Title cleaning: fall back if empty, numeric only, or too short (Issue 11)
+  let heading = (record.Heading || '').trim()
+  const ref = record['Application Reference'] || record['Project ID'] || `record-${index}`
+  if (!heading || heading.length < 8 || /^\d+$/.test(heading)) {
+    const proposal = (record.Proposal || '').trim()
+    if (proposal && proposal.length >= 8) {
+      heading = proposal.length > 110 ? `${proposal.slice(0, 107).trim()}…` : proposal
+    } else {
+      heading = ref ? `Application ${ref}` : (record['Prop Type'] || 'Planning application')
+    }
+  }
+
   const projectCategory = (record['Project Category'] || 'Planning').replaceAll('_', ' ')
   const initials = heading
     .split(/\s+/)
@@ -235,19 +277,21 @@ export function mapRecord(record: SourceRecord, index: number): Scheme {
     .map((word) => word[0])
     .join('')
     .toUpperCase()
+
   return {
-    id: record['Application Reference'] || record['Project ID'] || `record-${index}`,
+    id: ref,
     title: heading,
     location: record['Site Address'] || record['Site Raw Address'] || '',
     type: `${record['Prop Type'] || 'Scheme'} · ${projectCategory}`,
     stage: record['Project Stage']?.includes('APPROVED') ? 'Approved' : record['Project Stage'] || 'Planning',
     value: valueLabel,
-    valueNum: valueTo,
+    valueNum: valueTo || (estimated ? 0.75 : 0),
     valueFrom,
+    estimated,
     distance: record['Site Address Postcode Area'] || record.County || '',
     date: record['Publication Date'] || '',
     council: record['Local Authority'] || '',
-    units: record['Prop Type'] || heading,
+    units: record['Prop Type'] || record['Project Category'] || 'General scheme',
     score: Math.max(
       64,
       Math.min(
@@ -277,6 +321,10 @@ export function mapRecord(record: SourceRecord, index: number): Scheme {
     projectId: record['Project ID'],
     category: projectCategory,
     portalUrl: record['URL Link'],
+    ward: record.Ward || record.ward || '',
+    caseOfficer: record['Case Officer'] || record.caseOfficer || '',
+    applicationType: record['Application Type'] || record.applicationType || '',
+    decisionDate: record['Decision Date'] || record.decisionDate || '',
     raw: record,
   }
 }

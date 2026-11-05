@@ -189,7 +189,19 @@ export function Ingestion() {
         {status === 'error' && <div className="p-4"><EmptyState kind="error" title="Ingestion runs could not be loaded." action={{ label: 'Try again', onClick: () => void load() }} /></div>}
         {status === 'ready' && runs.length === 0 && <div className="p-4"><EmptyState icon="download" title="No ingestion runs yet." action={{ label: 'Run Ingestion Now', onClick: run }} /></div>}
         {runs
-          .filter((r) => runFilter === 'all' || (runFilter === 'uploads' ? r.source === 'manual_upload' : r.source !== 'manual_upload'))
+          .filter((r) => {
+            if (runFilter === 'uploads' && r.source !== 'manual_upload') return false
+            if (runFilter === 'scrapers' && r.source === 'manual_upload') return false
+            if (source !== 'auto' && r.source !== source) return false
+            if (authority.trim()) {
+              const q = authority.trim().toLowerCase()
+              const optAuth = (String(r.options?.authority || '')).toLowerCase()
+              const msg = (r.message || '').toLowerCase()
+              const src = (r.source || '').toLowerCase()
+              if (!optAuth.includes(q) && !msg.includes(q) && !src.includes(q)) return false
+            }
+            return true
+          })
           .map((run) => {
             const batchName = ((run.options as Record<string, string> | undefined)?.authority) || (run.source === 'manual_upload' ? 'Manual Upload' : run.source)
             return (

@@ -314,7 +314,7 @@ export const api = {
   domains: () => request<{ data: Domain[] }>('/api/v1/sending-domains'),
   addDomain: (body: { name: string; status: string; health: string; inboxes: number }) => request<Domain>('/api/v1/sending-domains', { method: 'POST', body: JSON.stringify(body) }),
   removeDomain: (id: string) => request(`/api/v1/sending-domains/${id}`, { method: 'DELETE' }),
-  workspace: () => request<{ territories: string[]; trades: string[]; radius: number; signalAlerts: boolean }>('/api/v1/workspace'),
+  workspace: () => request<{ companyName?: string; territories: string[]; trades: string[]; radius: number; signalAlerts: boolean }>('/api/v1/workspace'),
   saveWorkspace: (body: { territories?: string[]; trades?: string[]; radius?: number; signalAlerts?: boolean }) =>
     request('/api/v1/workspace', { method: 'PATCH', body: JSON.stringify(body) }),
   team: () => request<{ members: { id: string; name: string; email: string; role: string; status: string }[]; customRoles: { id: string; name: string; permissions: string[] }[] }>('/api/v1/team'),

@@ -11,11 +11,13 @@ export function Contacts({
   data,
   embedded = false,
   crmCards = [],
+  assignee = 'All assignees',
   onCrmAction,
 }: {
   data: Scheme[]
   embedded?: boolean
   crmCards?: BoardCard[]
+  assignee?: string
   onCrmAction?: (type: 'email' | 'call' | 'task' | 'note', card: BoardCard) => void
 }) {
   const [mainTab, setMainTab] = useState<'contacts' | 'groups'>('contacts')
@@ -73,11 +75,18 @@ export function Contacts({
     loadGroups()
   }, [])
 
-  const matchesFilter = (contact: (typeof contacts)[number]) =>
-    filter === 'All' ||
-    (filter === 'Direct' && contact.confidence === 'Verified direct') ||
-    (filter === 'Studio match' && contact.confidence === 'Studio match') ||
-    (filter === 'High intent' && (contact.crm?.opens ?? 0) >= 3)
+  const matchesFilter = (contact: (typeof contacts)[number]) => {
+    if (assignee && assignee !== 'All assignees') {
+      const cardAssignee = contact.crm?.assignee || 'Unassigned'
+      if (cardAssignee !== assignee) return false
+    }
+    return (
+      filter === 'All' ||
+      (filter === 'Direct' && contact.confidence === 'Verified direct') ||
+      (filter === 'Studio match' && contact.confidence === 'Studio match') ||
+      (filter === 'High intent' && (contact.crm?.opens ?? 0) >= 3)
+    )
+  }
 
   const filteredContacts = contacts.filter(matchesFilter)
 

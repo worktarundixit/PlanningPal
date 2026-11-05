@@ -49,7 +49,21 @@ function CountUp({ value, text }: { value: number; text: string }) {
 }
 
 export function CommandCentre() {
-  const [active, setActive] = useState(() => (window.location.pathname.replace(/\/$/, '') === '/app/admin' ? 'Ingestion' : 'Overview'))
+  const [active, setActiveState] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const savedTab = window.sessionStorage.getItem('planningpal_active_tab')
+      if (savedTab) return savedTab
+    }
+    return window.location.pathname.replace(/\/$/, '') === '/app/admin' ? 'Ingestion' : 'Overview'
+  })
+  const setActive = (tab: string) => {
+    setActiveState(tab)
+    try {
+      window.sessionStorage.setItem('planningpal_active_tab', tab)
+    } catch {
+      // ignore
+    }
+  }
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<Scheme | null>(null)
   const [saved, setSaved] = useState<string[]>([])
@@ -279,7 +293,8 @@ export function CommandCentre() {
   const filteredData = useMemo(() => region === 'All regions' ? data : data.filter((scheme) => scheme.region === region), [data, region])
   const regions = useMemo(() => [...new Set(data.map((scheme) => scheme.region).filter(Boolean))].sort() as string[], [data])
 
-  const board = useMemo(() => region === 'All regions' ? workspaceLeads : workspaceLeads.filter((scheme) => scheme.region === region), [workspaceLeads, region])
+  const effectiveLeads = workspaceLeads.length > 0 ? workspaceLeads : data
+  const board = useMemo(() => region === 'All regions' ? effectiveLeads : effectiveLeads.filter((scheme) => scheme.region === region), [effectiveLeads, region])
   const visibleSchemes = useMemo(() => board.filter((scheme) =>
     `${scheme.title} ${scheme.location} ${scheme.type}`.toLowerCase().includes(query.toLowerCase())
   ).slice(0, 6), [board, query])
@@ -307,10 +322,23 @@ export function CommandCentre() {
   }
 
   const visibleNav = nav.filter((item) => {
+    if (item.label === 'Overview') return true
+    if (item.label === 'Planning search') return can('leads.read')
+    if (item.label === 'Saved schemes') return can('saved.read')
+    if (item.label === 'Campaigns') return can('campaigns.read')
+    if (item.label === 'CRM & intent') return can('crm.read')
+    if (item.label === 'Reports & delivery') return can('reports.read')
+    if (item.label === 'Workspace setup') return can('settings.read') || can('team.read')
     if (item.label === 'Ingestion') return can('ingest.admin')
     if (item.label === 'Campaign provider') return can('campaign.provider')
     return true
   })
+
+  useEffect(() => {
+    if (sessionReady && visibleNav.length > 0 && !visibleNav.some((item) => item.label === active)) {
+      setActive(visibleNav[0].label)
+    }
+  }, [sessionReady, visibleNav, active])
 
   if (!sessionReady) {
     return (
@@ -438,6 +466,11 @@ export function CommandCentre() {
                     const nextRole = e.target.value
                     setPreviewRole(nextRole || null)
                     setPrvRole(nextRole)
+                    try {
+                      window.sessionStorage.setItem('planningpal_active_tab', active)
+                    } catch {
+                      // ignore
+                    }
                     window.location.reload()
                   }}
                   className="rounded-md border border-[#BFDBFE] bg-white px-2 py-1 text-xs font-semibold text-[#1E3A8A] outline-none"
@@ -552,8 +585,8 @@ export function CommandCentre() {
                 {checklist && <GettingStarted items={checklist} onDismiss={() => { setChecklist(null); void api.saveOnboarding({ action: 'dismiss-checklist' }).catch(() => setChecklist(checklist)) }} />}
                 <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
                   {[
-                    { label: 'Approved schemes', value: board.length.toLocaleString(), meta: board.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: board.length ? 'in your ICP' : 'no leads yet', icon: 'building' as const },
-                    { label: 'Agent contacts found', value: board.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: board.length ? `${Math.round(board.filter((scheme) => scheme.email || scheme.phone).length / board.length * 100)}%` : '—', note: 'contact coverage', icon: 'users' as const },
+                    { label: 'Approved schemes', value: board.length.toLocaleString(), meta: board.length ? (region === 'All regions' ? 'All regions' : region) : '—', note: workspaceLeads.length > 0 ? 'in your ICP' : 'in catalogue', icon: 'building' as const },
+                    { label: 'Agent contacts found', value: board.filter((scheme) => scheme.email || scheme.phone).length.toLocaleString(), meta: board.length ? `${Math.round(board.filter((scheme) => scheme.email || scheme.phone).length / board.length * 100)}%` : '—', note: workspaceLeads.length > 0 ? 'contact coverage' : 'in catalogue', icon: 'users' as const },
                     { label: 'High-intent signals', value: overview?.metrics.highIntentSignals ?? String(overview?.intent.length ?? 0), meta: overview?.metrics.highIntentNew ?? (overview?.intent.length ? 'live' : '—'), note: overview?.intent.length ? 'need attention' : 'none yet', icon: 'signal' as const },
                     { label: 'Meetings booked', value: overview?.metrics.meetingsBooked ?? '0', meta: overview?.metrics.meetingsTarget ?? '—', note: 'of monthly target', icon: 'calendar' as const },
                   ].map((stat) => (
@@ -785,7 +818,7 @@ export function CommandCentre() {
               </div>
 
               <div className="mt-7 grid grid-cols-3 overflow-hidden rounded-xl border border-[#DCE4F0] bg-white">
-                {[[selected.value, 'Est. value'], [selected.stage, 'Project stage'], [selected.units, 'Development']].map(([value, label]) => (
+                {[[selected.value, 'Est. value'], [selected.stage, 'Project stage'], [selected.units || selected.category || 'General scheme', 'Development']].map(([value, label]) => (
                   <div key={label} className="border-r border-[#E5E8E2] p-4 last:border-0">
                     <div className="font-display text-[14px] font-semibold">{value}</div>
                     <div className="mt-1.5 text-[8px] uppercase tracking-wider text-[#8A9492]">{label}</div>
@@ -797,7 +830,18 @@ export function CommandCentre() {
                 <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#6F7B78]">Statutory proposal</div>
                 <p className="mt-3 text-[11px] leading-6 text-[#5E6B69]">{selected.description}</p>
                 <div className="mt-4 rounded-xl border border-[#DCE4F0] bg-white p-4">
-                  {[['Application reference', selected.id], ['Local authority', selected.council], ['Publication date', selected.date], ['Project ID', selected.projectId || 'Not supplied'], ['County / region', `${selected.county || '—'} / ${selected.region || '—'}`], ['Project category', selected.category || '—']].map(([label, value]) => (
+                  {[
+                    ['Application reference', selected.id],
+                    ['Local authority', selected.council],
+                    ['Ward', selected.ward || '—'],
+                    ['Case officer', selected.caseOfficer || '—'],
+                    ['Application type', selected.applicationType || '—'],
+                    ['Publication date', selected.date],
+                    ['Decision date', selected.decisionDate || '—'],
+                    ['Project ID', selected.projectId || 'Not supplied'],
+                    ['County / region', `${selected.county || '—'} / ${selected.region || '—'}`],
+                    ['Project category', selected.category || '—'],
+                  ].map(([label, value]) => (
                     <div key={label} className="flex items-center justify-between border-b border-[#ECEEEA] py-2.5 text-[10px] last:border-0">
                       <span className="text-[#8A9492]">{label}</span><span className="font-medium text-[#354240]">{value}</span>
                     </div>

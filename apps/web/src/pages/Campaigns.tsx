@@ -69,7 +69,7 @@ export function Campaigns({
   const [dailyLimit, setDailyLimit] = useState(30)
   const [warmup, setWarmup] = useState(true)
   const [domains, setDomains] = useState<{ id: string; name: string; inboxes: number; health: string; status: string }[]>([])
-  const [trackingDomain, setTrackingDomain] = useState('click.micraft-pipeline.co.uk')
+  const [trackingDomain, setTrackingDomain] = useState('click.yourcompany.co.uk')
   const [leadText, setLeadText] = useState('')
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
 
@@ -88,7 +88,7 @@ export function Campaigns({
         setDomains(domainRows.data)
         setDailyLimit(settings.dailyLimit)
         setWarmup(settings.warmup)
-        setTrackingDomain(settings.trackingDomain)
+        setTrackingDomain(settings.trackingDomain || 'click.yourcompany.co.uk')
         setContactGroups(groupsRes.data)
         if (groupsRes.data.length > 0) {
           setSelectedGroupId(groupsRes.data[0].id)
@@ -98,7 +98,13 @@ export function Campaigns({
       .catch(() => setLoadState('error'))
   }, [])
 
-  const lookalikeDomains = ['micraft-design.co.uk', 'micraft-studio.co.uk', 'get-micraftdesign.co.uk', 'micraft-projects.com']
+  const primaryDomain = domains[0]?.name || 'yourcompany.co.uk'
+  const lookalikeDomains = [
+    `outreach-${primaryDomain}`,
+    `mail-${primaryDomain}`,
+    `get-${primaryDomain}`,
+    `connect-${primaryDomain}`,
+  ]
   const activeInboxes = domains.reduce((total, domain) => total + domain.inboxes, 0)
 
   // Extract unique contacts from schemes
@@ -309,7 +315,7 @@ export function Campaigns({
         })}
       </div>}
       <div className="mt-5 rounded-xl border border-[#DCE4F0] bg-white p-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="font-display text-[14px] font-semibold">Sending domains</h3><p className="mt-1 text-[9px] text-[#94A3B8]">Lookalike domains protect micraftdesign.co.uk and isolate sender reputation.</p></div><div className="flex gap-2"><button onClick={() => setDomainMode(domainMode === 'add' ? null : 'add')} className="rounded-lg border border-[#DCE4F0] px-3 py-2 text-[8px] font-semibold text-[#52627A]">Add owned domain</button><button onClick={() => setDomainMode(domainMode === 'buy' ? null : 'buy')} className="rounded-lg bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white">Buy lookalike domain</button></div></div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="font-display text-[14px] font-semibold">Sending domains</h3><p className="mt-1 text-[9px] text-[#94A3B8]">Lookalike domains protect {primaryDomain} and isolate sender reputation.</p></div><div className="flex gap-2"><button onClick={() => setDomainMode(domainMode === 'add' ? null : 'add')} className="rounded-lg border border-[#DCE4F0] px-3 py-2 text-[8px] font-semibold text-[#52627A]">Add owned domain</button><button onClick={() => setDomainMode(domainMode === 'buy' ? null : 'buy')} className="rounded-lg bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white">Buy lookalike domain</button></div></div>
         {domainMode === 'add' && <form onSubmit={addOwnedDomain} className="mt-4 flex gap-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] p-3"><input required value={ownedDomain} onChange={(event) => setOwnedDomain(event.target.value)} className="min-w-0 flex-1 rounded-md border border-[#DCE4F0] bg-white px-3 text-[9px] outline-none" placeholder="your-domain.co.uk" /><button type="submit" className="rounded-md bg-[#172554] px-4 py-2.5 text-[8px] font-semibold text-white">Add & verify</button></form>}
         {domainMode === 'buy' && <div className="mt-4 rounded-xl border border-[#BFDBFE] bg-[#EFF6FF] p-4"><div className="flex items-center justify-between"><div><div className="text-[9px] font-semibold text-[#1D4ED8]">Available lookalike domains</div><div className="mt-1 text-[8px] text-[#64748B]">£19/year each · DNS and SSL provisioned automatically</div></div><button onClick={() => setDomainMode(null)} className="text-[#94A3B8]"><Icon name="close" size={12} /></button></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{lookalikeDomains.filter((domain) => !domains.some((item) => item.name === domain)).map((domain) => <div key={domain} className="flex items-center justify-between rounded-lg bg-white p-3"><div><div className="text-[9px] font-semibold text-[#334155]">{domain}</div><div className="mt-1 text-[7px] text-[#15803D]">Available</div></div><button onClick={() => buyDomain(domain)} className="rounded-md bg-[#172554] px-3 py-2 text-[8px] font-semibold text-white">Buy £19</button></div>)}</div></div>}
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{domains.length === 0 && <div className="sm:col-span-2 lg:col-span-4"><EmptyState icon="mail" title="No sending domains yet." action={{ label: 'Add a domain', onClick: () => setDomainMode('add') }} /></div>}{domains.map((domain) => <div key={domain.name} className="rounded-lg border border-[#E2E8F0] p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="truncate text-[9px] font-semibold">{domain.name}</div><div className={`mt-1 text-[7px] font-semibold ${domain.status === 'Healthy' ? 'text-[#15803D]' : 'text-[#C2410C]'}`}>{domain.status}</div></div><i className={`mt-1 h-2 w-2 shrink-0 rounded-full ${domain.status === 'Healthy' ? 'bg-[#4ADE80]' : 'bg-[#FB923C]'}`} /></div><div className="mt-3 flex items-center justify-between border-t border-[#EEF2F7] pt-2"><span className="text-[8px] text-[#94A3B8]">{domain.inboxes} inboxes · {domain.health}</span><button onClick={() => { void api.removeDomain(domain.id).then(() => { setDomains((items) => items.filter((item) => item.id !== domain.id)); notify(`${domain.name} removed`) }).catch(() => notify('Could not remove that domain')) }} className="text-[7px] font-semibold text-[#B91C1C]">Remove</button></div></div>)}</div>

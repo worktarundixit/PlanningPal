@@ -42,8 +42,14 @@ export function classifyScheme(text: string, appSize: string) {
   return { category, propType, units, floorspace: extractFloorspace(text) }
 }
 
-/** PRD heuristic. Returns null when the text does not support a figure. */
-export function estimateValue(text: string, category: string, units: number | null, floorspace: number | null) {
+/** PRD heuristic with keyword and application-size fallback. */
+export function estimateValue(
+  text: string,
+  category: string,
+  units: number | null,
+  floorspace: number | null,
+  appSize = '',
+) {
   let fromPounds: number | null = null
   let toPounds: number | null = null
   if ((category === 'HOUSING UNITS' || category === 'NEW BUILD') && units && units > 0) {
@@ -53,10 +59,24 @@ export function estimateValue(text: string, category: string, units: number | nu
     const [low, high] = RATES[category] ?? [1400, 2100]
     fromPounds = floorspace * low
     toPounds = floorspace * high
+  } else if (/hotel|supermarket|mixed-use|hospital|tower|student accommodation|data centre/i.test(text)) {
+    fromPounds = 4_000_000
+    toPounds = 12_000_000
+  } else if (appSize.toLowerCase() === 'large' || /\b(?:major development|substantial redevelopment|multi-storey)\b/i.test(text)) {
+    fromPounds = 2_500_000
+    toPounds = 6_000_000
+  } else if (appSize.toLowerCase() === 'medium' || /\b(?:erection of|demolition and erection|new building)\b/i.test(text)) {
+    fromPounds = 750_000
+    toPounds = 2_000_000
+  } else if (appSize.toLowerCase() === 'small' || category === 'EXTENSION' || /\b(?:extension|alteration|refurbishment|conversion|loft)\b/i.test(text)) {
+    fromPounds = 120_000
+    toPounds = 350_000
   }
+
   if (fromPounds === null || toPounds === null) return null
   return {
     from: (fromPounds / 1_000_000).toFixed(3),
     to: (toPounds / 1_000_000).toFixed(3),
+    estimated: true,
   }
 }

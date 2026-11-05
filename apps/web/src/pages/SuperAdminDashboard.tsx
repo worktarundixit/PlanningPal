@@ -290,7 +290,7 @@ export function SuperAdminDashboard() {
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-[#64748B]">
-                            Owner: <span className="text-[#334155] font-medium">{client.ownerName || 'Pending Invite'}</span> · Coverage: {client.coverage}
+                            Owner: <span className="text-[#334155] font-medium">{client.ownerName || 'Pending Invite'}</span> · Coverage: <span className="text-[#334155] font-medium">{client.coverage || 'Not set'}</span>
                           </div>
                         </div>
 

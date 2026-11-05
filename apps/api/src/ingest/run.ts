@@ -128,6 +128,7 @@ async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: st
     await db.update(pipelineRuns).set({
       status: 'failed',
       finishedAt: new Date(),
+      errors: Math.max(1, (error as { errors?: number })?.errors || 1),
       message: error instanceof Error ? error.message : 'Pipeline failed',
     }).where(eq(pipelineRuns.id, runId))
     throw error
@@ -325,7 +326,7 @@ export function presentRun(run: typeof pipelineRuns.$inferSelect) {
     filteredOut: run.filteredOut,
     inserted: run.inserted,
     updated: run.updated,
-    errors: run.errors,
+    errors: run.status === 'failed' && run.errors === 0 ? 1 : run.errors,
     csvPath: run.csvPath,
     cursorBefore: run.cursorBefore,
     cursorAfter: run.cursorAfter,

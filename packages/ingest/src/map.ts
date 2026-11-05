@@ -36,7 +36,7 @@ export function mapPlanItRecord(record: PlanItRecord): CleanedRecord | null {
   const located = splitPostcode(rawAddress, blank(record.postcode))
   const description = blank(record.description)
   const classified = classifyScheme(`${description} ${blank(record.app_type)}`, blank(record.app_size))
-  const value = estimateValue(description, classified.category, classified.units, classified.floorspace)
+  const value = estimateValue(description, classified.category, classified.units, classified.floorspace, blank(record.app_size))
   const extracted = extractRecordContacts(record)
   const applicant = extracted.applicant
   const applicantContact = extracted.applicantContact
@@ -97,6 +97,10 @@ export function mapPlanItRecord(record: PlanItRecord): CleanedRecord | null {
     'Publication Date': published,
     'Project ID': blank(record.name) || reference,
     'Project Category': classified.category,
+    Ward: field(record, 'ward') || blank((record as Record<string, unknown>).ward),
+    'Case Officer': field(record, 'case_officer') || field(record, 'officer') || blank((record as Record<string, unknown>).case_officer),
+    'Application Type': blank(record.app_type) || field(record, 'app_type') || field(record, 'application_type'),
+    'Decision Date': blank(record.decided_date) || field(record, 'decision_date') || field(record, 'decided_date'),
   }
   for (const column of MASTER_COLUMNS) columns[column] ??= ''
   const longitude = typeof record.location_x === 'number' ? record.location_x : null

@@ -12,7 +12,14 @@ function arraysEqual(a: string[], b: string[]) {
   return sortedA.every((val, idx) => val === sortedB[idx])
 }
 
+function getNextInvoiceDate(): string {
+  const now = new Date()
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+  return nextMonth.toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
+}
+
 export function Settings({ canWrite = true }: { canWrite?: boolean }) {
+  const [companyName, setCompanyName] = useState('')
   const [alerts, setAlerts] = useState(true)
   const [savedAlerts, setSavedAlerts] = useState(true)
   const [settingsStatus, setSettingsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -31,6 +38,7 @@ export function Settings({ canWrite = true }: { canWrite?: boolean }) {
 
   useEffect(() => {
     void api.workspace().then((workspace) => {
+      setCompanyName(workspace.companyName || '')
       setTerritories(workspace.territories)
       setSavedTerritories(workspace.territories)
       setTrades(workspace.trades)
@@ -138,7 +146,7 @@ export function Settings({ canWrite = true }: { canWrite?: boolean }) {
             <div className="min-w-0 flex-1">
               <div className="text-[10px] font-semibold text-[#166534]">Territory upgrade confirmed</div>
               <div className="mt-1 text-[9px] leading-relaxed text-[#64748B]">{additionalCount} {additionalCount === 1 ? 'territory' : 'territories'} added · +£{monthlyTerritoryCost}/mo</div>
-              <div className="mt-1 text-[8px] text-[#94A3B8]">Next invoice: £{(2950 + monthlyTerritoryCost).toLocaleString()} on 01 July 2025</div>
+              <div className="mt-1 text-[8px] text-[#94A3B8]">Next invoice: £{(2950 + monthlyTerritoryCost).toLocaleString()} on {getNextInvoiceDate()}</div>
             </div>
             <button onClick={() => setUpgradeSuccess(false)} className="text-[#94A3B8]" aria-label="Dismiss success message"><Icon name="close" size={13} /></button>
           </div>
@@ -148,7 +156,7 @@ export function Settings({ canWrite = true }: { canWrite?: boolean }) {
       <PageIntro
         eyebrow="Workspace configuration"
         title="Workspace settings"
-        description="Manage your territory coverage, trade specialisms and intent alerts."
+        description={companyName ? `Manage ${companyName}'s territory coverage, trade specialisms and intent alerts.` : 'Manage your territory coverage, trade specialisms and intent alerts.'}
         action={
           <button
             disabled={!canWrite || !isAnyDirty || isSavingAll}
@@ -363,7 +371,7 @@ export function Settings({ canWrite = true }: { canWrite?: boolean }) {
               <div className="mt-3 flex items-center justify-between">
                 <div>
                   <div className="text-[8px] uppercase tracking-wider text-[#94A3B8]">Projected next invoice</div>
-                  <div className="mt-1 text-[8px] text-[#94A3B8]">Due 01 July 2025</div>
+                  <div className="mt-1 text-[8px] text-[#94A3B8]">Due {getNextInvoiceDate()}</div>
                 </div>
                 <div className="font-display text-[18px] font-semibold">£{(2950 + monthlyTerritoryCost).toLocaleString()}</div>
               </div>

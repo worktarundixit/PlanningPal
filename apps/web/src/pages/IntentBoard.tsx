@@ -21,17 +21,33 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
   const [crmStatus, setCrmStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   useEffect(() => {
     void Promise.all([api.kanban(), api.inbox(), api.activities('task')]).then(([board, inbox, tasks]) => {
-      setCards(board.cards.map((card) => {
+      let resolved = board.cards.map((card) => {
         const conversation = inbox.data.find((item) => item.crmLeadId === card.id)
         return { ...card, timeLabel: conversation?.timeLabel, preview: conversation?.preview }
-      }))
+      })
+      if (resolved.length === 0 && data.length > 0) {
+        resolved = data.slice(0, 15).map((scheme, idx) => ({
+          id: `crm-${scheme.id}`,
+          schemeId: scheme.id,
+          scheme: scheme.title,
+          person: scheme.architect || scheme.applicant || 'Contact not published',
+          firm: scheme.practice || scheme.council || 'Planning lead',
+          stage: idx % 5,
+          value: scheme.value || '—',
+          opens: 0,
+          timeLabel: undefined,
+          preview: undefined,
+          assignee: 'Unassigned',
+        }))
+      }
+      setCards(resolved)
       setConversations(inbox.data)
       setSelectedConversation((current) => current || inbox.data[0]?.id || '')
       setDoneTasks(tasks.data.filter((task) => task.completedAt && task.crmLeadId).map((task) => task.crmLeadId as string))
       setInboxUnread(inbox.unreadCount)
       setCrmStatus('ready')
     }).catch(() => setCrmStatus('error'))
-  }, [setInboxUnread])
+  }, [data, setInboxUnread])
   const columns = ['New lead queue', 'Active outreach', 'High intent', 'Warm engagement', 'Tender opportunity']
   const selectedMessage = conversations.find((item) => item.id === selectedConversation) ?? conversations[0]
   const unreadCount = conversations.filter((item) => item.unread).length
@@ -219,7 +235,7 @@ export function IntentBoard({ data, onOpen, crmTab, setCrmTab, setInboxUnread, c
           </article>
         ))}
       </div>}
-      {crmTab === 'contacts' && <Contacts data={data} embedded crmCards={cards} onCrmAction={openAction} />}
+      {crmTab === 'contacts' && <Contacts data={data} embedded crmCards={cards} assignee={assignee} onCrmAction={openAction} />}
       {crmAction && <div className="fixed inset-0 z-[80] grid place-items-center bg-[#0F172A]/55 p-4" onMouseDown={() => setCrmAction(null)}>
         <form onSubmit={(event) => { event.preventDefault(); completeAction() }} onMouseDown={(event) => event.stopPropagation()} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
           <div className="flex items-start justify-between"><div><div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">CRM activity</div><h3 className="mt-2 font-display text-xl font-semibold">{crmAction.type === 'email' ? 'Compose email' : crmAction.type === 'call' ? 'Log call outcome' : crmAction.type === 'task' ? 'Schedule follow-up' : 'Add internal note'}</h3><p className="mt-1 text-[9px] text-[#94A3B8]">{crmAction.card.person} · {crmAction.card.firm}</p></div><button type="button" onClick={() => setCrmAction(null)} className="grid h-8 w-8 place-items-center rounded-full bg-[#F1F5F9] text-[#64748B]"><Icon name="close" size={14} /></button></div>
