@@ -53,6 +53,13 @@ const plans = [
   },
 ]
 
+const landingHosts = new Set(['planningpal.io', 'www.planningpal.io'])
+
+function appHref(path: '/app' | '/sign-in') {
+  const host = window.location.hostname.toLowerCase()
+  return landingHosts.has(host) ? `https://app.planningpal.io${path}` : path
+}
+
 function authCallbackOnHome() {
   const hash = window.location.hash
   const search = window.location.search
@@ -72,14 +79,14 @@ export function Landing() {
     void supabase.auth.getSession().then(({ data }) => {
       if (!active) return
       if (callback && data.session) {
-        window.location.replace('/app')
+        window.location.replace(appHref('/app'))
         return
       }
       setSignedIn(Boolean(data.session))
     })
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       if (callback && session) {
-        window.location.replace('/app')
+        window.location.replace(appHref('/app'))
         return
       }
       setSignedIn(Boolean(session))
@@ -119,7 +126,7 @@ export function Landing() {
             <a href="#how" className="hidden whitespace-nowrap hover:text-black md:inline">How It Works</a>
             <a href="#packages" className="hidden whitespace-nowrap hover:text-black md:inline">Pricing</a>
             <a href="#team" className="hidden whitespace-nowrap hover:text-black md:inline">Team</a>
-            <a href={signedIn ? '/app' : '/sign-in'} className="whitespace-nowrap px-2 py-2 font-medium hover:text-black">{signedIn ? 'Dashboard' : 'Sign In'}</a>
+            <a href={appHref(signedIn ? '/app' : '/sign-in')} className="whitespace-nowrap px-2 py-2 font-medium hover:text-black">{signedIn ? 'Dashboard' : 'Sign In'}</a>
             <a href="#demo" className="pp-cta shrink-0 whitespace-nowrap bg-[#2563EB] px-2 py-2 text-[11px] font-semibold text-white hover:bg-[#1D4ED8] sm:px-3.5 sm:py-2.5 sm:text-[13px]">Schedule Demo</a>
           </nav>
         </div>

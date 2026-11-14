@@ -1,5 +1,31 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    {
+      "source": "/:path(sign-in|sign-up|forgot-password|reset-password|accept-invite|onboarding|app)",
+      "has": [{ "type": "host", "value": "planningpal.io" }],
+      "destination": "https://app.planningpal.io/:path",
+      "permanent": false
+    },
+    {
+      "source": "/app/:path*",
+      "has": [{ "type": "host", "value": "planningpal.io" }],
+      "destination": "https://app.planningpal.io/app/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/:path(sign-in|sign-up|forgot-password|reset-password|accept-invite|onboarding|app)",
+      "has": [{ "type": "host", "value": "www.planningpal.io" }],
+      "destination": "https://app.planningpal.io/:path",
+      "permanent": false
+    },
+    {
+      "source": "/app/:path*",
+      "has": [{ "type": "host", "value": "www.planningpal.io" }],
+      "destination": "https://app.planningpal.io/app/:path*",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/gateway?__pp_path=/api/:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }

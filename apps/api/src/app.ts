@@ -32,12 +32,19 @@ function workspaceOptional(method: string, path: string) {
   return false
 }
 
-function trustedOrigin(origin: string | undefined) {
+export function trustedOrigin(origin: string | undefined) {
   if (!origin) return null
+  const webOrigins = (process.env.WEB_ORIGIN ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
   const allowed = [
-    process.env.WEB_ORIGIN,
+    ...webOrigins,
     process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : undefined,
     process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+    'https://planningpal.io',
+    'https://www.planningpal.io',
+    'https://app.planningpal.io',
     'https://planningpal.vercel.app',
     'https://planningpal.co.uk',
     'https://www.planningpal.co.uk',
@@ -46,7 +53,7 @@ function trustedOrigin(origin: string | undefined) {
     'http://127.0.0.1:3001',
     'http://localhost:3001',
   ].filter((value): value is string => Boolean(value))
-  const cleanOrigin = origin.replace(/\/$/, '')
+  const cleanOrigin = origin.trim().replace(/\/$/, '')
   return allowed.some((value) => cleanOrigin === value.replace(/\/$/, '')) ? cleanOrigin : null
 }
 
