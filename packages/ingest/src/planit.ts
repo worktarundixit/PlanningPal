@@ -8,6 +8,7 @@ const ENDPOINT = 'https://www.planit.org.uk/api/applics/json'
 export type PlanItOptions = {
   minIntervalMs?: number
   maxRetryWaitMs?: number
+  maxAttempts?: number
   fetchImpl?: typeof fetch
   now?: () => number
 }
@@ -59,9 +60,10 @@ export function planItUrl(query: FetchQuery, index: number) {
   return `${ENDPOINT}?${params.toString()}`
 }
 
-async function getJson(url: string, fetchImpl: typeof fetch, maxRetryWaitMs: number) {
+async function getJson(url: string, fetchImpl: typeof fetch, maxRetryWaitMs: number, maxAttempts = 4) {
+  const attempts = Math.max(1, Math.floor(maxAttempts))
   let lastError: unknown
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetchImpl(url, {
         headers: { Accept: 'application/json', 'User-Agent': PLANIT_USER_AGENT },
@@ -81,7 +83,7 @@ async function getJson(url: string, fetchImpl: typeof fetch, maxRetryWaitMs: num
       return await response.json() as { records?: PlanItRecord[]; total?: number | null; from?: number | null }
     } catch (error) {
       lastError = error
-      if (attempt === 3) break
+      if (attempt === attempts - 1) break
       const customWait = error instanceof Error && 'retryAfterMs' in error && typeof error.retryAfterMs === 'number'
         ? error.retryAfterMs
         : Math.min(1000 * 2 ** attempt, maxRetryWaitMs)
@@ -96,20 +98,22 @@ export function createPlanItSource(options: PlanItOptions = {}): PlanningSource 
   const envInterval = process.env.PLANIT_MIN_INTERVAL_MS ? Number(process.env.PLANIT_MIN_INTERVAL_MS) : undefined
   const interval = options.minIntervalMs ?? (Number.isFinite(envInterval) ? envInterval! : 2000)
   const maxRetryWaitMs = options.maxRetryWaitMs ?? 30_000
+  const maxAttempts = options.maxAttempts ?? 4
   const now = options.now ?? Date.now
   return {
     id: 'planit',
     async *fetchPages(query) {
       const pageSize = query.pageSize ?? 300
       const maxPages = query.maxPages ?? 40
-      let index = 0
+      const start = query.index
+      let index = typeof start === 'number' && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0
       let total: number | null = null
       for (let page = 0; page < maxPages; page += 1) {
         const wait = interval - (now() - sharedLastRequestAt)
         if (sharedLastRequestAt && wait > 0) await sleep(wait)
         const url = planItUrl(query, index)
         sharedLastRequestAt = now()
-        const body = await getJson(url, fetchImpl, maxRetryWaitMs)
+        const body = await getJson(url, fetchImpl, maxRetryWaitMs, maxAttempts)
         const records = Array.isArray(body.records) ? body.records : []
         total = typeof body.total === 'number' ? body.total : total
         const raw: RawPage = { url, body, records, total, from: typeof body.from === 'number' ? body.from : index }

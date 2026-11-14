@@ -9675,6 +9675,26 @@ var contactGroupMembers = pgTable(
 var sqlClient = createSql("pooled");
 var db = drizzle(sqlClient, { schema: schema_exports });
 
+// ../api/src/ingest/clock.ts
+var SLOTS = [6, 13, 20];
+function londonParts(date2 = /* @__PURE__ */ new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date2);
+  const get = (type) => parts.find((part) => part.type === type)?.value ?? "";
+  return { key: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+function isIngestSlot(date2 = /* @__PURE__ */ new Date()) {
+  const now = londonParts(date2);
+  return SLOTS.includes(now.hour) && now.minute <= 10;
+}
+
 // ../../packages/ingest/src/clean.ts
 var POSTCODE = /\b([A-Z]{1,2}\d[A-Z\d]?)\s*(\d[A-Z]{2})\b/i;
 var BLANK_VALUES = /* @__PURE__ */ new Set(["", "see source", "unknown", "n/a", "na", "none", "null", "-"]);
@@ -9995,6 +10015,7 @@ function extractRecordContacts(record) {
 
 // ../../packages/ingest/src/planit.ts
 var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; mailto:alerts@aecpipeline.co.uk; +https://aecpipeline.co.uk)";
+var PLANIT_DAILY_CAP = 300;
 var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -10025,9 +10046,10 @@ function planItUrl(query, index2) {
   if (query.authority) params.set("auth", query.authority);
   return `${ENDPOINT}?${params.toString()}`;
 }
-async function getJson(url, fetchImpl, maxRetryWaitMs) {
+async function getJson(url, fetchImpl, maxRetryWaitMs, maxAttempts = 4) {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetchImpl(url, {
         headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
@@ -10047,7 +10069,7 @@ async function getJson(url, fetchImpl, maxRetryWaitMs) {
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (attempt === 3) break;
+      if (attempt === attempts - 1) break;
       const customWait = error instanceof Error && "retryAfterMs" in error && typeof error.retryAfterMs === "number" ? error.retryAfterMs : Math.min(1e3 * 2 ** attempt, maxRetryWaitMs);
       await sleep(customWait);
     }
@@ -10059,20 +10081,22 @@ function createPlanItSource(options = {}) {
   const envInterval = process.env.PLANIT_MIN_INTERVAL_MS ? Number(process.env.PLANIT_MIN_INTERVAL_MS) : void 0;
   const interval2 = options.minIntervalMs ?? (Number.isFinite(envInterval) ? envInterval : 2e3);
   const maxRetryWaitMs = options.maxRetryWaitMs ?? 3e4;
+  const maxAttempts = options.maxAttempts ?? 4;
   const now = options.now ?? Date.now;
   return {
     id: "planit",
     async *fetchPages(query) {
       const pageSize = query.pageSize ?? 300;
       const maxPages = query.maxPages ?? 40;
-      let index2 = 0;
+      const start = query.index;
+      let index2 = typeof start === "number" && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
       let total = null;
       for (let page = 0; page < maxPages; page += 1) {
         const wait = interval2 - (now() - sharedLastRequestAt);
         if (sharedLastRequestAt && wait > 0) await sleep(wait);
         const url = planItUrl(query, index2);
         sharedLastRequestAt = now();
-        const body = await getJson(url, fetchImpl, maxRetryWaitMs);
+        const body = await getJson(url, fetchImpl, maxRetryWaitMs, maxAttempts);
         const records = Array.isArray(body.records) ? body.records : [];
         total = typeof body.total === "number" ? body.total : total;
         const raw = { url, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
@@ -10084,6 +10108,80 @@ function createPlanItSource(options = {}) {
       }
     }
   };
+}
+
+// ../../packages/ingest/src/enrichIdox.ts
+function cleanCell(raw) {
+  if (!raw) return "";
+  const text2 = raw.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&#39;|&apos;/gi, "'").replace(/&quot;/gi, '"').replace(/\s+/g, " ").trim();
+  if (/^(not available|n\/a|none|see source|-|unknown)$/i.test(text2)) return "";
+  return text2;
+}
+function idoxDetailsUrl(portalUrl) {
+  if (!portalUrl || !/applicationDetails\.do/i.test(portalUrl)) return null;
+  try {
+    const parsed = new URL(portalUrl);
+    parsed.searchParams.set("activeTab", "details");
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+function parseIdoxDetailsHtml(html) {
+  const rows = /* @__PURE__ */ new Map();
+  const pattern = /<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/gi;
+  let match;
+  while ((match = pattern.exec(html)) !== null) {
+    const label = cleanCell(match[1]).toLowerCase();
+    const value = cleanCell(match[2]);
+    if (label && value) {
+      rows.set(label, value);
+    }
+  }
+  const get = (...keys) => {
+    for (const key of keys) {
+      const found = rows.get(key.toLowerCase());
+      if (found) return found;
+    }
+    return "";
+  };
+  return {
+    applicantName: get("applicant name", "applicant"),
+    applicantCompany: get("applicant company name", "company name"),
+    applicantAddress: get("applicant address"),
+    agentName: get("agent name", "agent"),
+    agentCompany: get("agent company name", "agent company"),
+    agentAddress: get("agent address"),
+    agentPhone: get("agent phone number", "phone number", "telephone number"),
+    agentEmail: get("agent email", "email", "email address")
+  };
+}
+async function fetchIdoxContacts(portalUrl, options = {}) {
+  const detailsUrl = idoxDetailsUrl(portalUrl);
+  if (!detailsUrl) return null;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer2 = setTimeout(() => controller.abort(), options.timeoutMs ?? 12e3);
+  try {
+    const response = await fetchImpl(detailsUrl, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": PLANIT_USER_AGENT
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const parsed = parseIdoxDetailsHtml(html);
+    const hasData = Boolean(
+      parsed.applicantName || parsed.applicantCompany || parsed.agentName || parsed.agentCompany || parsed.agentEmail
+    );
+    return hasData ? parsed : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer2);
+  }
 }
 
 // ../../packages/ingest/src/filter.ts
@@ -10376,7 +10474,8 @@ function createLondonDatahubSource(options = {}) {
     async *fetchPages(query) {
       const pageSize = Math.min(query.pageSize ?? 200, 500);
       const maxPages = query.maxPages ?? 15;
-      let index2 = 0;
+      const start = query.index;
+      let index2 = typeof start === "number" && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
       for (let page = 0; page < maxPages; page += 1) {
         const payload = buildLondonDatahubBody(query, index2);
         const response = await fetchImpl(LONDON_DATAHUB_ENDPOINT, {
@@ -22071,7 +22170,7 @@ function classifyScheme(text2, appSize) {
   else if (appSize) propType = "";
   return { category, propType, units, floorspace: extractFloorspace(text2) };
 }
-function estimateValue(text2, category, units, floorspace) {
+function estimateValue(text2, category, units, floorspace, appSize = "") {
   let fromPounds = null;
   let toPounds = null;
   if ((category === "HOUSING UNITS" || category === "NEW BUILD") && units && units > 0) {
@@ -22081,11 +22180,24 @@ function estimateValue(text2, category, units, floorspace) {
     const [low, high] = RATES[category] ?? [1400, 2100];
     fromPounds = floorspace * low;
     toPounds = floorspace * high;
+  } else if (/hotel|supermarket|mixed-use|hospital|tower|student accommodation|data centre/i.test(text2)) {
+    fromPounds = 4e6;
+    toPounds = 12e6;
+  } else if (appSize.toLowerCase() === "large" || /\b(?:major development|substantial redevelopment|multi-storey)\b/i.test(text2)) {
+    fromPounds = 25e5;
+    toPounds = 6e6;
+  } else if (appSize.toLowerCase() === "medium" || /\b(?:erection of|demolition and erection|new building)\b/i.test(text2)) {
+    fromPounds = 75e4;
+    toPounds = 2e6;
+  } else if (appSize.toLowerCase() === "small" || category === "EXTENSION" || /\b(?:extension|alteration|refurbishment|conversion|loft)\b/i.test(text2)) {
+    fromPounds = 12e4;
+    toPounds = 35e4;
   }
   if (fromPounds === null || toPounds === null) return null;
   return {
     from: (fromPounds / 1e6).toFixed(3),
-    to: (toPounds / 1e6).toFixed(3)
+    to: (toPounds / 1e6).toFixed(3),
+    estimated: true
   };
 }
 
@@ -22118,7 +22230,7 @@ function mapPlanItRecord(record) {
   const located = splitPostcode(rawAddress, blank(record.postcode));
   const description = blank(record.description);
   const classified = classifyScheme(`${description} ${blank(record.app_type)}`, blank(record.app_size));
-  const value = estimateValue(description, classified.category, classified.units, classified.floorspace);
+  const value = estimateValue(description, classified.category, classified.units, classified.floorspace, blank(record.app_size));
   const extracted = extractRecordContacts(record);
   const applicant = extracted.applicant;
   const applicantContact = extracted.applicantContact;
@@ -22178,7 +22290,11 @@ function mapPlanItRecord(record) {
     "Project Stage": stage(blank(record.app_state)),
     "Publication Date": published,
     "Project ID": blank(record.name) || reference,
-    "Project Category": classified.category
+    "Project Category": classified.category,
+    Ward: field(record, "ward") || blank(record.ward),
+    "Case Officer": field(record, "case_officer") || field(record, "officer") || blank(record.case_officer),
+    "Application Type": blank(record.app_type) || field(record, "app_type") || field(record, "application_type"),
+    "Decision Date": blank(record.decided_date) || field(record, "decision_date") || field(record, "decided_date")
   };
   for (const column of MASTER_COLUMNS) columns[column] ??= "";
   const longitude = typeof record.location_x === "number" ? record.location_x : null;
@@ -22549,6 +22665,274 @@ function recordsToCsv(rows) {
     for (const key of Object.keys(row)) full[key] = row[key] ?? "";
     return full;
   }));
+}
+
+// ../api/src/ingest/queue.ts
+var QUEUE_SOURCE = "planit-authorities";
+var ENRICH_CURSOR_SOURCE = "planit-enrich";
+var DEFAULT_INCREMENTAL_CAP_DAYS = 14;
+var DEFAULT_HISTORICAL_BACKFILL_DAYS = 15;
+var MAX_HISTORICAL_BACKFILL_DAYS = 15;
+var PLANIT_PAGE_SIZE = 300;
+var BACKOFF_MS = [5, 15, 30, 60].map((minutes) => minutes * 6e4);
+var ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+function londonDate(date2 = /* @__PURE__ */ new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date2);
+}
+function addDays(isoDay, days) {
+  const [year, month, day] = isoDay.split("-").map(Number);
+  const utc = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
+  utc.setUTCDate(utc.getUTCDate() + days);
+  return utc.toISOString().slice(0, 10);
+}
+function backoffDelayMs(attempts) {
+  const index2 = Math.min(BACKOFF_MS.length - 1, Math.max(0, Math.floor(attempts) - 1));
+  return BACKOFF_MS[index2] ?? BACKOFF_MS[BACKOFF_MS.length - 1] ?? 60 * 6e4;
+}
+function backfillCapDays(env = process.env) {
+  const parsed = Number(env.INGEST_BACKFILL_DAYS ?? DEFAULT_INCREMENTAL_CAP_DAYS);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_INCREMENTAL_CAP_DAYS;
+  return Math.floor(parsed);
+}
+function clampHistoricalDays(days) {
+  if (!Number.isFinite(days)) return DEFAULT_HISTORICAL_BACKFILL_DAYS;
+  return Math.min(MAX_HISTORICAL_BACKFILL_DAYS, Math.max(1, Math.floor(days)));
+}
+function historicalBackfillDays(env = process.env) {
+  const raw = env.INGEST_BACKFILL_FROM_DAYS;
+  if (raw === void 0 || raw === "") return DEFAULT_HISTORICAL_BACKFILL_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return clampHistoricalDays(parsed);
+}
+function incrementalStartDate(since, today, capDays = DEFAULT_INCREMENTAL_CAP_DAYS) {
+  const cap = addDays(today, -capDays);
+  if (!since || !ISO_DAY.test(since)) return cap;
+  const overlapped = addDays(since, -1);
+  return overlapped < cap ? cap : overlapped;
+}
+function emptyCursor(today) {
+  return { index: 0, since: {}, retry: {}, day: today, requestsToday: 0 };
+}
+function parseSince(value) {
+  const since = {};
+  if (!value || typeof value !== "object") return since;
+  for (const [authority, day] of Object.entries(value)) {
+    if (typeof day === "string" && ISO_DAY.test(day)) since[authority] = day;
+  }
+  return since;
+}
+function parseRetry(value) {
+  const retry = {};
+  if (!value || typeof value !== "object") return retry;
+  for (const [authority, entry] of Object.entries(value)) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry;
+    const attempts = Number(item.attempts);
+    if (!Number.isFinite(attempts) || attempts < 1 || typeof item.availableAt !== "string" || !item.availableAt) continue;
+    retry[authority] = {
+      attempts: Math.floor(attempts),
+      availableAt: item.availableAt,
+      error: typeof item.error === "string" ? item.error : ""
+    };
+  }
+  return retry;
+}
+function parseResume(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const item = value;
+  const offset = Number(item.offset);
+  if (typeof item.authority !== "string" || !item.authority || !Number.isFinite(offset) || offset < 0) return void 0;
+  return { authority: item.authority, offset: Math.floor(offset) };
+}
+function parseBackfill(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const item = value;
+  if (typeof item.from !== "string" || !ISO_DAY.test(item.from)) return void 0;
+  const done = {};
+  if (item.done && typeof item.done === "object") {
+    for (const [authority, flag] of Object.entries(item.done)) {
+      if (flag === true) done[authority] = true;
+    }
+  }
+  return { from: item.from, done };
+}
+function parseQueueCursor(raw, today) {
+  const fallback = emptyCursor(today);
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return fallback;
+  if (/^\d+$/.test(trimmed)) return { ...fallback, index: Number(trimmed) };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+    const storedDay = typeof parsed.day === "string" && ISO_DAY.test(parsed.day) ? parsed.day : today;
+    const sameDay = storedDay === today;
+    const index2 = Number(parsed.index);
+    const resume = parseResume(parsed.resume);
+    const backfill = parseBackfill(parsed.backfill);
+    return {
+      index: Number.isFinite(index2) && index2 >= 0 ? Math.floor(index2) : 0,
+      ...resume ? { resume } : {},
+      since: parseSince(parsed.since),
+      retry: parseRetry(parsed.retry),
+      day: today,
+      requestsToday: sameDay && Number.isFinite(Number(parsed.requestsToday)) ? Math.max(0, Math.floor(Number(parsed.requestsToday))) : 0,
+      ...backfill ? { backfill } : {}
+    };
+  } catch {
+    return fallback;
+  }
+}
+function serializeQueueCursor(cursor) {
+  const ordered = { index: cursor.index };
+  if (cursor.resume) ordered.resume = cursor.resume;
+  ordered.since = cursor.since;
+  ordered.retry = cursor.retry;
+  ordered.day = cursor.day;
+  ordered.requestsToday = cursor.requestsToday;
+  if (cursor.backfill) ordered.backfill = cursor.backfill;
+  return JSON.stringify(ordered);
+}
+function withBackfillSeed(cursor, today, days) {
+  if (cursor.backfill || days == null || days <= 0) return cursor;
+  if (Object.keys(cursor.since).length > 0) return cursor;
+  return {
+    ...cursor,
+    backfill: { from: addDays(today, -clampHistoricalDays(days)), done: {} }
+  };
+}
+function cloneCursor(cursor) {
+  return {
+    index: cursor.index,
+    ...cursor.resume ? { resume: { ...cursor.resume } } : {},
+    since: { ...cursor.since },
+    retry: Object.fromEntries(Object.entries(cursor.retry).map(([authority, state]) => [authority, { ...state }])),
+    day: cursor.day,
+    requestsToday: cursor.requestsToday,
+    ...cursor.backfill ? { backfill: { from: cursor.backfill.from, done: { ...cursor.backfill.done } } } : {}
+  };
+}
+function advancePast(cursor, authorities, authority) {
+  const at = authorities.indexOf(authority);
+  if (at < 0 || authorities.length === 0) return;
+  cursor.index = at + 1 >= authorities.length ? 0 : at + 1;
+}
+function normalizeCursor(cursor, authorities) {
+  const next = cloneCursor(cursor);
+  if (authorities.length === 0 || next.index < 0 || next.index >= authorities.length) next.index = 0;
+  if (next.resume && !authorities.includes(next.resume.authority)) delete next.resume;
+  if (next.backfill && authorities.length > 0 && authorities.every((authority) => next.backfill?.done[authority])) {
+    delete next.backfill;
+  }
+  return next;
+}
+function futureRetry(cursor, authority, nowMs) {
+  const retry = cursor.retry[authority];
+  return !!retry && Date.parse(retry.availableAt) > nowMs;
+}
+function startDateFor(cursor, authority, today, capDays) {
+  if (cursor.backfill && !cursor.backfill.done[authority]) return cursor.backfill.from;
+  return incrementalStartDate(cursor.since[authority], today, capDays);
+}
+function pickWork(cursor, authorities, now, today, capDays = DEFAULT_INCREMENTAL_CAP_DAYS) {
+  if (cursor.requestsToday >= PLANIT_DAILY_CAP) return { kind: "skip", reason: "daily cap" };
+  if (authorities.length === 0) return { kind: "skip", reason: "up to date" };
+  const nowMs = now.getTime();
+  const due = authorities.filter((authority) => {
+    const retry = cursor.retry[authority];
+    return !!retry && Date.parse(retry.availableAt) <= nowMs;
+  }).sort((left, right) => Date.parse(cursor.retry[left]?.availableAt ?? "") - Date.parse(cursor.retry[right]?.availableAt ?? ""));
+  if (due[0]) {
+    const authority = due[0];
+    return {
+      kind: "fetch",
+      authority,
+      offset: cursor.resume?.authority === authority ? cursor.resume.offset : 0,
+      from: startDateFor(cursor, authority, today, capDays),
+      mode: "retry"
+    };
+  }
+  if (cursor.resume && authorities.includes(cursor.resume.authority) && !futureRetry(cursor, cursor.resume.authority, nowMs)) {
+    const authority = cursor.resume.authority;
+    return {
+      kind: "fetch",
+      authority,
+      offset: cursor.resume.offset,
+      from: startDateFor(cursor, authority, today, capDays),
+      mode: cursor.backfill && !cursor.backfill.done[authority] ? "backfill" : "incremental"
+    };
+  }
+  if (cursor.backfill) {
+    const start2 = authorities.length === 0 ? 0 : cursor.index % authorities.length;
+    for (let step = 0; step < authorities.length; step += 1) {
+      const authority = authorities[(start2 + step) % authorities.length];
+      if (!authority || cursor.backfill.done[authority] || futureRetry(cursor, authority, nowMs)) continue;
+      return { kind: "fetch", authority, offset: 0, from: cursor.backfill.from, mode: "backfill" };
+    }
+    if (authorities.some((authority) => !cursor.backfill?.done[authority])) return { kind: "wait" };
+  }
+  const start = authorities.length === 0 ? 0 : cursor.index % authorities.length;
+  for (let step = 0; step < authorities.length; step += 1) {
+    const authority = authorities[(start + step) % authorities.length];
+    if (!authority || futureRetry(cursor, authority, nowMs) || cursor.since[authority] === today) continue;
+    return {
+      kind: "fetch",
+      authority,
+      offset: 0,
+      from: incrementalStartDate(cursor.since[authority], today, capDays),
+      mode: "incremental"
+    };
+  }
+  if (authorities.some((authority) => futureRetry(cursor, authority, nowMs))) return { kind: "wait" };
+  return { kind: "skip", reason: "up to date" };
+}
+function applyPageOutcome(cursor, authorities, outcome, now, today) {
+  const next = cloneCursor(cursor);
+  next.requestsToday += 1;
+  if (!outcome.ok) {
+    const attempts = (next.retry[outcome.authority]?.attempts ?? 0) + 1;
+    next.retry[outcome.authority] = {
+      attempts,
+      availableAt: new Date(now.getTime() + backoffDelayMs(attempts)).toISOString(),
+      error: outcome.error
+    };
+    advancePast(next, authorities, outcome.authority);
+    return next;
+  }
+  delete next.retry[outcome.authority];
+  if (outcome.hasMore) {
+    next.resume = { authority: outcome.authority, offset: outcome.nextOffset };
+    return next;
+  }
+  if (next.resume?.authority === outcome.authority) delete next.resume;
+  next.since[outcome.authority] = today;
+  if (next.backfill) {
+    next.backfill.done[outcome.authority] = true;
+    if (authorities.length > 0 && authorities.every((authority) => next.backfill?.done[authority])) delete next.backfill;
+  }
+  advancePast(next, authorities, outcome.authority);
+  return next;
+}
+function queueProgress(cursor, total) {
+  return {
+    day: cursor.day,
+    requestsToday: cursor.requestsToday,
+    dailyCap: PLANIT_DAILY_CAP,
+    index: cursor.index,
+    total,
+    backfill: cursor.backfill ? { from: cursor.backfill.from, done: Object.keys(cursor.backfill.done).length, total } : null
+  };
+}
+function pageContinues(records, total, from, pageSize) {
+  if (records <= 0) return false;
+  const nextOffset = from + records;
+  if (total !== null && nextOffset >= total) return false;
+  return records >= pageSize;
 }
 
 // ../api/src/ingest/run.ts
@@ -33373,10 +33757,10 @@ async function enrichSourceRecords(rows, options) {
 
 // ../api/src/ingest/run.ts
 var dataRoot = process.env.VERCEL ? "/tmp/planningpal" : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../data");
-function sourceFor(sourceId) {
+function sourceFor(sourceId, planIt) {
   if (sourceId === "london-datahub") return createLondonDatahubSource();
-  if (sourceId === "auto") return createHybridPlanningSource();
-  return createPlanItSource();
+  if (sourceId === "auto") return createHybridPlanningSource(planIt);
+  return createPlanItSource(planIt);
 }
 function hashFor(authority, reference) {
   return createHash2("sha256").update(`${councilCode(authority)}|${reference}`).digest("hex");
@@ -33415,7 +33799,17 @@ async function startIngestRun(options) {
   const cursorKey = sourceId === "london-datahub" ? "london-datahub" : "planit";
   const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1);
   const since = options.since ?? (options.from || options.to || options.authority ? void 0 : cursor?.lastDifferent || void 0);
-  const query = { ...options, source: sourceId, since };
+  const query = {
+    recentDays: options.recentDays,
+    from: options.from,
+    to: options.to,
+    authority: options.authority,
+    pageSize: options.pageSize,
+    maxPages: options.maxPages,
+    index: options.index,
+    since,
+    source: sourceId
+  };
   const [run] = await db.insert(pipelineRuns).values({
     source: sourceId,
     status: "running",
@@ -33423,18 +33817,22 @@ async function startIngestRun(options) {
     options: query
   }).returning();
   if (!run) throw new Error("Could not start pipeline run");
-  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => {
+  const enrich = options.enrich === true;
+  active = executeRun(run.id, sourceId, cursorKey, query, enrich, options.planIt).finally(() => {
     active = null;
   });
   return { id: run.id, status: "running", done: active };
 }
-async function executeRun(runId, sourceId, cursorKey, query) {
-  const source = sourceFor(sourceId);
+async function executeRun(runId, sourceId, cursorKey, query, enrich, planIt) {
+  const source = sourceFor(sourceId, planIt);
   const rawRecords = [];
+  const pageSize = query.pageSize ?? 300;
+  let lastPage = null;
   try {
     let pageNumber = 0;
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records);
+      lastPage = { records: page.records.length, total: page.total, from: page.from ?? query.index ?? 0 };
       const rawDir = path.join(dataRoot, "raw", sourceId, runId);
       await mkdir(rawDir, { recursive: true });
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, "0")}.json`), JSON.stringify(page.body));
@@ -33442,11 +33840,15 @@ async function executeRun(runId, sourceId, cursorKey, query) {
       pageNumber += 1;
     }
     const transformed = transformRecords(rawRecords, void 0, query.since);
-    const enrichedRows = await enrichSourceRecords(transformed.rows);
+    const counts = await upsertRows(transformed.rows);
+    let rowsForCsv = transformed.rows;
+    if (enrich) {
+      rowsForCsv = await enrichSourceRecords(transformed.rows);
+      await upsertRows(rowsForCsv);
+    }
     const csvPath = path.join(dataRoot, "ingest", `${runId}.csv`);
     await mkdir(path.dirname(csvPath), { recursive: true });
-    await writeFile(csvPath, recordsToCsv(enrichedRows));
-    const counts = await upsertRows(enrichedRows);
+    await writeFile(csvPath, recordsToCsv(rowsForCsv));
     await notifyNewLeads(counts.inserted, counts.titles);
     if (transformed.cursor) {
       await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
@@ -33462,10 +33864,23 @@ async function executeRun(runId, sourceId, cursorKey, query) {
       csvPath,
       cursorAfter: transformed.cursor
     }).where(eq(pipelineRuns.id, runId));
+    const from = lastPage?.from ?? query.index ?? 0;
+    const pageRecords = lastPage?.records ?? 0;
+    const total = lastPage?.total ?? null;
+    return {
+      fetched: transformed.fetched,
+      pageRecords,
+      total,
+      from,
+      pageSize,
+      hasMore: pageContinues(pageRecords, total, from, pageSize),
+      nextOffset: from + pageRecords
+    };
   } catch (error) {
     await db.update(pipelineRuns).set({
       status: "failed",
       finishedAt: /* @__PURE__ */ new Date(),
+      errors: Math.max(1, error?.errors || 1),
       message: error instanceof Error ? error.message : "Pipeline failed"
     }).where(eq(pipelineRuns.id, runId));
     throw error;
@@ -33592,77 +34007,217 @@ async function replaceContacts(applicationId, row) {
   }
   if (contacts.length) await db.insert(decisionMakers).values(contacts);
 }
-
-// ../api/src/ingest/scheduler.ts
-var SLOTS = [6, 13, 20];
-function londonNow(date2 = /* @__PURE__ */ new Date()) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/London",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date2);
-  const get = (type) => parts.find((part) => part.type === type)?.value ?? "";
-  return { key: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")), minute: Number(get("minute")) };
+async function saveEnrichCursor(lastDifferent) {
+  await db.insert(ingestCursors).values({ source: ENRICH_CURSOR_SOURCE, lastDifferent, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: /* @__PURE__ */ new Date() } });
 }
-function isIngestSlot(date2 = /* @__PURE__ */ new Date()) {
-  const now = londonNow(date2);
-  return SLOTS.includes(now.hour) && now.minute <= 10;
+async function enrichMissingContacts(options = {}) {
+  const limit = Math.min(Math.max(1, options.limit ?? 20), 100);
+  const [stored] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, ENRICH_CURSOR_SOURCE)).limit(1);
+  let after = null;
+  if (stored?.lastDifferent) {
+    try {
+      const parsed = JSON.parse(stored.lastDifferent);
+      if (typeof parsed.id === "string" && typeof parsed.createdAt === "string") after = { id: parsed.id, createdAt: parsed.createdAt };
+    } catch {
+      after = null;
+    }
+  }
+  const missing = sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`;
+  const resume = after ? sql`(${planningApplications.createdAt}, ${planningApplications.id}) < (${after.createdAt}::timestamptz, ${after.id}::uuid)` : void 0;
+  const candidates = await db.select().from(planningApplications).where(resume ? sql`${missing} AND ${resume}` : missing).orderBy(desc(planningApplications.createdAt), desc(planningApplications.id)).limit(limit);
+  let scanned = 0;
+  let enriched = 0;
+  let stoppedEarly = false;
+  for (const app of candidates) {
+    if (options.deadlineMs && Date.now() >= options.deadlineMs) {
+      stoppedEarly = true;
+      break;
+    }
+    scanned += 1;
+    const details = await fetchIdoxContacts(app.portalUrl, { fetchImpl: options.fetchImpl });
+    if (!details) continue;
+    const nextApplicant = details.applicantCompany || details.applicantName || app.clientApplicant;
+    const nextAgent = details.agentCompany || details.agentName || app.architectAgent;
+    const nextAgentContact = details.agentName || app.architectAgentContact;
+    const nextAgentAddress = details.agentAddress || app.architectAgentRawAddress;
+    const nextApplicantAddress = details.applicantAddress || app.clientApplicantRawAddress;
+    const nextEmail = details.agentEmail || app.architectAgentEmail;
+    const nextPhone = details.agentPhone || app.architectAgentPhone;
+    const updatedSource = {
+      ...app.sourceRecord,
+      "Client Applicant": nextApplicant,
+      "Client Applicant Contact": details.applicantName || app.sourceRecord["Client Applicant Contact"] || "",
+      "Client Applicant Raw Address": nextApplicantAddress,
+      "Architect Agent": nextAgent,
+      "Architect Agent Contact": nextAgentContact,
+      "Architect Agent Raw Address": nextAgentAddress,
+      "Architect Agent Email": nextEmail,
+      "Architect Agent Phone": nextPhone,
+      "Architect Agent Postcode": splitPostcode(nextAgentAddress).postcode,
+      "Client Applicant Postcode": splitPostcode(nextApplicantAddress).postcode
+    };
+    await db.update(planningApplications).set({
+      clientApplicant: nextApplicant,
+      clientApplicantContact: details.applicantName || app.clientApplicantContact,
+      clientApplicantRawAddress: nextApplicantAddress,
+      architectAgent: nextAgent,
+      architectAgentContact: nextAgentContact,
+      architectAgentRawAddress: nextAgentAddress,
+      architectAgentEmail: nextEmail,
+      architectAgentPhone: nextPhone,
+      sourceRecord: updatedSource,
+      updatedAt: /* @__PURE__ */ new Date()
+    }).where(eq(planningApplications.id, app.id));
+    await replaceContacts(app.id, updatedSource);
+    enriched += 1;
+  }
+  const last = scanned > 0 ? candidates[scanned - 1] : void 0;
+  if (last && (stoppedEarly || candidates.length >= limit)) {
+    const createdAt = last.createdAt instanceof Date ? last.createdAt.toISOString() : new Date(last.createdAt).toISOString();
+    await saveEnrichCursor(JSON.stringify({ id: last.id, createdAt }));
+  } else if (!stoppedEarly) {
+    await saveEnrichCursor("");
+  }
+  return { scanned, enriched };
 }
 
 // ../api/src/ingest/batch.ts
-var CURSOR = "planit-authorities";
-function sleep2(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+var ENRICH_MIN_REMAINING_MS = 8e3;
+function resultFor(cursor, total, extra) {
+  const progress = queueProgress(cursor, total);
+  return {
+    ...extra,
+    nextIndex: cursor.index,
+    total,
+    requestsToday: progress.requestsToday,
+    backfill: progress.backfill
+  };
+}
+async function loadAuthorities() {
+  const catalogue = await db.select({
+    areas: localPlanningAuthorities.planitQueryAreas,
+    status: localPlanningAuthorities.status,
+    coverage: localPlanningAuthorities.coverage
+  }).from(localPlanningAuthorities);
+  return [...new Set(catalogue.filter((row) => row.status === "active" && row.coverage !== "unavailable").flatMap((row) => row.areas))].sort(
+    (a, b2) => a.localeCompare(b2)
+  );
+}
+async function readCursor(today) {
+  const [row] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, QUEUE_SOURCE)).limit(1);
+  return parseQueueCursor(row?.lastDifferent, today);
+}
+async function saveCursor(cursor) {
+  const lastDifferent = serializeQueueCursor(cursor);
+  await db.insert(ingestCursors).values({ source: QUEUE_SOURCE, lastDifferent, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: /* @__PURE__ */ new Date() } });
+}
+async function prepareCursor(today, authorities) {
+  const parsed = normalizeCursor(await readCursor(today), authorities);
+  return normalizeCursor(withBackfillSeed(parsed, today, authorities.length ? historicalBackfillDays() : null), authorities);
 }
 async function ingestAuthorityBatch(options) {
-  if (!options?.force && !isIngestSlot()) {
-    return { skipped: true, reason: "Outside the scheduled Europe/London windows" };
+  const now = options?.now ?? /* @__PURE__ */ new Date();
+  const today = londonDate(now);
+  const authorities = await loadAuthorities();
+  const cursor = await prepareCursor(today, authorities);
+  if (!options?.force && !isIngestSlot(now)) {
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: "outside window",
+      partial: false,
+      processed: [],
+      failed: []
+    });
   }
-  const catalogue = await db.select({ areas: localPlanningAuthorities.planitQueryAreas, status: localPlanningAuthorities.status, coverage: localPlanningAuthorities.coverage }).from(localPlanningAuthorities);
-  const authorities = [...new Set(catalogue.filter((row) => row.status === "active" && row.coverage !== "unavailable").flatMap((row) => row.areas))].sort((a, b2) => a.localeCompare(b2));
-  const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45e3);
-  const maxAuthorities = options?.maxAuthorities ?? Number(process.env.INGEST_BATCH_LIMIT || 1);
-  const intervalMs = options?.intervalMs ?? Number(process.env.PLANIT_MIN_INTERVAL_MS || 6e4);
-  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, CURSOR)).limit(1);
-  let index2 = Number(cursor?.lastDifferent || 0);
-  if (!Number.isFinite(index2) || index2 < 0 || index2 >= authorities.length) index2 = 0;
   const started = Date.now();
+  const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45e3);
+  const capDays = backfillCapDays();
+  const work = pickWork(cursor, authorities, now, today, capDays);
+  if (work.kind === "skip") {
+    if (serializeQueueCursor(cursor) !== serializeQueueCursor(await readCursor(today))) await saveCursor(cursor);
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: work.reason,
+      partial: false,
+      processed: [],
+      failed: []
+    });
+  }
+  if (work.kind === "wait") {
+    await saveCursor(cursor);
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: false,
+      partial: false,
+      processed: [],
+      failed: []
+    });
+  }
+  await saveCursor(cursor);
+  let next = cursor;
   const processed = [];
   const failed = [];
-  while (index2 < authorities.length && processed.length < maxAuthorities && Date.now() - started < budgetMs) {
-    const authority = authorities[index2];
-    if (!authority) break;
-    if (processed.length > 0 && intervalMs > 0) {
-      if (Date.now() - started + intervalMs >= budgetMs) break;
-      await sleep2(intervalMs);
-    }
-    try {
-      const run = await startIngestRun({
-        authority,
-        recentDays: options?.recentDays ?? 3,
-        maxPages: 1,
-        source: options?.source
+  try {
+    const run = await startIngestRun({
+      authority: work.authority,
+      from: work.from,
+      index: work.offset,
+      maxPages: 1,
+      pageSize: PLANIT_PAGE_SIZE,
+      source: options?.source ?? "planit",
+      enrich: false,
+      planIt: { maxAttempts: 1, minIntervalMs: 0 }
+    });
+    const summary = await run.done;
+    next = applyPageOutcome(
+      cursor,
+      authorities,
+      { ok: true, authority: work.authority, hasMore: summary.hasMore, nextOffset: summary.nextOffset },
+      now,
+      today
+    );
+    processed.push(work.authority);
+  } catch (error) {
+    const statusCode = typeof error === "object" && error && "statusCode" in error ? Number(error.statusCode) : 0;
+    if (statusCode === 409) {
+      return resultFor(cursor, authorities.length, {
+        ok: true,
+        skipped: "busy",
+        partial: false,
+        processed: [],
+        failed: []
       });
-      await run.done;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Authority scan failed";
-      failed.push({ authority, error: message });
-      break;
     }
-    processed.push(authority);
-    index2 += 1;
-    const next = index2 >= authorities.length ? "0" : String(index2);
-    await db.insert(ingestCursors).values({ source: CURSOR, lastDifferent: next, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: next, updatedAt: /* @__PURE__ */ new Date() } });
+    const message = error instanceof Error ? error.message : "Authority scan failed";
+    next = applyPageOutcome(cursor, authorities, { ok: false, authority: work.authority, error: message }, now, today);
+    failed.push({ authority: work.authority, error: message });
   }
-  if (index2 >= authorities.length) index2 = 0;
-  return { ok: failed.length === 0, skipped: false, processed, failed, nextIndex: index2, total: authorities.length };
+  await saveCursor(next);
+  const remaining = budgetMs - (Date.now() - started);
+  if (remaining >= ENRICH_MIN_REMAINING_MS) {
+    try {
+      const limit = Math.max(1, Math.min(5, Math.floor(remaining / ENRICH_MIN_REMAINING_MS)));
+      await enrichMissingContacts({ limit, deadlineMs: started + budgetMs });
+    } catch (error) {
+      console.error("PlanIt contact enrichment pass failed", error);
+    }
+  }
+  return resultFor(next, authorities.length, {
+    ok: failed.length === 0,
+    skipped: false,
+    partial: failed.length > 0,
+    processed,
+    failed
+  });
 }
 
 // server/cron-ingest.ts
+function statusForIngestResult(result) {
+  if (result.skipped) return 200;
+  if (result.ok) return 200;
+  if (result.partial) return 207;
+  return 500;
+}
 async function handler(request, response) {
   const secret = process.env.CRON_SECRET;
   const header = request.headers?.authorization;
@@ -33673,13 +34228,14 @@ async function handler(request, response) {
   }
   try {
     const result = await ingestAuthorityBatch({ force: true });
-    response.status(200).json(result);
+    response.status(statusForIngestResult(result)).json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Ingest failed";
     console.error(`PlanIt ingest failed: ${message}`);
-    response.status(200).json({ ok: false, skipped: false, processed: [], failed: [{ authority: "", error: message }] });
+    response.status(500).json({ ok: false, skipped: false, partial: false, processed: [], failed: [{ authority: "", error: message }] });
   }
 }
 export {
-  handler as default
+  handler as default,
+  statusForIngestResult
 };

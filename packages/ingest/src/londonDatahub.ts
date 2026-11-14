@@ -149,7 +149,8 @@ export function createLondonDatahubSource(options: { fetchImpl?: typeof fetch } 
     async *fetchPages(query) {
       const pageSize = Math.min(query.pageSize ?? 200, 500)
       const maxPages = query.maxPages ?? 15
-      let index = 0
+      const start = query.index
+      let index = typeof start === 'number' && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0
       for (let page = 0; page < maxPages; page += 1) {
         const payload = buildLondonDatahubBody(query, index)
         const response = await fetchImpl(LONDON_DATAHUB_ENDPOINT, {

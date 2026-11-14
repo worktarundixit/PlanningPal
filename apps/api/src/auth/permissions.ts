@@ -219,6 +219,7 @@ const ROUTE_RULES: RouteRule[] = [
   { method: 'GET', pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: 'ingest.admin' },
   { method: 'POST', pattern: /^\/api\/v1\/ingest\/runs$/, permission: 'ingest.admin' },
   { method: 'POST', pattern: /^\/api\/v1\/ingest\/enrich$/, permission: 'ingest.admin' },
+  { method: 'POST', pattern: /^\/api\/v1\/ingest\/backfill$/, permission: 'ingest.admin' },
   { method: 'POST', pattern: /^\/api\/v1\/ingest\/upload$/, permission: 'ingest.admin' },
 ]
 

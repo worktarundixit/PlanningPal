@@ -38892,6 +38892,7 @@ var ROUTE_RULES = [
   { method: "GET", pattern: /^\/api\/v1\/ingest\/runs\/[^/]+\/csv$/, permission: "ingest.admin" },
   { method: "POST", pattern: /^\/api\/v1\/ingest\/runs$/, permission: "ingest.admin" },
   { method: "POST", pattern: /^\/api\/v1\/ingest\/enrich$/, permission: "ingest.admin" },
+  { method: "POST", pattern: /^\/api\/v1\/ingest\/backfill$/, permission: "ingest.admin" },
   { method: "POST", pattern: /^\/api\/v1\/ingest\/upload$/, permission: "ingest.admin" }
 ];
 function permissionFor(method, url2) {
@@ -81307,25 +81308,57 @@ function mapRecord(record2, index2) {
   const rawTo = record2["\xA3m Value To"] || record2["\xA3m Est Prop Val To"] || "";
   const valueFrom = Number(rawFrom || 0);
   const valueTo = Number(rawTo || rawFrom || 0);
-  const valueLabel = !rawFrom && !rawTo ? "\u2014" : `\xA3${valueFrom.toFixed(2)}m\u2013\xA3${valueTo.toFixed(2)}m`;
+  let valueLabel = "";
+  let estimated = false;
+  if (valueTo > 0) {
+    valueLabel = valueFrom > 0 ? `\xA3${valueFrom.toFixed(2)}m\u2013\xA3${valueTo.toFixed(2)}m` : `\xA3${valueTo.toFixed(2)}m`;
+  } else {
+    const text3 = (record2.Proposal || record2.Heading || "").toLowerCase();
+    if (/hotel|supermarket|mixed-use|hospital|tower|student accommodation|data centre/.test(text3)) {
+      valueLabel = "\xA34.00m\u2013\xA312.00m (est)";
+      estimated = true;
+    } else if (/\b(?:major development|substantial redevelopment|multi-storey)\b/.test(text3)) {
+      valueLabel = "\xA32.50m\u2013\xA36.00m (est)";
+      estimated = true;
+    } else if (/\b(?:erection of|demolition and erection|new building)\b/.test(text3)) {
+      valueLabel = "\xA30.75m\u2013\xA32.00m (est)";
+      estimated = true;
+    } else if (/\b(?:extension|alteration|refurbishment|conversion|loft)\b/.test(text3)) {
+      valueLabel = "\xA30.12m\u2013\xA30.35m (est)";
+      estimated = true;
+    } else {
+      valueLabel = "Not estimated";
+      estimated = false;
+    }
+  }
   const agent = record2["Architect Agent Contact"] || record2["Mail Architect Agent Contact"] || "Contact not published";
   const practice = record2["Architect Agent"] || record2["Mail Architect Agent Name"] || "Agent not published";
-  const heading2 = record2.Heading || record2["Prop Type"] || "Planning application";
+  let heading2 = (record2.Heading || "").trim();
+  const ref = record2["Application Reference"] || record2["Project ID"] || `record-${index2}`;
+  if (!heading2 || heading2.length < 8 || /^\d+$/.test(heading2)) {
+    const proposal = (record2.Proposal || "").trim();
+    if (proposal && proposal.length >= 8) {
+      heading2 = proposal.length > 110 ? `${proposal.slice(0, 107).trim()}\u2026` : proposal;
+    } else {
+      heading2 = ref ? `Application ${ref}` : record2["Prop Type"] || "Planning application";
+    }
+  }
   const projectCategory = (record2["Project Category"] || "Planning").replaceAll("_", " ");
   const initials = heading2.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
   return {
-    id: record2["Application Reference"] || record2["Project ID"] || `record-${index2}`,
+    id: ref,
     title: heading2,
     location: record2["Site Address"] || record2["Site Raw Address"] || "",
     type: `${record2["Prop Type"] || "Scheme"} \xB7 ${projectCategory}`,
     stage: record2["Project Stage"]?.includes("APPROVED") ? "Approved" : record2["Project Stage"] || "Planning",
     value: valueLabel,
-    valueNum: valueTo,
+    valueNum: valueTo || (estimated ? 0.75 : 0),
     valueFrom,
+    estimated,
     distance: record2["Site Address Postcode Area"] || record2.County || "",
     date: record2["Publication Date"] || "",
     council: record2["Local Authority"] || "",
-    units: record2["Prop Type"] || heading2,
+    units: record2["Prop Type"] || record2["Project Category"] || "General scheme",
     score: Math.max(
       64,
       Math.min(
@@ -81351,6 +81384,10 @@ function mapRecord(record2, index2) {
     projectId: record2["Project ID"],
     category: projectCategory,
     portalUrl: record2["URL Link"],
+    ward: record2.Ward || record2.ward || "",
+    caseOfficer: record2["Case Officer"] || record2.caseOfficer || "",
+    applicationType: record2["Application Type"] || record2.applicationType || "",
+    decisionDate: record2["Decision Date"] || record2.decisionDate || "",
     raw: record2
   };
 }
@@ -81678,6 +81715,7 @@ function extractRecordContacts(record2) {
 
 // ../../packages/ingest/src/planit.ts
 var PLANIT_USER_AGENT = "PlanningPal/0.1 (Hitcaliber Ltd; planning-data ingestion; mailto:alerts@aecpipeline.co.uk; +https://aecpipeline.co.uk)";
+var PLANIT_DAILY_CAP = 300;
 var ENDPOINT = "https://www.planit.org.uk/api/applics/json";
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -81708,9 +81746,10 @@ function planItUrl(query, index2) {
   if (query.authority) params.set("auth", query.authority);
   return `${ENDPOINT}?${params.toString()}`;
 }
-async function getJson(url2, fetchImpl, maxRetryWaitMs) {
+async function getJson(url2, fetchImpl, maxRetryWaitMs, maxAttempts = 4) {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetchImpl(url2, {
         headers: { Accept: "application/json", "User-Agent": PLANIT_USER_AGENT }
@@ -81730,7 +81769,7 @@ async function getJson(url2, fetchImpl, maxRetryWaitMs) {
       return await response.json();
     } catch (error62) {
       lastError = error62;
-      if (attempt === 3) break;
+      if (attempt === attempts - 1) break;
       const customWait = error62 instanceof Error && "retryAfterMs" in error62 && typeof error62.retryAfterMs === "number" ? error62.retryAfterMs : Math.min(1e3 * 2 ** attempt, maxRetryWaitMs);
       await sleep(customWait);
     }
@@ -81742,20 +81781,22 @@ function createPlanItSource(options = {}) {
   const envInterval = process.env.PLANIT_MIN_INTERVAL_MS ? Number(process.env.PLANIT_MIN_INTERVAL_MS) : void 0;
   const interval2 = options.minIntervalMs ?? (Number.isFinite(envInterval) ? envInterval : 2e3);
   const maxRetryWaitMs = options.maxRetryWaitMs ?? 3e4;
+  const maxAttempts = options.maxAttempts ?? 4;
   const now = options.now ?? Date.now;
   return {
     id: "planit",
     async *fetchPages(query) {
       const pageSize = query.pageSize ?? 300;
       const maxPages = query.maxPages ?? 40;
-      let index2 = 0;
+      const start = query.index;
+      let index2 = typeof start === "number" && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
       let total = null;
       for (let page = 0; page < maxPages; page += 1) {
         const wait = interval2 - (now() - sharedLastRequestAt);
         if (sharedLastRequestAt && wait > 0) await sleep(wait);
         const url2 = planItUrl(query, index2);
         sharedLastRequestAt = now();
-        const body = await getJson(url2, fetchImpl, maxRetryWaitMs);
+        const body = await getJson(url2, fetchImpl, maxRetryWaitMs, maxAttempts);
         const records = Array.isArray(body.records) ? body.records : [];
         total = typeof body.total === "number" ? body.total : total;
         const raw = { url: url2, body, records, total, from: typeof body.from === "number" ? body.from : index2 };
@@ -82133,7 +82174,8 @@ function createLondonDatahubSource(options = {}) {
     async *fetchPages(query) {
       const pageSize = Math.min(query.pageSize ?? 200, 500);
       const maxPages = query.maxPages ?? 15;
-      let index2 = 0;
+      const start = query.index;
+      let index2 = typeof start === "number" && Number.isFinite(start) && start > 0 ? Math.floor(start) : 0;
       for (let page = 0; page < maxPages; page += 1) {
         const payload = buildLondonDatahubBody(query, index2);
         const response = await fetchImpl(LONDON_DATAHUB_ENDPOINT, {
@@ -82237,7 +82279,7 @@ function classifyScheme(text3, appSize) {
   else if (appSize) propType = "";
   return { category, propType, units, floorspace: extractFloorspace(text3) };
 }
-function estimateValue(text3, category, units, floorspace) {
+function estimateValue(text3, category, units, floorspace, appSize = "") {
   let fromPounds = null;
   let toPounds = null;
   if ((category === "HOUSING UNITS" || category === "NEW BUILD") && units && units > 0) {
@@ -82247,11 +82289,24 @@ function estimateValue(text3, category, units, floorspace) {
     const [low, high] = RATES[category] ?? [1400, 2100];
     fromPounds = floorspace * low;
     toPounds = floorspace * high;
+  } else if (/hotel|supermarket|mixed-use|hospital|tower|student accommodation|data centre/i.test(text3)) {
+    fromPounds = 4e6;
+    toPounds = 12e6;
+  } else if (appSize.toLowerCase() === "large" || /\b(?:major development|substantial redevelopment|multi-storey)\b/i.test(text3)) {
+    fromPounds = 25e5;
+    toPounds = 6e6;
+  } else if (appSize.toLowerCase() === "medium" || /\b(?:erection of|demolition and erection|new building)\b/i.test(text3)) {
+    fromPounds = 75e4;
+    toPounds = 2e6;
+  } else if (appSize.toLowerCase() === "small" || category === "EXTENSION" || /\b(?:extension|alteration|refurbishment|conversion|loft)\b/i.test(text3)) {
+    fromPounds = 12e4;
+    toPounds = 35e4;
   }
   if (fromPounds === null || toPounds === null) return null;
   return {
     from: (fromPounds / 1e6).toFixed(3),
-    to: (toPounds / 1e6).toFixed(3)
+    to: (toPounds / 1e6).toFixed(3),
+    estimated: true
   };
 }
 
@@ -82284,7 +82339,7 @@ function mapPlanItRecord(record2) {
   const located = splitPostcode(rawAddress, blank(record2.postcode));
   const description = blank(record2.description);
   const classified = classifyScheme(`${description} ${blank(record2.app_type)}`, blank(record2.app_size));
-  const value = estimateValue(description, classified.category, classified.units, classified.floorspace);
+  const value = estimateValue(description, classified.category, classified.units, classified.floorspace, blank(record2.app_size));
   const extracted = extractRecordContacts(record2);
   const applicant = extracted.applicant;
   const applicantContact = extracted.applicantContact;
@@ -82344,7 +82399,11 @@ function mapPlanItRecord(record2) {
     "Project Stage": stage(blank(record2.app_state)),
     "Publication Date": published,
     "Project ID": blank(record2.name) || reference,
-    "Project Category": classified.category
+    "Project Category": classified.category,
+    Ward: field(record2, "ward") || blank(record2.ward),
+    "Case Officer": field(record2, "case_officer") || field(record2, "officer") || blank(record2.case_officer),
+    "Application Type": blank(record2.app_type) || field(record2, "app_type") || field(record2, "application_type"),
+    "Decision Date": blank(record2.decided_date) || field(record2, "decision_date") || field(record2, "decided_date")
   };
   for (const column of MASTER_COLUMNS) columns[column] ??= "";
   const longitude = typeof record2.location_x === "number" ? record2.location_x : null;
@@ -93568,10 +93627,14 @@ ${message.text}`;
 }
 var mailer = createMailer();
 function appOrigin() {
-  if (process.env.WEB_ORIGIN) return process.env.WEB_ORIGIN.replace(/\/$/, "");
+  if (process.env.WEB_ORIGIN) {
+    const origins = process.env.WEB_ORIGIN.split(",").map((value) => value.trim().replace(/\/$/, "")).filter(Boolean);
+    const preferred = origins.find((value) => value.includes("://app.")) ?? origins[0];
+    if (preferred) return preferred;
+  }
   if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`.replace(/\/$/, "");
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`.replace(/\/$/, "");
-  return process.env.NODE_ENV === "production" ? "https://planningpal.vercel.app" : "http://127.0.0.1:5173";
+  return process.env.NODE_ENV === "production" ? "https://app.planningpal.io" : "http://127.0.0.1:5173";
 }
 async function notifyNewLeads(inserted, titles) {
   if (inserted < 1) return;
@@ -93598,12 +93661,181 @@ async function notifyNewLeads(inserted, titles) {
   }
 }
 
+// ../api/src/ingest/queue.ts
+var QUEUE_SOURCE = "planit-authorities";
+var ENRICH_CURSOR_SOURCE = "planit-enrich";
+var DEFAULT_HISTORICAL_BACKFILL_DAYS = 15;
+var MAX_HISTORICAL_BACKFILL_DAYS = 15;
+var BACKOFF_MS = [5, 15, 30, 60].map((minutes) => minutes * 6e4);
+var ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+function londonDate(date6 = /* @__PURE__ */ new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date6);
+}
+function addDays(isoDay, days2) {
+  const [year, month, day] = isoDay.split("-").map(Number);
+  const utc = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
+  utc.setUTCDate(utc.getUTCDate() + days2);
+  return utc.toISOString().slice(0, 10);
+}
+function clampHistoricalDays(days2) {
+  if (!Number.isFinite(days2)) return DEFAULT_HISTORICAL_BACKFILL_DAYS;
+  return Math.min(MAX_HISTORICAL_BACKFILL_DAYS, Math.max(1, Math.floor(days2)));
+}
+function historicalBackfillDays(env = process.env) {
+  const raw = env.INGEST_BACKFILL_FROM_DAYS;
+  if (raw === void 0 || raw === "") return DEFAULT_HISTORICAL_BACKFILL_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return clampHistoricalDays(parsed);
+}
+function emptyCursor(today) {
+  return { index: 0, since: {}, retry: {}, day: today, requestsToday: 0 };
+}
+function parseSince(value) {
+  const since = {};
+  if (!value || typeof value !== "object") return since;
+  for (const [authority, day] of Object.entries(value)) {
+    if (typeof day === "string" && ISO_DAY.test(day)) since[authority] = day;
+  }
+  return since;
+}
+function parseRetry(value) {
+  const retry = {};
+  if (!value || typeof value !== "object") return retry;
+  for (const [authority, entry] of Object.entries(value)) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry;
+    const attempts = Number(item.attempts);
+    if (!Number.isFinite(attempts) || attempts < 1 || typeof item.availableAt !== "string" || !item.availableAt) continue;
+    retry[authority] = {
+      attempts: Math.floor(attempts),
+      availableAt: item.availableAt,
+      error: typeof item.error === "string" ? item.error : ""
+    };
+  }
+  return retry;
+}
+function parseResume(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const item = value;
+  const offset = Number(item.offset);
+  if (typeof item.authority !== "string" || !item.authority || !Number.isFinite(offset) || offset < 0) return void 0;
+  return { authority: item.authority, offset: Math.floor(offset) };
+}
+function parseBackfill(value) {
+  if (!value || typeof value !== "object") return void 0;
+  const item = value;
+  if (typeof item.from !== "string" || !ISO_DAY.test(item.from)) return void 0;
+  const done = {};
+  if (item.done && typeof item.done === "object") {
+    for (const [authority, flag] of Object.entries(item.done)) {
+      if (flag === true) done[authority] = true;
+    }
+  }
+  return { from: item.from, done };
+}
+function parseQueueCursor(raw, today) {
+  const fallback = emptyCursor(today);
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) return fallback;
+  if (/^\d+$/.test(trimmed)) return { ...fallback, index: Number(trimmed) };
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback;
+    const storedDay = typeof parsed.day === "string" && ISO_DAY.test(parsed.day) ? parsed.day : today;
+    const sameDay = storedDay === today;
+    const index2 = Number(parsed.index);
+    const resume = parseResume(parsed.resume);
+    const backfill = parseBackfill(parsed.backfill);
+    return {
+      index: Number.isFinite(index2) && index2 >= 0 ? Math.floor(index2) : 0,
+      ...resume ? { resume } : {},
+      since: parseSince(parsed.since),
+      retry: parseRetry(parsed.retry),
+      day: today,
+      requestsToday: sameDay && Number.isFinite(Number(parsed.requestsToday)) ? Math.max(0, Math.floor(Number(parsed.requestsToday))) : 0,
+      ...backfill ? { backfill } : {}
+    };
+  } catch {
+    return fallback;
+  }
+}
+function serializeQueueCursor(cursor) {
+  const ordered = { index: cursor.index };
+  if (cursor.resume) ordered.resume = cursor.resume;
+  ordered.since = cursor.since;
+  ordered.retry = cursor.retry;
+  ordered.day = cursor.day;
+  ordered.requestsToday = cursor.requestsToday;
+  if (cursor.backfill) ordered.backfill = cursor.backfill;
+  return JSON.stringify(ordered);
+}
+function withBackfillSeed(cursor, today, days2) {
+  if (cursor.backfill || days2 == null || days2 <= 0) return cursor;
+  if (Object.keys(cursor.since).length > 0) return cursor;
+  return {
+    ...cursor,
+    backfill: { from: addDays(today, -clampHistoricalDays(days2)), done: {} }
+  };
+}
+function startHistoricalBackfill(cursor, today, days2) {
+  const next = {
+    ...cursor,
+    since: { ...cursor.since },
+    retry: { ...cursor.retry },
+    backfill: { from: addDays(today, -clampHistoricalDays(days2)), done: {} }
+  };
+  delete next.resume;
+  return next;
+}
+function cloneCursor(cursor) {
+  return {
+    index: cursor.index,
+    ...cursor.resume ? { resume: { ...cursor.resume } } : {},
+    since: { ...cursor.since },
+    retry: Object.fromEntries(Object.entries(cursor.retry).map(([authority, state]) => [authority, { ...state }])),
+    day: cursor.day,
+    requestsToday: cursor.requestsToday,
+    ...cursor.backfill ? { backfill: { from: cursor.backfill.from, done: { ...cursor.backfill.done } } } : {}
+  };
+}
+function normalizeCursor(cursor, authorities) {
+  const next = cloneCursor(cursor);
+  if (authorities.length === 0 || next.index < 0 || next.index >= authorities.length) next.index = 0;
+  if (next.resume && !authorities.includes(next.resume.authority)) delete next.resume;
+  if (next.backfill && authorities.length > 0 && authorities.every((authority) => next.backfill?.done[authority])) {
+    delete next.backfill;
+  }
+  return next;
+}
+function queueProgress(cursor, total) {
+  return {
+    day: cursor.day,
+    requestsToday: cursor.requestsToday,
+    dailyCap: PLANIT_DAILY_CAP,
+    index: cursor.index,
+    total,
+    backfill: cursor.backfill ? { from: cursor.backfill.from, done: Object.keys(cursor.backfill.done).length, total } : null
+  };
+}
+function pageContinues(records, total, from, pageSize) {
+  if (records <= 0) return false;
+  const nextOffset = from + records;
+  if (total !== null && nextOffset >= total) return false;
+  return records >= pageSize;
+}
+
 // ../api/src/ingest/run.ts
 var dataRoot = process.env.VERCEL ? "/tmp/planningpal" : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../data");
-function sourceFor(sourceId) {
+function sourceFor(sourceId, planIt) {
   if (sourceId === "london-datahub") return createLondonDatahubSource();
-  if (sourceId === "auto") return createHybridPlanningSource();
-  return createPlanItSource();
+  if (sourceId === "auto") return createHybridPlanningSource(planIt);
+  return createPlanItSource(planIt);
 }
 function hashFor(authority, reference) {
   return createHash3("sha256").update(`${councilCode(authority)}|${reference}`).digest("hex");
@@ -93642,7 +93874,17 @@ async function startIngestRun(options) {
   const cursorKey = sourceId === "london-datahub" ? "london-datahub" : "planit";
   const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1);
   const since = options.since ?? (options.from || options.to || options.authority ? void 0 : cursor?.lastDifferent || void 0);
-  const query = { ...options, source: sourceId, since };
+  const query = {
+    recentDays: options.recentDays,
+    from: options.from,
+    to: options.to,
+    authority: options.authority,
+    pageSize: options.pageSize,
+    maxPages: options.maxPages,
+    index: options.index,
+    since,
+    source: sourceId
+  };
   const [run] = await db.insert(pipelineRuns).values({
     source: sourceId,
     status: "running",
@@ -93650,18 +93892,22 @@ async function startIngestRun(options) {
     options: query
   }).returning();
   if (!run) throw new Error("Could not start pipeline run");
-  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => {
+  const enrich = options.enrich === true;
+  active = executeRun(run.id, sourceId, cursorKey, query, enrich, options.planIt).finally(() => {
     active = null;
   });
   return { id: run.id, status: "running", done: active };
 }
-async function executeRun(runId, sourceId, cursorKey, query) {
-  const source = sourceFor(sourceId);
+async function executeRun(runId, sourceId, cursorKey, query, enrich, planIt) {
+  const source = sourceFor(sourceId, planIt);
   const rawRecords = [];
+  const pageSize = query.pageSize ?? 300;
+  let lastPage = null;
   try {
     let pageNumber = 0;
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records);
+      lastPage = { records: page.records.length, total: page.total, from: page.from ?? query.index ?? 0 };
       const rawDir = path.join(dataRoot, "raw", sourceId, runId);
       await mkdir(rawDir, { recursive: true });
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, "0")}.json`), JSON.stringify(page.body));
@@ -93669,11 +93915,15 @@ async function executeRun(runId, sourceId, cursorKey, query) {
       pageNumber += 1;
     }
     const transformed = transformRecords(rawRecords, void 0, query.since);
-    const enrichedRows = await enrichSourceRecords(transformed.rows);
+    const counts = await upsertRows(transformed.rows);
+    let rowsForCsv = transformed.rows;
+    if (enrich) {
+      rowsForCsv = await enrichSourceRecords(transformed.rows);
+      await upsertRows(rowsForCsv);
+    }
     const csvPath = path.join(dataRoot, "ingest", `${runId}.csv`);
     await mkdir(path.dirname(csvPath), { recursive: true });
-    await writeFile(csvPath, recordsToCsv(enrichedRows));
-    const counts = await upsertRows(enrichedRows);
+    await writeFile(csvPath, recordsToCsv(rowsForCsv));
     await notifyNewLeads(counts.inserted, counts.titles);
     if (transformed.cursor) {
       await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: transformed.cursor, updatedAt: /* @__PURE__ */ new Date() } });
@@ -93689,10 +93939,23 @@ async function executeRun(runId, sourceId, cursorKey, query) {
       csvPath,
       cursorAfter: transformed.cursor
     }).where(eq(pipelineRuns.id, runId));
+    const from = lastPage?.from ?? query.index ?? 0;
+    const pageRecords = lastPage?.records ?? 0;
+    const total = lastPage?.total ?? null;
+    return {
+      fetched: transformed.fetched,
+      pageRecords,
+      total,
+      from,
+      pageSize,
+      hasMore: pageContinues(pageRecords, total, from, pageSize),
+      nextOffset: from + pageRecords
+    };
   } catch (error62) {
     await db.update(pipelineRuns).set({
       status: "failed",
       finishedAt: /* @__PURE__ */ new Date(),
+      errors: Math.max(1, error62?.errors || 1),
       message: error62 instanceof Error ? error62.message : "Pipeline failed"
     }).where(eq(pipelineRuns.id, runId));
     throw error62;
@@ -93877,7 +94140,7 @@ function presentRun(run) {
     filteredOut: run.filteredOut,
     inserted: run.inserted,
     updated: run.updated,
-    errors: run.errors,
+    errors: run.status === "failed" && run.errors === 0 ? 1 : run.errors,
     csvPath: run.csvPath,
     cursorBefore: run.cursorBefore,
     cursorAfter: run.cursorAfter,
@@ -93885,12 +94148,32 @@ function presentRun(run) {
     options: run.options
   };
 }
+async function saveEnrichCursor(lastDifferent) {
+  await db.insert(ingestCursors).values({ source: ENRICH_CURSOR_SOURCE, lastDifferent, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: /* @__PURE__ */ new Date() } });
+}
 async function enrichMissingContacts(options = {}) {
   const limit = Math.min(Math.max(1, options.limit ?? 20), 100);
-  const candidates = await db.select().from(planningApplications).where(sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`).orderBy(desc(planningApplications.createdAt)).limit(limit);
+  const [stored] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, ENRICH_CURSOR_SOURCE)).limit(1);
+  let after = null;
+  if (stored?.lastDifferent) {
+    try {
+      const parsed = JSON.parse(stored.lastDifferent);
+      if (typeof parsed.id === "string" && typeof parsed.createdAt === "string") after = { id: parsed.id, createdAt: parsed.createdAt };
+    } catch {
+      after = null;
+    }
+  }
+  const missing = sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`;
+  const resume = after ? sql`(${planningApplications.createdAt}, ${planningApplications.id}) < (${after.createdAt}::timestamptz, ${after.id}::uuid)` : void 0;
+  const candidates = await db.select().from(planningApplications).where(resume ? sql`${missing} AND ${resume}` : missing).orderBy(desc(planningApplications.createdAt), desc(planningApplications.id)).limit(limit);
   let scanned = 0;
   let enriched = 0;
+  let stoppedEarly = false;
   for (const app2 of candidates) {
+    if (options.deadlineMs && Date.now() >= options.deadlineMs) {
+      stoppedEarly = true;
+      break;
+    }
     scanned += 1;
     const details = await fetchIdoxContacts(app2.portalUrl, { fetchImpl: options.fetchImpl });
     if (!details) continue;
@@ -93928,6 +94211,13 @@ async function enrichMissingContacts(options = {}) {
     }).where(eq(planningApplications.id, app2.id));
     await replaceContacts(app2.id, updatedSource);
     enriched += 1;
+  }
+  const last = scanned > 0 ? candidates[scanned - 1] : void 0;
+  if (last && (stoppedEarly || candidates.length >= limit)) {
+    const createdAt = last.createdAt instanceof Date ? last.createdAt.toISOString() : new Date(last.createdAt).toISOString();
+    await saveEnrichCursor(JSON.stringify({ id: last.id, createdAt }));
+  } else if (!stoppedEarly) {
+    await saveEnrichCursor("");
   }
   return { scanned, enriched };
 }
@@ -94487,6 +94777,43 @@ async function telemetryRoutes(app2) {
   });
 }
 
+// ../api/src/ingest/batch.ts
+async function loadAuthorities() {
+  const catalogue = await db.select({
+    areas: localPlanningAuthorities.planitQueryAreas,
+    status: localPlanningAuthorities.status,
+    coverage: localPlanningAuthorities.coverage
+  }).from(localPlanningAuthorities);
+  return [...new Set(catalogue.filter((row) => row.status === "active" && row.coverage !== "unavailable").flatMap((row) => row.areas))].sort(
+    (a, b2) => a.localeCompare(b2)
+  );
+}
+async function readCursor(today) {
+  const [row] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, QUEUE_SOURCE)).limit(1);
+  return parseQueueCursor(row?.lastDifferent, today);
+}
+async function saveCursor(cursor) {
+  const lastDifferent = serializeQueueCursor(cursor);
+  await db.insert(ingestCursors).values({ source: QUEUE_SOURCE, lastDifferent, updatedAt: /* @__PURE__ */ new Date() }).onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: /* @__PURE__ */ new Date() } });
+}
+async function prepareCursor(today, authorities) {
+  const parsed = normalizeCursor(await readCursor(today), authorities);
+  return normalizeCursor(withBackfillSeed(parsed, today, authorities.length ? historicalBackfillDays() : null), authorities);
+}
+async function readIngestQueueStatus() {
+  const today = londonDate();
+  const authorities = await loadAuthorities();
+  const cursor = await prepareCursor(today, authorities);
+  return queueProgress(cursor, authorities.length);
+}
+async function beginHistoricalBackfill(days2) {
+  const today = londonDate();
+  const authorities = await loadAuthorities();
+  const cursor = startHistoricalBackfill(normalizeCursor(await readCursor(today), authorities), today, days2);
+  await saveCursor(cursor);
+  return queueProgress(cursor, authorities.length);
+}
+
 // ../api/src/routes/ingest.ts
 var runBody = external_exports.object({
   from: external_exports.string().optional(),
@@ -94494,10 +94821,14 @@ var runBody = external_exports.object({
   authority: external_exports.string().optional(),
   recent: external_exports.number().int().positive().max(30).optional(),
   maxPages: external_exports.number().int().positive().max(40).optional(),
-  source: external_exports.enum(["planit", "london-datahub", "auto"]).optional()
+  source: external_exports.enum(["planit", "london-datahub", "auto"]).optional(),
+  enrich: external_exports.boolean().optional()
 });
 var enrichBody = external_exports.object({
   limit: external_exports.number().int().positive().max(100).optional()
+});
+var backfillBody = external_exports.object({
+  days: external_exports.number().int().min(1).max(MAX_HISTORICAL_BACKFILL_DAYS).optional()
 });
 var uploadBody = external_exports.object({
   batchName: external_exports.string().optional(),
@@ -94507,7 +94838,8 @@ async function ingestRoutes(app2) {
   app2.get("/api/v1/ingest/runs", async (request) => {
     requireUser(request);
     const rows = await db.select().from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(50);
-    return { data: rows.map(presentRun) };
+    const queue = await readIngestQueueStatus();
+    return { data: rows.map(presentRun), queue };
   });
   app2.get("/api/v1/ingest/runs/:id/csv", async (request, reply) => {
     requireUser(request);
@@ -94529,7 +94861,8 @@ async function ingestRoutes(app2) {
         authority: body.authority,
         recentDays: body.recent ?? (body.from || body.to ? void 0 : 3),
         maxPages: body.maxPages,
-        source: body.source
+        source: body.source,
+        enrich: body.enrich === true
       });
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, started.id)).limit(1);
       return reply.code(202).send(run ? presentRun(run) : { id: started.id, status: "running" });
@@ -94537,6 +94870,14 @@ async function ingestRoutes(app2) {
       if (error62 instanceof Error && "statusCode" in error62) throw new HttpError(409, error62.message);
       throw error62;
     }
+  });
+  app2.post("/api/v1/ingest/backfill", async (request, reply) => {
+    const user = requireUser(request);
+    if (user.platformRole !== "super_admin") throw new HttpError(403, "Forbidden");
+    const body = parseBody(backfillBody, request.body ?? {}, reply);
+    if (!body) return;
+    const queue = await beginHistoricalBackfill(body.days ?? DEFAULT_HISTORICAL_BACKFILL_DAYS);
+    return reply.code(202).send(queue);
   });
   app2.post("/api/v1/ingest/enrich", async (request, reply) => {
     requireUser(request);
@@ -95619,6 +95960,7 @@ async function workspaceRoutes(app2) {
     const user = requireUser(request);
     const [client] = await db.select().from(organisations).where(eq(organisations.id, user.organisationId)).limit(1);
     return {
+      companyName: client?.companyName ?? user.companyName ?? "",
       territories: client?.targetTerritories ?? [],
       trades: client?.tradeSpecialisms ?? [],
       radius: client?.operatingRadiusMiles ?? 25,
@@ -95866,10 +96208,14 @@ function workspaceOptional(method, path2) {
 }
 function trustedOrigin(origin) {
   if (!origin) return null;
+  const webOrigins = (process.env.WEB_ORIGIN ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const allowed = [
-    process.env.WEB_ORIGIN,
+    ...webOrigins,
     process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : void 0,
     process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : void 0,
+    "https://planningpal.io",
+    "https://www.planningpal.io",
+    "https://app.planningpal.io",
     "https://planningpal.vercel.app",
     "https://planningpal.co.uk",
     "https://www.planningpal.co.uk",
@@ -95878,7 +96224,7 @@ function trustedOrigin(origin) {
     "http://127.0.0.1:3001",
     "http://localhost:3001"
   ].filter((value) => Boolean(value));
-  const cleanOrigin = origin.replace(/\/$/, "");
+  const cleanOrigin = origin.trim().replace(/\/$/, "");
   return allowed.some((value) => cleanOrigin === value.replace(/\/$/, "")) ? cleanOrigin : null;
 }
 function buildApp() {
