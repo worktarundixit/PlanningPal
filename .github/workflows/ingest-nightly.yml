@@ -2,7 +2,7 @@ name: Nightly Planning Ingest & Idox Contact Enrichment
 
 on:
   schedule:
-    # Runs at 01:15 UTC (inside PlanIt's 18:00-06:00 overnight window)
+    # Optional full ingest. The catalogue import is Supabase pg_cron every minute.
     - cron: '15 1 * * *'
   workflow_dispatch:
     inputs:

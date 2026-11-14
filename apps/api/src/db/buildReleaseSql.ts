@@ -6,7 +6,10 @@ import { LPA_RECORDS } from '@planningpal/shared'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '../../../..')
 const drizzleDir = path.resolve(here, '../../drizzle')
-const cronFile = path.join(repo, 'supabase/migrations/20261102120000_schedule_planit_ingest.sql')
+const cronFiles = [
+  '20261102120000_schedule_planit_ingest.sql',
+  '20261114120000_planit_ingest_every_minute.sql',
+].map((name) => path.join(repo, 'supabase/migrations', name))
 const outFile = path.join(repo, 'supabase/release/0001_full_schema.sql')
 
 const tags = [
@@ -98,7 +101,7 @@ const header = `-- PlanningPal release schema for an empty Supabase database (eu
 
 `
 
-const parts = [header, ...tags.map(migrationSql), lpaSeed(), `-- pg_cron schedule\n${readFileSync(cronFile, 'utf8').trim()}\n`]
+const parts = [header, ...tags.map(migrationSql), lpaSeed(), `-- pg_cron schedule\n${cronFiles.map((file) => readFileSync(file, 'utf8').trim()).join('\n\n')}\n`]
 mkdirSync(path.dirname(outFile), { recursive: true })
 writeFileSync(outFile, parts.join('\n'))
 console.log(`Wrote ${outFile} (${LPA_RECORDS.length} authorities)`)

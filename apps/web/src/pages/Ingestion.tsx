@@ -57,7 +57,7 @@ export function Ingestion() {
       <PageIntro
         eyebrow="Planning data"
         title="Ingestion & Enrichment"
-        description="Hybrid ingestion paces PlanIt overnight (18:00–06:00, ≥60s interval, ≤300 req/day, compress=on) with automatic GLA London Datahub fallback and direct Idox portal contact enrichment."
+        description="PlanIt imports continuously: one saved page a minute, then contact enrichment only when time remains. A 15-day backfill runs once, then the feed stays inside a 300 request daily cap."
         action={
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -90,9 +90,9 @@ export function Ingestion() {
           <div className="mt-0.5 text-[11px] text-[#64748B]">Strict PlanIt pacing & compression</div>
         </div>
         <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
-          <div className="text-[9px] font-bold uppercase tracking-wider text-[#15803D]">Overnight cap</div>
-          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">≤ 300 req / night</div>
-          <div className="mt-0.5 text-[11px] text-[#64748B]">18:00–06:00 UTC (~100k apps/day max)</div>
+          <div className="text-[9px] font-bold uppercase tracking-wider text-[#15803D]">Daily cap</div>
+          <div className="mt-1 font-display text-[18px] font-semibold text-[#172033]">≤ 300 req / day</div>
+          <div className="mt-0.5 text-[11px] text-[#64748B]">Europe/London, one request a minute</div>
         </div>
         <div className="rounded-xl border border-[#DCE4F0] bg-white p-4">
           <div className="text-[9px] font-bold uppercase tracking-wider text-[#2563EB]">Daytime fallback</div>

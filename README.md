@@ -89,27 +89,33 @@ pnpm ingest -- --authority Camden --recent 7
 pnpm ingest -- --recent 3 --max-pages 4
 ```
 
-On a long-running API process the pipeline runs at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that. The process skips the timer when `VERCEL` is set.
+On a long-running API process outside Vercel, a local timer calls the same queue at 06:00, 13:00 and 20:00 Europe/London. Set `INGEST_SCHEDULE=off` to disable that timer. The process skips the timer when `VERCEL` is set, because production uses `pg_cron`.
 
 Ingestion targets come from the UK LPA master list (380 active authorities, 43 abolished with a successor). Shared services collapse to one PlanIt area, and Cumberland is read through Allerdale, Carlisle, and Copeland. Ebbsfleet, Middlesbrough, and Hartlepool development corporations have no PlanIt source and stay marked coverage unavailable. Super Admin → Ingestion flags a feed when its latest application is older than `FEED_STALE_DAYS` (default 92).
 
-Scheduled fetches run at 06:00, 13:00 and 20:00 UTC. Supabase `pg_cron` and `pg_net` POST to `https://planningpal.vercel.app/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`. The secret is read from the Supabase Vault secret named `cron_secret`. The route rejects any call that does not match `CRON_SECRET`. Vercel Hobby accounts cannot run a cron more than once a day, so `apps/web/vercel.json` does not define these jobs. Vercel functions stay in `lhr1`. The website and API stay on Vercel.
+Scheduled fetches run every minute, all day. Supabase `pg_cron` and `pg_net` POST to `https://planningpal.vercel.app/api/cron/ingest` with `Authorization: Bearer <CRON_SECRET>`. The schedule is `* * * * *`. The secret is read from the Supabase Vault secret named `cron_secret`. The route rejects any call that does not match `CRON_SECRET`. Each call saves at most one PlanIt page (`index` resumes a half-finished authority) and counts toward `PLANIT_DAILY_CAP` (300 requests per Europe/London day). When every authority is already imported for that day, the route returns immediately with `skipped: "up to date"`. A failed authority is remembered with a retry at 5, 15, 30, then 60 minutes, and the sweep moves on. The route answers 200 when the batch succeeded or was skipped, 207 when a retry was recorded, and 500 when the batch failed. Vercel Hobby accounts cannot run a cron more than once a day, so `apps/web/vercel.json` does not define these jobs. Vercel functions stay in `lhr1`. The website and API stay on Vercel.
 
-Apply `supabase/migrations/20261102120000_schedule_planit_ingest.sql` on the Supabase project, then store the secret:
+A fresh queue runs one historical backfill of the last 15 days (`INGEST_BACKFILL_FROM_DAYS`, default 15, maximum 15) across every PlanIt area, paging with `start_date` until each area is done, then switches to the continuous daily import. A Super Admin can start that window with `POST /api/v1/ingest/backfill` and `{ "days": 15 }`. `GET /api/v1/ingest/runs` includes `queue.backfill` (`done`, `total`, `from`) and `queue.requestsToday`. After the backfill, incremental runs use `start_date` from the authority's last success minus one day, and never look further back than `INGEST_BACKFILL_DAYS` (default 14).
+
+Apply this on the hosted Supabase project by hand. Shipping the file does not run it:
+
+`supabase/migrations/20261114120000_planit_ingest_every_minute.sql`
+
+That migration replaces the previous `*/5 18-23,0-5 * * *` job with `* * * * *`. It keeps the same URL, the Vault `cron_secret` bearer token, and the 55 second `pg_net` timeout. `supabase/migrations/20261102120000_schedule_planit_ingest.sql` stays in the history. Store the secret if it is not there yet:
 
 ```sql
 select vault.create_secret('<same value as Vercel CRON_SECRET>', 'cron_secret', 'Bearer token for the Vercel ingest route');
 ```
 
-Set that same value as `CRON_SECRET` in the Vercel project environment. Each invocation walks PlanIt authorities from a saved cursor until `INGEST_BUDGET_MS` (default 45 seconds, under the 60 second function limit) and stores the next index. A full sweep can take several slots.
+Set that same value as `CRON_SECRET` in the Vercel project environment. Network contact enrichment stays opt-in for a manual run (`enrich: true`) or `pnpm ingest -- --enrich`. Scheduled calls upsert the page first. Idox contact enrichment runs afterwards only when the function still has time, and it keeps its own cursor on source `planit-enrich`.
 
-A new workspace starts with no leads. Command Centre offers **Get recent applications**, then **Last 3 days** or **Last 7 days** (further windows can be added in `LEAD_WINDOWS`). The server walks that workspace's ICP councils in batches. The page polls `/api/v1/lead-fetches/:id/advance`, so cards and KPIs fill while the scan continues. A refresh resumes a running job. An empty window suggests 7 days or a broader ICP. A partial scan keeps what loaded and can retry the failed councils. The scheduled PlanIt runs at 06:00, 13:00 and 20:00 UTC keep the shared catalogue current after that first fetch.
+A new workspace starts with no leads. Command Centre offers **Get recent applications**, then **Last 3 days** or **Last 7 days** (further windows can be added in `LEAD_WINDOWS`). The server walks that workspace's ICP councils in batches. The page polls `/api/v1/lead-fetches/:id/advance`, so cards and KPIs fill while the scan continues. A refresh resumes a running job. An empty window suggests 7 days or a broader ICP. A partial scan keeps what loaded and can retry the failed councils. The every-minute PlanIt import keeps the shared catalogue current after that first fetch.
 
 Each run stores the raw JSON under `apps/api/data/raw` (or `/tmp/planningpal` on Vercel), writes a 44-column CSV, and upserts schemes so they show in Planning search. New rows email owners and admins who turned alerts on, at the frequency they chose (as they arrive, daily, or weekly), through Resend when `RESEND_API_KEY` is set. The Ingestion screen in the command centre lists runs, downloads the CSV, and can start a manual run. Only a Super Admin can open it.
 
 The first sign-in after creating an account opens onboarding: workspace, profile, ideal projects, teammate invites, then alert preferences. An invited person skips workspace creation and joins the workspace on the invite. Progress is stored on the user, so a closed tab resumes the same step. Optional steps can be skipped. The command centre then shows a getting-started checklist until it is dismissed. A Super Admin can see each client's step from the command centre.
 
-PlanIt is rate limited. The client waits about two seconds between requests, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
+PlanIt is rate limited. Scheduled calls make one request per minute. A manual CLI run waits about two seconds between pages, retries with backoff, and sends an identifiable User-Agent. The feed often skips weekends and can lag one or two days.
 
 ## Campaign engine
 

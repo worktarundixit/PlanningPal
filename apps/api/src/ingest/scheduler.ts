@@ -1,36 +1,24 @@
-import { startIngestRun } from './run.ts'
+import { ingestAuthorityBatch } from './batch.ts'
+import { londonParts } from './clock.ts'
+
+export { isIngestSlot } from './clock.ts'
 
 const SLOTS = [6, 13, 20]
 let lastSlot = ''
 
-function londonNow(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/London',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date)
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
-  return { key: `${get('year')}-${get('month')}-${get('day')}`, hour: Number(get('hour')), minute: Number(get('minute')) }
-}
-
-export function isIngestSlot(date = new Date()) {
-  const now = londonNow(date)
-  return SLOTS.includes(now.hour) && now.minute <= 10
-}
-
-/** Fires at 06:00, 13:00 and 20:00 Europe/London while the API process is up. */
+/**
+ * Local API timer at 06:00, 13:00 and 20:00 Europe/London.
+ * Production ingest is Supabase pg_cron every minute (`* * * * *`), which POSTs
+ * to /api/cron/ingest. This timer does not start when VERCEL is set.
+ */
 export function startIngestScheduler() {
   const tick = () => {
-    const now = londonNow()
+    const now = londonParts()
     if (!SLOTS.includes(now.hour) || now.minute > 1) return
     const slot = `${now.key}T${String(now.hour).padStart(2, '0')}`
     if (slot === lastSlot) return
     lastSlot = slot
-    void startIngestRun({ recentDays: 3 }).catch((error: unknown) => {
+    void ingestAuthorityBatch({ force: true }).catch((error: unknown) => {
       console.error('Scheduled PlanIt ingest failed', error)
     })
   }

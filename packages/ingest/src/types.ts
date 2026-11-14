@@ -29,6 +29,8 @@ export type FetchQuery = {
   authority?: string
   pageSize?: number
   maxPages?: number
+  /** PlanIt `index` offset. A resumed page starts here instead of 0. */
+  index?: number
   /** Skip records whose last_different is at or before this ISO timestamp. */
   since?: string
   source?: IngestSourceId

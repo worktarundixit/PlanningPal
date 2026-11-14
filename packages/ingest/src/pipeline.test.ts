@@ -5,7 +5,7 @@ import { idoxDetailsUrl, parseIdoxDetailsHtml } from './enrichIdox.ts'
 import { rejectionReason } from './filter.ts'
 import { createHybridPlanningSource, mapLondonDatahubHit } from './londonDatahub.ts'
 import { mapPlanItRecord } from './map.ts'
-import { isPlanItOvernightWindow, parseRetryAfterMs, planItUrl, resetPlanItPacing } from './planit.ts'
+import { createPlanItSource, isPlanItOvernightWindow, parseRetryAfterMs, planItUrl, resetPlanItPacing } from './planit.ts'
 import { transformRecords } from './transform.ts'
 import type { PlanItRecord } from './types.ts'
 import { splitPostcode } from './clean.ts'
@@ -24,6 +24,28 @@ describe('planit mapping and filters', () => {
     expect(url.searchParams.get('index')).toBe('300')
     expect(url.searchParams.get('auth')).toBe('Camden')
     expect(url.searchParams.get('compress')).toBe('on')
+  })
+
+  it('starts a PlanIt page at FetchQuery.index', async () => {
+    resetPlanItPacing()
+    const urls: string[] = []
+    const source = createPlanItSource({
+      minIntervalMs: 0,
+      maxAttempts: 1,
+      fetchImpl: (async (input: RequestInfo | URL) => {
+        urls.push(String(input))
+        return new Response(JSON.stringify({ records: [{ uid: '1' }], total: 900, from: 600 }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }) as typeof fetch,
+    })
+    const pages = []
+    for await (const page of source.fetchPages({ authority: 'Camden', from: '2026-10-30', index: 600, maxPages: 1, pageSize: 300 })) {
+      pages.push(page)
+    }
+    const params = new URL(urls[0] ?? 'https://example.invalid').searchParams
+    expect(params.get('index')).toBe('600')
+    expect(params.get('start_date')).toBe('2026-10-30')
+    expect(params.get('auth')).toBe('Camden')
+    expect(pages[0]?.from).toBe(600)
   })
 
   it('parses Retry-After header values and checks overnight window', () => {

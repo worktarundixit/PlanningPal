@@ -2,73 +2,201 @@ import type { IngestSourceId } from '@planningpal/ingest'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { ingestCursors, localPlanningAuthorities } from '../db/schema.ts'
-import { isIngestSlot } from './scheduler.ts'
-import { startIngestRun } from './run.ts'
+import { isIngestSlot } from './clock.ts'
+import {
+  PLANIT_PAGE_SIZE,
+  QUEUE_SOURCE,
+  applyPageOutcome,
+  backfillCapDays,
+  historicalBackfillDays,
+  londonDate,
+  normalizeCursor,
+  parseQueueCursor,
+  pickWork,
+  queueProgress,
+  serializeQueueCursor,
+  startHistoricalBackfill,
+  withBackfillSeed,
+  type QueueCursor,
+} from './queue.ts'
+import { enrichMissingContacts, startIngestRun } from './run.ts'
 
-const CURSOR = 'planit-authorities'
+const ENRICH_MIN_REMAINING_MS = 8_000
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+export type AuthorityBatchResult = {
+  ok: boolean
+  skipped: false | 'daily cap' | 'up to date' | 'busy' | 'outside window'
+  partial: boolean
+  processed: string[]
+  failed: { authority: string; error: string }[]
+  nextIndex: number
+  total: number
+  requestsToday: number
+  backfill: { from: string; done: number; total: number } | null
+}
+
+function resultFor(
+  cursor: QueueCursor,
+  total: number,
+  extra: Pick<AuthorityBatchResult, 'ok' | 'skipped' | 'partial' | 'processed' | 'failed'>,
+): AuthorityBatchResult {
+  const progress = queueProgress(cursor, total)
+  return {
+    ...extra,
+    nextIndex: cursor.index,
+    total,
+    requestsToday: progress.requestsToday,
+    backfill: progress.backfill,
+  }
+}
+
+async function loadAuthorities() {
+  const catalogue = await db
+    .select({
+      areas: localPlanningAuthorities.planitQueryAreas,
+      status: localPlanningAuthorities.status,
+      coverage: localPlanningAuthorities.coverage,
+    })
+    .from(localPlanningAuthorities)
+  return [...new Set(catalogue.filter((row) => row.status === 'active' && row.coverage !== 'unavailable').flatMap((row) => row.areas))].sort((a, b) =>
+    a.localeCompare(b),
+  )
+}
+
+async function readCursor(today: string) {
+  const [row] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, QUEUE_SOURCE)).limit(1)
+  return parseQueueCursor(row?.lastDifferent, today)
+}
+
+async function saveCursor(cursor: QueueCursor) {
+  const lastDifferent = serializeQueueCursor(cursor)
+  await db
+    .insert(ingestCursors)
+    .values({ source: QUEUE_SOURCE, lastDifferent, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: new Date() } })
+}
+
+async function prepareCursor(today: string, authorities: string[]) {
+  const parsed = normalizeCursor(await readCursor(today), authorities)
+  return normalizeCursor(withBackfillSeed(parsed, today, authorities.length ? historicalBackfillDays() : null), authorities)
+}
+
+export async function readIngestQueueStatus() {
+  const today = londonDate()
+  const authorities = await loadAuthorities()
+  const cursor = await prepareCursor(today, authorities)
+  return queueProgress(cursor, authorities.length)
+}
+
+export async function beginHistoricalBackfill(days: number) {
+  const today = londonDate()
+  const authorities = await loadAuthorities()
+  const cursor = startHistoricalBackfill(normalizeCursor(await readCursor(today), authorities), today, days)
+  await saveCursor(cursor)
+  return queueProgress(cursor, authorities.length)
 }
 
 /**
- * One Vercel invocation walks authorities until the time budget or batch limit is spent.
- * Defaults to 1 authority per invocation so PlanIt's 1-request/minute limit is respected.
- * The next cron call continues at the saved index, so a full sweep spans slots cleanly.
+ * One Vercel invocation makes one PlanIt request, then uses any leftover
+ * budget for Idox contact enrichment. The next cron minute continues the queue.
  */
 export async function ingestAuthorityBatch(options?: {
   budgetMs?: number
-  recentDays?: number
   force?: boolean
-  maxAuthorities?: number
-  intervalMs?: number
   source?: IngestSourceId
+  now?: Date
 }) {
-  if (!options?.force && !isIngestSlot()) {
-    return { skipped: true, reason: 'Outside the scheduled Europe/London windows' }
+  const now = options?.now ?? new Date()
+  const today = londonDate(now)
+  const authorities = await loadAuthorities()
+  const cursor = await prepareCursor(today, authorities)
+  if (!options?.force && !isIngestSlot(now)) {
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: 'outside window',
+      partial: false,
+      processed: [],
+      failed: [],
+    })
   }
-  const catalogue = await db
-    .select({ areas: localPlanningAuthorities.planitQueryAreas, status: localPlanningAuthorities.status, coverage: localPlanningAuthorities.coverage })
-    .from(localPlanningAuthorities)
-  const authorities = [...new Set(catalogue.filter((row) => row.status === 'active' && row.coverage !== 'unavailable').flatMap((row) => row.areas))].sort((a, b) => a.localeCompare(b))
-  const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45_000)
-  const maxAuthorities = options?.maxAuthorities ?? Number(process.env.INGEST_BATCH_LIMIT || 1)
-  const intervalMs = options?.intervalMs ?? Number(process.env.PLANIT_MIN_INTERVAL_MS || 60_000)
-  const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, CURSOR)).limit(1)
-  let index = Number(cursor?.lastDifferent || 0)
-  if (!Number.isFinite(index) || index < 0 || index >= authorities.length) index = 0
   const started = Date.now()
+  const budgetMs = options?.budgetMs ?? Number(process.env.INGEST_BUDGET_MS || 45_000)
+  const capDays = backfillCapDays()
+  const work = pickWork(cursor, authorities, now, today, capDays)
+  if (work.kind === 'skip') {
+    if (serializeQueueCursor(cursor) !== serializeQueueCursor(await readCursor(today))) await saveCursor(cursor)
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: work.reason,
+      partial: false,
+      processed: [],
+      failed: [],
+    })
+  }
+  if (work.kind === 'wait') {
+    await saveCursor(cursor)
+    return resultFor(cursor, authorities.length, {
+      ok: true,
+      skipped: false,
+      partial: false,
+      processed: [],
+      failed: [],
+    })
+  }
+  await saveCursor(cursor)
+  let next = cursor
   const processed: string[] = []
   const failed: { authority: string; error: string }[] = []
-  while (index < authorities.length && processed.length < maxAuthorities && Date.now() - started < budgetMs) {
-    const authority = authorities[index]
-    if (!authority) break
-    if (processed.length > 0 && intervalMs > 0) {
-      if (Date.now() - started + intervalMs >= budgetMs) break
-      await sleep(intervalMs)
-    }
-    try {
-      const run = await startIngestRun({
-        authority,
-        recentDays: options?.recentDays ?? 3,
-        maxPages: 1,
-        source: options?.source,
+  try {
+    const run = await startIngestRun({
+      authority: work.authority,
+      from: work.from,
+      index: work.offset,
+      maxPages: 1,
+      pageSize: PLANIT_PAGE_SIZE,
+      source: options?.source ?? 'planit',
+      enrich: false,
+      planIt: { maxAttempts: 1, minIntervalMs: 0 },
+    })
+    const summary = await run.done
+    next = applyPageOutcome(
+      cursor,
+      authorities,
+      { ok: true, authority: work.authority, hasMore: summary.hasMore, nextOffset: summary.nextOffset },
+      now,
+      today,
+    )
+    processed.push(work.authority)
+  } catch (error) {
+    const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number((error as { statusCode?: number }).statusCode) : 0
+    if (statusCode === 409) {
+      return resultFor(cursor, authorities.length, {
+        ok: true,
+        skipped: 'busy',
+        partial: false,
+        processed: [],
+        failed: [],
       })
-      await run.done
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Authority scan failed'
-      failed.push({ authority, error: message })
-      // Leave the cursor on this authority so the next slot retries it.
-      break
     }
-    processed.push(authority)
-    index += 1
-    const next = index >= authorities.length ? '0' : String(index)
-    await db
-      .insert(ingestCursors)
-      .values({ source: CURSOR, lastDifferent: next, updatedAt: new Date() })
-      .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent: next, updatedAt: new Date() } })
+    const message = error instanceof Error ? error.message : 'Authority scan failed'
+    next = applyPageOutcome(cursor, authorities, { ok: false, authority: work.authority, error: message }, now, today)
+    failed.push({ authority: work.authority, error: message })
   }
-  if (index >= authorities.length) index = 0
-  return { ok: failed.length === 0, skipped: false, processed, failed, nextIndex: index, total: authorities.length }
+  await saveCursor(next)
+  const remaining = budgetMs - (Date.now() - started)
+  if (remaining >= ENRICH_MIN_REMAINING_MS) {
+    try {
+      const limit = Math.max(1, Math.min(5, Math.floor(remaining / ENRICH_MIN_REMAINING_MS)))
+      await enrichMissingContacts({ limit, deadlineMs: started + budgetMs })
+    } catch (error) {
+      console.error('PlanIt contact enrichment pass failed', error)
+    }
+  }
+  return resultFor(next, authorities.length, {
+    ok: failed.length === 0,
+    skipped: false,
+    partial: failed.length > 0,
+    processed,
+    failed,
+  })
 }

@@ -8,6 +8,7 @@ import {
   transformRecords,
   type FetchQuery,
   type IngestSourceId,
+  type PlanItOptions,
   type PlanItRecord,
   type PlanningSource,
 } from '@planningpal/ingest'
@@ -21,17 +22,34 @@ import { notifyNewLeads } from '../auth/mailer.ts'
 import { db } from '../db/client.ts'
 import { councils, decisionMakers, ingestCursors, pipelineRuns, planningApplications, rawPayloads } from '../db/schema.ts'
 import { enrichSourceRecord, enrichSourceRecords } from './enrich.ts'
+import { ENRICH_CURSOR_SOURCE, pageContinues } from './queue.ts'
 
 const dataRoot = process.env.VERCEL
   ? '/tmp/planningpal'
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data')
 
-export type RunOptions = FetchQuery & { since?: string; source?: IngestSourceId }
+export type RunOptions = FetchQuery & {
+  since?: string
+  source?: IngestSourceId
+  /** Live portal enrichment. Scheduled runs leave this off and upsert first. */
+  enrich?: boolean
+  planIt?: Pick<PlanItOptions, 'minIntervalMs' | 'maxRetryWaitMs' | 'maxAttempts'>
+}
 
-function sourceFor(sourceId: IngestSourceId): PlanningSource {
+export type IngestPageSummary = {
+  fetched: number
+  pageRecords: number
+  total: number | null
+  from: number
+  pageSize: number
+  hasMore: boolean
+  nextOffset: number
+}
+
+function sourceFor(sourceId: IngestSourceId, planIt?: RunOptions['planIt']): PlanningSource {
   if (sourceId === 'london-datahub') return createLondonDatahubSource()
-  if (sourceId === 'auto') return createHybridPlanningSource()
-  return createPlanItSource()
+  if (sourceId === 'auto') return createHybridPlanningSource(planIt)
+  return createPlanItSource(planIt)
 }
 
 function hashFor(authority: string, reference: string) {
@@ -65,7 +83,7 @@ function isoValidationDate(pub: string): string | null {
   return parsed.toISOString().slice(0, 10)
 }
 
-let active: Promise<void> | null = null
+let active: Promise<IngestPageSummary> | null = null
 
 export async function startIngestRun(options: RunOptions) {
   if (active) {
@@ -77,7 +95,17 @@ export async function startIngestRun(options: RunOptions) {
   const cursorKey = sourceId === 'london-datahub' ? 'london-datahub' : 'planit'
   const [cursor] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, cursorKey)).limit(1)
   const since = options.since ?? (options.from || options.to || options.authority ? undefined : cursor?.lastDifferent || undefined)
-  const query: FetchQuery = { ...options, source: sourceId, since }
+  const query: FetchQuery = {
+    recentDays: options.recentDays,
+    from: options.from,
+    to: options.to,
+    authority: options.authority,
+    pageSize: options.pageSize,
+    maxPages: options.maxPages,
+    index: options.index,
+    since,
+    source: sourceId,
+  }
   const [run] = await db.insert(pipelineRuns).values({
     source: sourceId,
     status: 'running',
@@ -85,17 +113,28 @@ export async function startIngestRun(options: RunOptions) {
     options: query,
   }).returning()
   if (!run) throw new Error('Could not start pipeline run')
-  active = executeRun(run.id, sourceId, cursorKey, query).finally(() => { active = null })
+  const enrich = options.enrich === true
+  active = executeRun(run.id, sourceId, cursorKey, query, enrich, options.planIt).finally(() => { active = null })
   return { id: run.id, status: 'running' as const, done: active }
 }
 
-async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: string, query: FetchQuery) {
-  const source = sourceFor(sourceId)
+async function executeRun(
+  runId: string,
+  sourceId: IngestSourceId,
+  cursorKey: string,
+  query: FetchQuery,
+  enrich: boolean,
+  planIt?: RunOptions['planIt'],
+): Promise<IngestPageSummary> {
+  const source = sourceFor(sourceId, planIt)
   const rawRecords: PlanItRecord[] = []
+  const pageSize = query.pageSize ?? 300
+  let lastPage: { records: number; total: number | null; from: number } | null = null
   try {
     let pageNumber = 0
     for await (const page of source.fetchPages(query)) {
       rawRecords.push(...page.records)
+      lastPage = { records: page.records.length, total: page.total, from: page.from ?? query.index ?? 0 }
       const rawDir = path.join(dataRoot, 'raw', sourceId, runId)
       await mkdir(rawDir, { recursive: true })
       await writeFile(path.join(rawDir, `page-${String(pageNumber).padStart(3, '0')}.json`), JSON.stringify(page.body))
@@ -103,11 +142,15 @@ async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: st
       pageNumber += 1
     }
     const transformed = transformRecords(rawRecords, undefined, query.since)
-    const enrichedRows = await enrichSourceRecords(transformed.rows)
+    const counts = await upsertRows(transformed.rows)
+    let rowsForCsv = transformed.rows
+    if (enrich) {
+      rowsForCsv = await enrichSourceRecords(transformed.rows)
+      await upsertRows(rowsForCsv)
+    }
     const csvPath = path.join(dataRoot, 'ingest', `${runId}.csv`)
     await mkdir(path.dirname(csvPath), { recursive: true })
-    await writeFile(csvPath, recordsToCsv(enrichedRows))
-    const counts = await upsertRows(enrichedRows)
+    await writeFile(csvPath, recordsToCsv(rowsForCsv))
     await notifyNewLeads(counts.inserted, counts.titles)
     if (transformed.cursor) {
       await db.insert(ingestCursors).values({ source: cursorKey, lastDifferent: transformed.cursor, updatedAt: new Date() })
@@ -124,6 +167,18 @@ async function executeRun(runId: string, sourceId: IngestSourceId, cursorKey: st
       csvPath,
       cursorAfter: transformed.cursor,
     }).where(eq(pipelineRuns.id, runId))
+    const from = lastPage?.from ?? query.index ?? 0
+    const pageRecords = lastPage?.records ?? 0
+    const total = lastPage?.total ?? null
+    return {
+      fetched: transformed.fetched,
+      pageRecords,
+      total,
+      from,
+      pageSize,
+      hasMore: pageContinues(pageRecords, total, from, pageSize),
+      nextOffset: from + pageRecords,
+    }
   } catch (error) {
     await db.update(pipelineRuns).set({
       status: 'failed',
@@ -335,18 +390,44 @@ export function presentRun(run: typeof pipelineRuns.$inferSelect) {
   }
 }
 
-export async function enrichMissingContacts(options: { limit?: number; fetchImpl?: typeof fetch } = {}) {
+async function saveEnrichCursor(lastDifferent: string) {
+  await db
+    .insert(ingestCursors)
+    .values({ source: ENRICH_CURSOR_SOURCE, lastDifferent, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: ingestCursors.source, set: { lastDifferent, updatedAt: new Date() } })
+}
+
+export async function enrichMissingContacts(options: { limit?: number; fetchImpl?: typeof fetch; deadlineMs?: number } = {}) {
   const limit = Math.min(Math.max(1, options.limit ?? 20), 100)
+  const [stored] = await db.select().from(ingestCursors).where(eq(ingestCursors.source, ENRICH_CURSOR_SOURCE)).limit(1)
+  let after: { id: string; createdAt: string } | null = null
+  if (stored?.lastDifferent) {
+    try {
+      const parsed = JSON.parse(stored.lastDifferent) as { id?: unknown; createdAt?: unknown }
+      if (typeof parsed.id === 'string' && typeof parsed.createdAt === 'string') after = { id: parsed.id, createdAt: parsed.createdAt }
+    } catch {
+      after = null
+    }
+  }
+  const missing = sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`
+  const resume = after
+    ? sql`(${planningApplications.createdAt}, ${planningApplications.id}) < (${after.createdAt}::timestamptz, ${after.id}::uuid)`
+    : undefined
   const candidates = await db
     .select()
     .from(planningApplications)
-    .where(sql`${planningApplications.portalUrl} ILIKE '%applicationDetails.do%' AND (${planningApplications.architectAgent} = '' OR ${planningApplications.clientApplicant} = '')`)
-    .orderBy(desc(planningApplications.createdAt))
+    .where(resume ? sql`${missing} AND ${resume}` : missing)
+    .orderBy(desc(planningApplications.createdAt), desc(planningApplications.id))
     .limit(limit)
 
   let scanned = 0
   let enriched = 0
+  let stoppedEarly = false
   for (const app of candidates) {
+    if (options.deadlineMs && Date.now() >= options.deadlineMs) {
+      stoppedEarly = true
+      break
+    }
     scanned += 1
     const details = await fetchIdoxContacts(app.portalUrl, { fetchImpl: options.fetchImpl })
     if (!details) continue
@@ -387,6 +468,13 @@ export async function enrichMissingContacts(options: { limit?: number; fetchImpl
       .where(eq(planningApplications.id, app.id))
     await replaceContacts(app.id, updatedSource)
     enriched += 1
+  }
+  const last = scanned > 0 ? candidates[scanned - 1] : undefined
+  if (last && (stoppedEarly || candidates.length >= limit)) {
+    const createdAt = last.createdAt instanceof Date ? last.createdAt.toISOString() : new Date(last.createdAt).toISOString()
+    await saveEnrichCursor(JSON.stringify({ id: last.id, createdAt }))
+  } else if (!stoppedEarly) {
+    await saveEnrichCursor('')
   }
   return { scanned, enriched }
 }

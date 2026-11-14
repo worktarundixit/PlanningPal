@@ -22,6 +22,7 @@ export {
   parseRetryAfterMs,
   planItUrl,
   resetPlanItPacing,
+  type PlanItOptions,
 } from './planit.ts'
 export { recordsToCsv, transformRecords } from './transform.ts'
 export type { CleanedRecord, FetchQuery, FilterConfig, IngestSourceId, PlanItRecord, PlanningSource, RawPage } from './types.ts'

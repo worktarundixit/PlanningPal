@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { pipelineRuns } from '../db/schema.ts'
+import { beginHistoricalBackfill, readIngestQueueStatus } from '../ingest/batch.ts'
+import { DEFAULT_HISTORICAL_BACKFILL_DAYS, MAX_HISTORICAL_BACKFILL_DAYS } from '../ingest/queue.ts'
 import { enrichMissingContacts, presentRun, readRunCsv, startIngestRun, upsertRows } from '../ingest/run.ts'
 import { HttpError, parseBody, requireUser } from '../lib/http.ts'
 
@@ -13,10 +15,15 @@ const runBody = z.object({
   recent: z.number().int().positive().max(30).optional(),
   maxPages: z.number().int().positive().max(40).optional(),
   source: z.enum(['planit', 'london-datahub', 'auto']).optional(),
+  enrich: z.boolean().optional(),
 })
 
 const enrichBody = z.object({
   limit: z.number().int().positive().max(100).optional(),
+})
+
+const backfillBody = z.object({
+  days: z.number().int().min(1).max(MAX_HISTORICAL_BACKFILL_DAYS).optional(),
 })
 
 const uploadBody = z.object({
@@ -28,7 +35,8 @@ export async function ingestRoutes(app: FastifyInstance) {
   app.get('/api/v1/ingest/runs', async (request) => {
     requireUser(request)
     const rows = await db.select().from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(50)
-    return { data: rows.map(presentRun) }
+    const queue = await readIngestQueueStatus()
+    return { data: rows.map(presentRun), queue }
   })
 
   app.get('/api/v1/ingest/runs/:id/csv', async (request, reply) => {
@@ -56,6 +64,7 @@ export async function ingestRoutes(app: FastifyInstance) {
         recentDays: body.recent ?? (body.from || body.to ? undefined : 3),
         maxPages: body.maxPages,
         source: body.source,
+        enrich: body.enrich === true,
       })
       const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, started.id)).limit(1)
       return reply.code(202).send(run ? presentRun(run) : { id: started.id, status: 'running' })
@@ -63,6 +72,15 @@ export async function ingestRoutes(app: FastifyInstance) {
       if (error instanceof Error && 'statusCode' in error) throw new HttpError(409, error.message)
       throw error
     }
+  })
+
+  app.post('/api/v1/ingest/backfill', async (request, reply) => {
+    const user = requireUser(request)
+    if (user.platformRole !== 'super_admin') throw new HttpError(403, 'Forbidden')
+    const body = parseBody(backfillBody, request.body ?? {}, reply)
+    if (!body) return
+    const queue = await beginHistoricalBackfill(body.days ?? DEFAULT_HISTORICAL_BACKFILL_DAYS)
+    return reply.code(202).send(queue)
   })
 
   app.post('/api/v1/ingest/enrich', async (request, reply) => {

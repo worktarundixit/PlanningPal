@@ -27,6 +27,7 @@ const started = await startIngestRun({
   recentDays: recent ? Number(recent) : from || to ? undefined : 3,
   maxPages: maxPages ? Number(maxPages) : undefined,
   source,
+  enrich,
 })
 await started.done
 console.log(`Ingestion run ${started.id} (${source}) finished`)
