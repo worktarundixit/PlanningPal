@@ -1,3 +1,4 @@
+import { lookupAuthority } from './gazetteer'
 import master from './data/uk-lpa-master.json'
 
 export type LpaStatus = 'active' | 'abolished'
@@ -160,6 +161,29 @@ export function planItIngestAreas(records: LpaRecord[] = LPA_RECORDS) {
     for (const area of row.planitQueryAreas) areas.add(area)
   }
   return [...areas].sort((a, b) => a.localeCompare(b))
+}
+
+/** Lower case, expand "&", and collapse punctuation so stored and official names compare. */
+export function normaliseAuthorityLabel(value: string) {
+  return value.toLowerCase().replaceAll('&', ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Names that may be stored in planningApplications.localAuthority for an official ICP council.
+ * Ingest writes lookupAuthority(planIt area).name, which is often shorter than the ICP name.
+ */
+export function labelsForCouncil(officialName: string) {
+  const labels = new Set<string>([officialName])
+  const row = LPA_RECORDS.find((item) => item.name === officialName)
+  if (!row) return labels
+  if (row.planitAreaName) labels.add(row.planitAreaName)
+  for (const area of row.planitQueryAreas) {
+    if (!area) continue
+    labels.add(area)
+    const stored = lookupAuthority(area).name
+    if (stored) labels.add(stored)
+  }
+  return labels
 }
 
 export function feedHealth(records: LpaRecord[], options?: { asOf?: Date; staleDays?: number }) {
