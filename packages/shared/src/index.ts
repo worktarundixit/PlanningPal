@@ -18,11 +18,15 @@ export {
   LPA_RECORDS,
   LPA_REGIONS,
   feedHealth,
+  labelsForCouncil,
   lpaAreas,
   lpaByGss,
+  normaliseAuthorityLabel,
   planItIngestAreas,
 } from './lpas'
 export type { LpaCoverage, LpaRecord, LpaStatus } from './lpas'
+export { AUTHORITIES, lookupAuthority, planItAuthorityKeys } from './gazetteer'
+export type { AuthorityInfo } from './gazetteer'
 
 export const MASTER_COLUMNS = [
   'Heading',

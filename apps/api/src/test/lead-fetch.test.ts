@@ -45,9 +45,15 @@ beforeAll(async () => {
   await db.delete(organisations).where(inArray(organisations.companyName, ['Fetch Windows', 'Other Fetch', 'Partial Fetch', 'Empty Fetch']))
   const [org] = await db.insert(organisations).values({
     companyName: 'Fetch Windows',
-    coverage: 'regional',
-    targetTerritories: ['London'],
-    councilTargets: ['London Borough of Camden'],
+    coverage: 'multi_county',
+    targetTerritories: ['London', 'South East', 'North West'],
+    councilTargets: [
+      'London Borough of Camden',
+      'Adur District Council',
+      'Cumberland Council',
+      'Folkestone and Hythe Council',
+      'London Borough of Hammersmith & Fulham',
+    ],
   }).returning()
   workspace = org!.id
   const [elsewhere] = await db.insert(organisations).values({
@@ -59,9 +65,15 @@ beforeAll(async () => {
   owner = (await createActor({ email: 'fetch-owner@example.com', name: 'Owner', organisationId: workspace, orgRole: 'owner' })).cookie
   viewer = (await createActor({ email: 'fetch-viewer@example.com', name: 'Viewer', organisationId: workspace, orgRole: 'viewer' })).cookie
   other = (await createActor({ email: 'fetch-other@example.com', name: 'Other', organisationId: elsewhere!.id, orgRole: 'owner' })).cookie
-  await application('London Borough of Camden', `RECENT-${randomUUID()}`, today)
-  await application('London Borough of Camden', `OLD-${randomUUID()}`, '2020-01-01')
+  await application('Camden', `RECENT-CAMDEN-${randomUUID()}`, today)
+  await application('London Borough of Camden', `RECENT-OFFICIAL-${randomUUID()}`, today)
+  await application('Camden', `OLD-${randomUUID()}`, '2020-01-01')
   await application('City of Westminster', `OTHER-${randomUUID()}`, today)
+  await application('Adur and Worthing', `RECENT-ADUR-${randomUUID()}`, today)
+  await application('Allerdale', `RECENT-ALLERDALE-${randomUUID()}`, today)
+  await application('Shepway', `RECENT-SHEPWAY-${randomUUID()}`, today)
+  await application('Hammersmith and Fulham', `RECENT-HAMMERSMITH-${randomUUID()}`, today)
+  await application('Hammersmith & Fulham', `RECENT-AMP-${randomUUID()}`, today)
 })
 
 afterAll(async () => {
@@ -77,16 +89,23 @@ describe('workspace lead fetch', () => {
     expect(started.statusCode).toBe(201)
     const job = started.json().job
     expect(job.status).toBe('running')
-    expect(job.total).toBe(1)
+    expect(job.total).toBe(5)
     const again = await app.inject({ method: 'POST', url: '/api/v1/lead-fetches', headers: { cookie: owner }, payload: { days: 7 } })
     expect(again.json().job.id).toBe(job.id)
-    const stepped = await app.inject({ method: 'POST', url: `/api/v1/lead-fetches/${job.id}/advance`, headers: { cookie: owner } })
-    expect(stepped.json().job.status).toBe('succeeded')
-    expect(stepped.json().job.found).toBe(1)
-    expect(stepped.json().job.scanned).toBe(1)
+    let stepped = job
+    let guard = 0
+    while (stepped.status === 'running' && guard < 6) {
+      stepped = (await app.inject({ method: 'POST', url: `/api/v1/lead-fetches/${job.id}/advance`, headers: { cookie: owner } })).json().job
+      guard += 1
+    }
+    expect(stepped.status).toBe('succeeded')
+    expect(stepped.found).toBe(7)
+    expect(stepped.scanned).toBe(5)
     const leads = await app.inject({ method: 'GET', url: '/api/v1/workspace-leads', headers: { cookie: owner } })
     const titles = leads.json().data.map((item: { title: string }) => item.title)
-    expect(titles.some((title: string) => title.startsWith('RECENT-'))).toBe(true)
+    for (const prefix of ['RECENT-CAMDEN-', 'RECENT-OFFICIAL-', 'RECENT-ADUR-', 'RECENT-ALLERDALE-', 'RECENT-SHEPWAY-', 'RECENT-HAMMERSMITH-', 'RECENT-AMP-']) {
+      expect(titles.some((title: string) => title.startsWith(prefix))).toBe(true)
+    }
     expect(titles.some((title: string) => title.startsWith('OLD-') || title.startsWith('OTHER-'))).toBe(false)
     const swapped = await app.inject({ method: 'POST', url: `/api/v1/lead-fetches/${job.id}/advance`, headers: { cookie: other } })
     expect(swapped.statusCode).toBe(404)

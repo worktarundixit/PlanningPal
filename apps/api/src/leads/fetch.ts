@@ -1,4 +1,4 @@
-import { icpCouncils, LEAD_WINDOWS } from '@planningpal/shared'
+import { icpCouncils, labelsForCouncil, LEAD_WINDOWS, normaliseAuthorityLabel } from '@planningpal/shared'
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { leadFetches, organisations, planningApplications, workspaceLeads } from '../db/schema.ts'
@@ -10,12 +10,15 @@ const BATCH = 4
 type Scanner = (council: string, since: Date) => Promise<string[]>
 
 async function matchCouncil(council: string, since: Date) {
+  const keys = [...new Set([...labelsForCouncil(council)].map(normaliseAuthorityLabel).filter(Boolean))]
+  if (!keys.length) return []
   const sinceIso = since.toISOString().slice(0, 10)
+  const normalisedAuthority = sql`trim(regexp_replace(regexp_replace(replace(lower(${planningApplications.localAuthority}), '&', ' and '), '[^a-z0-9]+', ' ', 'g'), '\\s+', ' ', 'g'))`
   const rows = await db
     .select({ id: planningApplications.id })
     .from(planningApplications)
     .where(and(
-      sql`(${planningApplications.localAuthority} ILIKE ${council} OR ${planningApplications.localAuthority} ILIKE ${'%' + council + '%'})`,
+      sql`${normalisedAuthority} in (${sql.join(keys.map((key) => sql`${key}`), sql`, `)})`,
       sql`(
         ${planningApplications.publicationDate} >= ${sinceIso}
         OR ${planningApplications.validationDate} >= ${sinceIso}::date
