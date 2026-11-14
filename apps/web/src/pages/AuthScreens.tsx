@@ -55,7 +55,6 @@ export function SignInPage() {
   const [totpCode, setTotpCode] = useState('')
   const [pendingDestination, setPendingDestination] = useState('/app')
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
 
   const submit = async (event: FormEvent) => {
@@ -96,20 +95,6 @@ export function SignInPage() {
     }
   }
 
-  const sendLink = async () => {
-    if (!supabase) return setError(missingClient())
-    if (!email) return setError('Enter your email and we will send a sign-in link.')
-    setBusy(true)
-    setError('')
-    const { error: linkError } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: safeRedirect(destinationAfterSignIn()) },
-    })
-    setBusy(false)
-    if (linkError) return setError(linkError.message)
-    setNotice('Check your email for a sign-in link. Supabase sends that message.')
-  }
-
   return (
     <Shell title={require2fa ? 'Two-Factor Authentication' : 'Sign in'} lede={require2fa ? 'Enter the 6-digit verification code from your authenticator app.' : 'Open the command centre for your organisation.'}>
       {expired && <p className="mb-4 rounded-lg bg-[#FFF7ED] px-3 py-2 text-[13px] text-[#9A3412]">Your session has expired. Sign in again.</p>}
@@ -135,12 +120,10 @@ export function SignInPage() {
           </label>
         )}
         {error && <p className="mt-3 text-[13px] font-medium text-[#B91C1C]">{error}</p>}
-        {notice && <p className="mt-3 text-[13px] leading-relaxed text-[#166534]">{notice}</p>}
         <button type="submit" disabled={busy} className={primary}>{require2fa ? 'Verify & Continue' : 'Sign in'}</button>
       </form>
       {!require2fa && (
         <>
-          <button type="button" disabled={busy} onClick={() => void sendLink()} className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold text-[#172554]">Email me a sign-in link</button>
           <button
             type="button"
             className="mt-3 w-full rounded-lg border border-[#DCE4F0] py-3 text-[13px] font-semibold"
@@ -153,11 +136,7 @@ export function SignInPage() {
           </button>
           <div className="mt-5 flex justify-between text-[13px]">
             <a href="/forgot-password" className="font-semibold text-[#2563EB]">Forgot password</a>
-            <a href="/sign-up" className="font-semibold text-[#2563EB]">Create an account</a>
           </div>
-          <p className="mt-4 text-center text-[13px]">
-            <a href="/sign-in?next=/app/admin" className="font-semibold text-[#2563EB]">Super Admin Console login</a>
-          </p>
         </>
       )}
     </Shell>
